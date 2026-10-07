@@ -80,7 +80,7 @@ function vulkanRegisterWindowClass(instance: RawPtr, className: borrow String) -
 
 public construct VulkanWindow {
     requires {
-        function open(title: borrow String, width: Int, height: Int, mode: borrow WindowMode, transparent: Bool, opacity: Float) -> RawPtr
+        function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr
         function clientWidth(window: RawPtr) -> Int
         function clientHeight(window: RawPtr) -> Int
         function scale(window: RawPtr) -> Float
@@ -91,12 +91,12 @@ public construct VulkanWindow {
 }
 
 public construct VulkanWindowWin32() extends VulkanWindow {
-    function open(title: borrow String, width: Int, height: Int, mode: borrow WindowMode, transparent: Bool, opacity: Float) -> RawPtr {
+    function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr {
         let instance = moduleHandle("")
-        if !vulkanRegisterWindowClass(instance, "KiraGraphicsVulkanWindow") {
+        if !vulkanRegisterWindowClass(instance, "EmberVulkanWindow") {
             return nullPointer()
         }
-        return dawnOpenWindow(instance, "KiraGraphicsVulkanWindow", title, width, height, mode, transparent, opacity)
+        return dawnOpenWindow(instance, "EmberVulkanWindow", title, width, height, mode, transparent, opacity)
     }
     function clientWidth(window: RawPtr) -> Int { return dawnClientWidth(window) }
     function clientHeight(window: RawPtr) -> Int { return dawnClientHeight(window) }
@@ -115,7 +115,7 @@ public construct VulkanWindowWin32() extends VulkanWindow {
 }
 
 public construct VulkanWindowWayland() extends VulkanWindow {
-    function open(title: borrow String, width: Int, height: Int, mode: borrow WindowMode, transparent: Bool, opacity: Float) -> RawPtr {
+    function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr {
         return DawnWindowWayland().open(title, width, height, mode, transparent, opacity)
     }
     function clientWidth(window: RawPtr) -> Int { return Int(kira_wayland_surface_width(window)) }

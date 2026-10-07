@@ -1,12 +1,12 @@
 // UIKit owns application launch. The delegate returns before the rendering
 // loop starts, so iOS can complete launch and deliver input between frames.
 struct MetalUIKitApplication {
-    var app: GraphicsApplication
+    var app: EMGraphicsApplication
     var runtimeUserData: RawPtr
     var delegate: RawPtr = RawPtr(0)
     var window: RawPtr = RawPtr(0)
     var view: RawPtr = RawPtr(0)
-    var events: [AppEvent] = []
+    var events: [EMAppEvent] = []
     var activeTouch: RawPtr = RawPtr(0)
     var renderFrame: () -> Bool = { in return false }
     var cleanup: () -> Void = { in return }
@@ -26,7 +26,7 @@ function metalUIKitApplicationPointer() -> RawPtr {
 }
 
 @Native
-function metalUIKitLaunchApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) -> Bool {
+function metalUIKitLaunchApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Bool {
     if !pointerIsNull(metalUIKitApplicationPointer()) {
         return false
     }
@@ -103,7 +103,7 @@ function metalUIKitContentView() -> RawPtr {
 }
 
 @Native
-function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: AppEventKind) {
+function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: EMAppEventKind) {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     if kind == .TouchesBegan {
         if !pointerIsNull(state.activeTouch) { return }
@@ -119,7 +119,7 @@ function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: AppEventKind
     metalKvcValueInto(state.activeTouch, stampKey, buf)
     let stamp = metalDoubleBitsToFloat(metalMemReadU64(buf, 0))
     metalMemFree(buf)
-    state.events.append(AppEvent { kind: kind, touchCount: 1, pointerX: point.x, pointerY: point.y, timestamp: stamp })
+    state.events.append(EMAppEvent { kind: kind, touchCount: 1, pointerX: point.x, pointerY: point.y, timestamp: stamp })
     if kind == .TouchesEnded || kind == .TouchesCancelled { state.activeTouch = RawPtr(0) }
     return
 }
@@ -149,7 +149,7 @@ function metalUIKitTouchesEnded(view: RawPtr, selector: RawPtr, touches: RawPtr,
 }
 
 @Native
-function metalUIKitTakeEvents() -> [AppEvent] {
+function metalUIKitTakeEvents() -> [EMAppEvent] {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     let events = move state.events
     state.events = []
@@ -157,11 +157,11 @@ function metalUIKitTakeEvents() -> [AppEvent] {
 }
 
 public @Native
-function metalUIKitSafeAreaInsets() -> ViewportInsets {
-    if !metalUsesUIKit!() { return ViewportInsets {} }
+function metalUIKitSafeAreaInsets() -> EMViewportInsets {
+    if !metalUsesUIKit!() { return EMViewportInsets {} }
     let view = metalUIKitContentView()
     let insets: MetalUIKitInsets = metalMsgSend(view, metalSel("safeAreaInsets"))
-    return ViewportInsets { top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right }
+    return EMViewportInsets { top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right }
 }
 
 @Native

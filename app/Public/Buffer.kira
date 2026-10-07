@@ -1,4 +1,4 @@
-public struct GraphicsBuffer {
+public struct EMGraphicsBuffer {
     var id: U32 = 0
     // The GPU storage this buffer occupies. Carried because releasing it has to
     // subtract the same number creating it added, and a destroy is handed the
@@ -18,13 +18,13 @@ public struct GraphicsBuffer {
 // buffer id — exactly the kind of side table this backend spent its migration
 // deleting.
 public struct DynamicBuffer {
-    var buffer: GraphicsBuffer
+    var buffer: EMGraphicsBuffer
     var contents: RawPtr
 }
 
 public @Native
-function emptyGraphicsBuffer() -> GraphicsBuffer {
-    return GraphicsBuffer {
+function emptyGraphicsBuffer() -> EMGraphicsBuffer {
+    return EMGraphicsBuffer {
         id: 0
     }
 }

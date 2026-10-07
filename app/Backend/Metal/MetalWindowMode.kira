@@ -2,7 +2,7 @@ import Foundation
 
 // Window presentation on the Metal backend's own NSWindow.
 //
-// This backend opens its window itself, so all three `WindowMode` states are
+// This backend opens its window itself, so all three `EMWindowMode` states are
 // real here: `Windowed` is the decorated window, `WindowedBorderless` is the
 // same window with every decoration bit cleared, and `Fullscreen` is an AppKit
 // fullscreen space.
@@ -33,7 +33,7 @@ public function metalWindowToolbarStyleUnified() -> U64 { return 3 }
 // either: the application says where the band is bare, and the event pump
 // starts the window's drag there itself.
 public @Native
-function metalWindowApplyTitlebar(window: RawPtr, titlebar: borrow WindowTitlebar): Void {
+function metalWindowApplyTitlebar(window: RawPtr, titlebar: borrow EMWindowTitlebar): Void {
     if titlebar == .Standard {
         return
     }
@@ -87,7 +87,7 @@ function metalWindowDecoratedMask(window: RawPtr, mask: U64) -> U64 {
     return mask
 }
 
-public function metalWindowStyleMaskFor(mode: borrow WindowMode) -> U64 {
+public function metalWindowStyleMaskFor(mode: borrow EMWindowMode) -> U64 {
     match mode {
         Windowed -> return metalWindowStyleMask()
         WindowedBorderless -> return metalWindowStyleBorderless()
@@ -97,7 +97,7 @@ public function metalWindowStyleMaskFor(mode: borrow WindowMode) -> U64 {
     }
 }
 
-public function metalWindowWantsFullScreen(mode: borrow WindowMode) -> Bool {
+public function metalWindowWantsFullScreen(mode: borrow EMWindowMode) -> Bool {
     match mode {
         Windowed -> return false
         WindowedBorderless -> return false
@@ -121,7 +121,7 @@ function metalWindowIsFullScreen(window: RawPtr) -> Bool {
 // window is already decorated and on screen; only a fullscreen request has
 // anything left to do.
 public @Native
-function metalWindowApplyStartMode(window: RawPtr, mode: borrow WindowMode): Void {
+function metalWindowApplyStartMode(window: RawPtr, mode: borrow EMWindowMode): Void {
     if metalWindowWantsFullScreen(mode) {
         metalMsgSend(window, metalSel("toggleFullScreen:"), nullPointer())
         return
@@ -131,7 +131,7 @@ function metalWindowApplyStartMode(window: RawPtr, mode: borrow WindowMode): Voi
 }
 
 public @Native
-function metalViewWindowMode(view: RawPtr) -> WindowMode {
+function metalViewWindowMode(view: RawPtr) -> EMWindowMode {
     if metalUsesUIKit!() { return .Fullscreen }
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {
@@ -148,7 +148,7 @@ function metalViewWindowMode(view: RawPtr) -> WindowMode {
 }
 
 public @Native
-function metalViewSetWindowMode(view: RawPtr, mode: borrow WindowMode): Void {
+function metalViewSetWindowMode(view: RawPtr, mode: borrow EMWindowMode): Void {
     if metalUsesUIKit!() { return }
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {

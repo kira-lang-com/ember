@@ -1,21 +1,21 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct LiquidGlassState {
-    var backgroundShader: GraphicsShader
-    var blurHorizontalShader: GraphicsShader
-    var blurVerticalShader: GraphicsShader
-    var compositeShader: GraphicsShader
+    var backgroundShader: EMGraphicsShader
+    var blurHorizontalShader: EMGraphicsShader
+    var blurVerticalShader: EMGraphicsShader
+    var compositeShader: EMGraphicsShader
     var backgroundPipeline: RenderPipeline
     var blurHorizontalPipeline: RenderPipeline
     var blurVerticalPipeline: RenderPipeline
     var compositePipeline: RenderPipeline
-    var vertices: GraphicsBuffer
-    var backgroundTexture: GraphicsTexture
-    var sceneTarget: GraphicsTexture
-    var blurIntermediate: GraphicsTexture
-    var blurFinal: GraphicsTexture
-    var sampler: GraphicsSampler
+    var vertices: EMGraphicsBuffer
+    var backgroundTexture: EMGraphicsTexture
+    var sceneTarget: EMGraphicsTexture
+    var blurIntermediate: EMGraphicsTexture
+    var blurFinal: EMGraphicsTexture
+    var sampler: EMGraphicsSampler
     var backgroundBindings: BindGroup
     var sceneBindings: BindGroup
     var blurIntermediateBindings: BindGroup
@@ -44,7 +44,7 @@ function fullScreenLayout() -> VertexLayout {
     }
 }
 
-function makePipeline(graphics: borrow Graphics, label: String, shader: GraphicsShader, colorFormat: TextureFormat, depthFormat: TextureFormat) -> RenderPipeline {
+function makePipeline(graphics: borrow EMGraphics, label: String, shader: EMGraphicsShader, colorFormat: TextureFormat, depthFormat: TextureFormat) -> RenderPipeline {
     return pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
         label: label
         shader: shader
@@ -74,7 +74,7 @@ function makePipeline(graphics: borrow Graphics, label: String, shader: Graphics
     }), "create render pipeline")
 }
 
-function texturePass(label: String, texture: GraphicsTexture) -> RenderPassDescriptor {
+function texturePass(label: String, texture: EMGraphicsTexture) -> RenderPassDescriptor {
     return RenderPassDescriptor {
         label: label
         colorAttachments: [
@@ -123,7 +123,7 @@ function texturePass(label: String, texture: GraphicsTexture) -> RenderPassDescr
     }
 }
 
-function renderLiquidPass(frame: borrow mut RenderFrame, pass: RenderPassDescriptor, pipeline: RenderPipeline, vertices: GraphicsBuffer) {
+function renderLiquidPass(frame: borrow mut RenderFrame, pass: RenderPassDescriptor, pipeline: RenderPipeline, vertices: EMGraphicsBuffer) {
     let encoder = frame.beginRenderPass(pass)
     encoder.setPipeline(pipeline)
     encoder.setVertexBuffer(vertices)
@@ -132,7 +132,7 @@ function renderLiquidPass(frame: borrow mut RenderFrame, pass: RenderPassDescrip
     return
 }
 
-function renderBoundPass(frame: borrow mut RenderFrame, pass: RenderPassDescriptor, pipeline: RenderPipeline, vertices: GraphicsBuffer, bindings: BindGroup) {
+function renderBoundPass(frame: borrow mut RenderFrame, pass: RenderPassDescriptor, pipeline: RenderPipeline, vertices: EMGraphicsBuffer, bindings: BindGroup) {
     let encoder = frame.beginRenderPass(pass)
     encoder.setPipeline(pipeline)
     encoder.setVertexBuffer(vertices)
@@ -145,8 +145,8 @@ function renderBoundPass(frame: borrow mut RenderFrame, pass: RenderPassDescript
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Liquid Glass"
+    var app = EMGraphicsApplication {
+        title: "Ember Liquid Glass"
         width: 1600
         height: 900
         sampleCount: 1

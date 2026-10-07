@@ -1,4 +1,4 @@
-// Kira Graphics Metal backend — compute pipelines + dispatch.
+// Ember Metal backend — compute pipelines + dispatch.
 //
 // A KSL compute shader lowers to an MSL `kernel`; this compiles one into an
 // MTLComputePipelineState and encodes the one dispatch shape the engine has —

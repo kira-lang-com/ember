@@ -83,7 +83,7 @@ public struct DawnGpuClock {
 }
 
 public @Native
-function dawnReadGpuTimesKnob(state: borrow mut GraphicsAppRuntimeState) {
+function dawnReadGpuTimesKnob(state: borrow mut EMGraphicsAppRuntimeState) {
     let value = environmentValue("KIRA_GRAPHICS_GPU_TIMES")
     state.dawn.clock.logging = value.count > 0 && value != "0"
     return
@@ -100,7 +100,7 @@ function dawnAdapterTimesFrames(adapter: RawPtr) -> Bool {
 
 // Builds the query set and its buffers, once, on the first frame that records.
 public @Native
-function dawnClockEnsure(state: borrow mut GraphicsAppRuntimeState) {
+function dawnClockEnsure(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.dawn.clock.supported || state.dawn.clock.querySetId != 0 {
         return
     }
@@ -145,7 +145,7 @@ function dawnClockEnsure(state: borrow mut GraphicsAppRuntimeState) {
 // Opens a frame's recording. Nothing is written until a pass or a dispatch says
 // so, and a frame that records nothing reports nothing.
 public @Native
-function dawnClockBeginFrame(state: borrow mut GraphicsAppRuntimeState) {
+function dawnClockBeginFrame(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.dawn.clock.supported {
         return
     }
@@ -165,7 +165,7 @@ function dawnClockBeginFrame(state: borrow mut GraphicsAppRuntimeState) {
 // extension behind an unsafe-API toggle, and a measurement that needs the device
 // put in an unsupported mode is not one a shipped program can take.
 public @Native
-function dawnClockOpenPair(state: borrow mut GraphicsAppRuntimeState, composite: Bool) -> Int {
+function dawnClockOpenPair(state: borrow mut EMGraphicsAppRuntimeState, composite: Bool) -> Int {
     if !state.dawn.clock.supported || state.dawn.clock.querySetId == 0 {
         return 0 - 1
     }
@@ -187,7 +187,7 @@ function dawnClockOpenPair(state: borrow mut GraphicsAppRuntimeState, composite:
 // The pair a pass descriptor carries, for a segment `dawnClockOpenPair` gave a
 // slot to.
 public @Native
-function dawnClockWrites(state: borrow GraphicsAppRuntimeState, first: Int) -> WGPUPassTimestampWrites {
+function dawnClockWrites(state: borrow EMGraphicsAppRuntimeState, first: Int) -> WGPUPassTimestampWrites {
     return WGPUPassTimestampWrites {
         querySet: dawnObject(state, state.dawn.clock.querySetId),
         beginningOfPassWriteIndex: U32(first),
@@ -200,7 +200,7 @@ function dawnClockWrites(state: borrow GraphicsAppRuntimeState, first: Int) -> W
 // makes. Answers the readback slot the results will arrive in, or -1 when this
 // frame goes unmeasured.
 public @Native
-function dawnClockResolve(state: borrow mut GraphicsAppRuntimeState) -> Int {
+function dawnClockResolve(state: borrow mut EMGraphicsAppRuntimeState) -> Int {
     if !state.dawn.clock.supported || state.dawn.clock.used < 2 {
         return 0 - 1
     }
@@ -238,7 +238,7 @@ function dawnClockResolve(state: borrow mut GraphicsAppRuntimeState) -> Int {
 // Asks for the slot's bytes. Called after the frame has been submitted, and it
 // waits for nothing: the callback runs inside a later `wgpuInstanceProcessEvents`.
 public @Native
-function dawnClockRequest(state: borrow mut GraphicsAppRuntimeState, context: RawPtr, slot: Int) {
+function dawnClockRequest(state: borrow mut EMGraphicsAppRuntimeState, context: RawPtr, slot: Int) {
     if slot < 0 {
         return
     }
@@ -261,7 +261,7 @@ public function dawnClockMapped(status: I32, message: WGPUStringViewPointer, use
     if pointerIsNull(userdata1) || pointerIsNull(userdata2) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(userdata1)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(userdata1)
     let slot = Int(readDoubleWord(userdata2, U64(0)))
     if slot < 0 || slot >= state.dawn.clock.readbackIds.count {
         return
@@ -283,7 +283,7 @@ public function dawnClockMapped(status: I32, message: WGPUStringViewPointer, use
 // the GPU's clock can be reset under the driver, and a negative span is a
 // reading that did not happen, not a segment that took no time.
 public @Native
-function dawnClockReadSlot(state: borrow mut GraphicsAppRuntimeState, slot: Int) {
+function dawnClockReadSlot(state: borrow mut EMGraphicsAppRuntimeState, slot: Int) {
     let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
     let count = state.dawn.clock.readbackUsed[slot]
     let mapped = wgpuBufferGetConstMappedRange(readback, U64(0), U64(count * 8))
@@ -313,7 +313,7 @@ function dawnClockReadSlot(state: borrow mut GraphicsAppRuntimeState, slot: Int)
     state.dawn.clock.measured = true
     if state.dawn.clock.logging {
         graphicsFail(.Frame, 
-            "KiraGraphics: gpu live frame=" + String(state.dawn.clock.readbackSerial[slot])
+            "Ember: gpu live frame=" + String(state.dawn.clock.readbackSerial[slot])
                 + " prep=" + graphicsHundredths(state.dawn.clock.prepMilliseconds)
                 + " composite=" + graphicsHundredths(state.dawn.clock.compositeMilliseconds)
                 + " total=" + graphicsHundredths(state.dawn.clock.frameMilliseconds)

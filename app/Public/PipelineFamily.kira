@@ -96,7 +96,7 @@ public construct Pipeline {
 // pipeline is, and this hands it to the descriptor the backends build from.
 // Both speak the same typed vocabulary now, so nothing is translated here —
 // the integer wire form appears only at the backend call itself.
-extend Graphics {
+extend EMGraphics {
     function buildDeclaredPipeline(plan: borrow PipelinePlan) -> PipelineResult {
         var attributes: [VertexAttribute] = []
         var index = 0

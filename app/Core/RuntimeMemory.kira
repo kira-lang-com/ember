@@ -89,7 +89,7 @@ comptime macro hostPlatformName {
     }
 }
 
-public function hostPlatform() -> Platform {
+public function hostPlatform() -> EMPlatform {
     let name = hostPlatformName!()
     if name == "windows" {
         return .Windows

@@ -1,6 +1,6 @@
 // A shader's own uniform-block reflection, held on the value that created it.
 //
-// Both `GraphicsShader` and `RenderPipeline` carry a list of these — the
+// Both `EMGraphicsShader` and `RenderPipeline` carry a list of these — the
 // pipeline's is a copy of its shader's, taken at creation — in place of the
 // `kg_shader_records` / `kg_pipeline_records` tables the backend used to keep
 // keyed by id. There is nothing left to look up: a caller already holds the

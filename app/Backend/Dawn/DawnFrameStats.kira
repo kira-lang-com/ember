@@ -103,7 +103,7 @@ function dawnPerformanceTicksPerSecond() -> U64 {
 
 // Opens a frame's counters.
 public @Native
-function dawnBeginFrameStats(state: borrow mut GraphicsAppRuntimeState) {
+function dawnBeginFrameStats(state: borrow mut EMGraphicsAppRuntimeState) {
     state.dawn.stats.drawCount = 0
     state.dawn.stats.triangleCount = 0
     state.dawn.stats.passCount = 0
@@ -114,7 +114,7 @@ function dawnBeginFrameStats(state: borrow mut GraphicsAppRuntimeState) {
 
 // Closes them, moving what the frame cost to where a HUD may read it.
 public @Native
-function dawnEndFrameStats(state: borrow mut GraphicsAppRuntimeState) {
+function dawnEndFrameStats(state: borrow mut EMGraphicsAppRuntimeState) {
     let elapsed = dawnPerformanceTicks() - state.dawn.stats.startedAt
     state.dawn.stats.lastFrameSeconds = Float(Int(elapsed)) / Float(Int(dawnPerformanceTicksPerSecond()))
     state.dawn.stats.lastDrawCount = state.dawn.stats.drawCount
@@ -126,12 +126,12 @@ function dawnEndFrameStats(state: borrow mut GraphicsAppRuntimeState) {
 }
 
 public @Native
-function dawnFrameStatistics(context: RawPtr) -> FrameStatistics {
+function dawnFrameStatistics(context: RawPtr) -> EMFrameStatistics {
     if pointerIsNull(context) {
-        return FrameStatistics {}
+        return EMFrameStatistics {}
     }
-    let state = nativeRecover<GraphicsAppRuntimeState>(context)
-    return FrameStatistics {
+    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    return EMFrameStatistics {
         frameSeconds: state.dawn.stats.lastFrameSeconds,
         cpuSeconds: state.dawn.stats.lastFrameSeconds,
         gpuSeconds: state.dawn.clock.frameMilliseconds / 1000.0,
@@ -160,7 +160,7 @@ function dawnTenths(value: Float) -> String {
 }
 
 public @Native
-function dawnLogFrameRate(state: borrow mut GraphicsAppRuntimeState) {
+function dawnLogFrameRate(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.logFps {
         return
     }
@@ -173,7 +173,7 @@ function dawnLogFrameRate(state: borrow mut GraphicsAppRuntimeState) {
         / Float(Int(dawnPerformanceTicksPerSecond()))
     if elapsed >= 1.0 {
         graphicsFail(.Frame, 
-            "KiraGraphics: fps=" + dawnTenths(Float(state.dawn.stats.fpsFrames) / elapsed)
+            "Ember: fps=" + dawnTenths(Float(state.dawn.stats.fpsFrames) / elapsed)
                 + " frames=" + String(state.dawn.stats.fpsFrames)
         )
         state.dawn.stats.fpsWindowStartNanoseconds = now

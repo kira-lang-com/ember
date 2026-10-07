@@ -76,7 +76,7 @@ public struct PassAttachments {
     // The texture the pass leaves behind for later sampling: the resolve target
     // when the pass has one, because that is the single-sampled image a shader
     // reads.
-    function sampledTexture() -> GraphicsTexture {
+    function sampledTexture() -> EMGraphicsTexture {
         if self.color.hasResolveTarget {
             return self.color.resolveTarget.texture
         }

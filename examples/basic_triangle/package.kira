@@ -5,6 +5,6 @@ Package triangle {
     let defaults = Defaults { executionMode: Backend.Hybrid, buildTarget: BuildTarget.Host }
     let assets = ["generated/Shaders"]
     let dependencies = [
-        Dependency { name: "KiraGraphics", path: "../.." }
+        Dependency { name: "Ember", path: "../.." }
     ]
 }

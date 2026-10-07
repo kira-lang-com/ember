@@ -6,17 +6,17 @@ public struct UniformDescriptor {
 
 public struct UniformBindEntry {
     var uniformSlot: Int = 0
-    var uniform: Uniform
+    var uniform: EMUniform
 }
 
 public struct TextureBindEntry {
     var textureSlot: Int = 0
-    var texture: GraphicsTexture
+    var texture: EMGraphicsTexture
 }
 
 public struct SamplerBindEntry {
     var samplerSlot: Int = 0
-    var sampler: GraphicsSampler
+    var sampler: EMGraphicsSampler
 }
 
 // A storage buffer bound at a shader slot, held by the public buffer id. Vulkan

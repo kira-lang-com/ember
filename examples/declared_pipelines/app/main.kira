@@ -1,10 +1,10 @@
 import Foundation
-import KiraGraphics
+import Ember
 
 // Pipelines as declarations.
 //
 // Each of these is a `Pipeline`-backed declaration: it states what it runs and
-// what it reads, and says nothing about the rest. The collector in KiraGraphics
+// what it reads, and says nothing about the rest. The collector in Ember
 // finds all of them without this file registering anything, which is what makes
 // adding a pipeline a matter of writing one.
 

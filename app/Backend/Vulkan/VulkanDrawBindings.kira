@@ -1,6 +1,6 @@
 import Foundation
 
-// Uniform values can change between draws, including through setUniformValues.
+// EMUniform values can change between draws, including through setUniformValues.
 // Snapshot their CPU state so each recorded draw sees the values it bound.
 public @Native
 function vulkanSnapshotUniform(state: borrow mut VulkanState, uniform: borrow StoredUniformBindEntry) -> U32 {

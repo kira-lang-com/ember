@@ -109,7 +109,7 @@ public function sharedSurfaceAt(id: SharedSurfaceId) -> SharedSurface {
 // Create a render target whose storage can be transferred to another process.
 // Vulkan allocates it on the active device so the producer never imports memory
 // from a second Vulkan context. Other backends retain their existing paths.
-public function createSharedTexture(graphics: borrow Graphics, width: Int, height: Int) -> SharedTexture {
+public function createSharedTexture(graphics: borrow EMGraphics, width: Int, height: Int) -> SharedTexture {
     if graphics.backend == .Vulkan {
         return vulkanCreateSharedTexture(graphics.backendContext, width, height)
     }
@@ -127,7 +127,7 @@ public function createSharedTexture(graphics: borrow Graphics, width: Int, heigh
 // share answers an invalid texture rather than refusing to run, and the caller
 // falls back to copying the pixels -- which is slower and correct, and is what
 // a machine with no render node gets.
-public function importSharedTexture(graphics: borrow Graphics, surface: borrow SharedSurface) -> SharedTexture {
+public function importSharedTexture(graphics: borrow EMGraphics, surface: borrow SharedSurface) -> SharedTexture {
     if graphics.backend == .Vulkan {
         return vulkanImportSharedTexture(graphics.backendContext, surface)
     }
@@ -141,7 +141,7 @@ public function importSharedTexture(graphics: borrow Graphics, surface: borrow S
 //
 // A producer imports while it is drawing, because that is when it has a device:
 // a component renders into its surface on the frame hook, and the hook is handed
-// a frame rather than a `Graphics`.
+// a frame rather than a `EMGraphics`.
 public function importSharedTextureDuringFrame(frame: borrow mut RenderFrame, surface: borrow SharedSurface) -> SharedTexture {
     if frame.backend == .Vulkan {
         return vulkanImportSharedTexture(frame.backendContext, surface)
@@ -159,7 +159,7 @@ public function importSharedTextureDuringFrame(frame: borrow mut RenderFrame, su
 // synchronization, and a frame that skipped the bracket would let a compositor
 // sample halfway through a producer's paint.
 public struct SharedTexture {
-    var texture: GraphicsTexture = emptyGraphicsTexture()
+    var texture: EMGraphicsTexture = emptyGraphicsTexture()
     var memory: RawPtr = nullPointer()
     // The device's own texture object, kept beside the id the rest of the
     // graphics layer uses it by. Access is begun and ended on the OBJECT, and

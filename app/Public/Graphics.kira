@@ -10,11 +10,11 @@ import Foundation
 //
 // The one method that names no backend is `createTextureFromFile`, because
 // decoding an image is not a backend's work.
-public class Graphics {
+public class EMGraphics {
     var userData: RawPtr
     var backend: RenderBackendKind = .Dawn
     // The backend's own per-run context: Metal's context object, and Dawn's
-    // `GraphicsAppRuntimeState` the run loop keeps its frame counters on. It
+    // `EMGraphicsAppRuntimeState` the run loop keeps its frame counters on. It
     // was called `metalContext` and it was null on every backend but Metal,
     // which is why callers started reading `!pointerIsNull(...)` as "am I
     // Metal" — a question about identity wearing the name of a resource.
@@ -45,7 +45,7 @@ public class Graphics {
         return self.renderBackend().createShaderFromKslArtifact(label, artifact)
     }
 
-    function destroyShader(shader: GraphicsShader) {
+    function destroyShader(shader: EMGraphicsShader) {
         self.renderBackend().destroyShader(shader)
         return
     }
@@ -79,14 +79,14 @@ public class Graphics {
     // every write into it this frame must add to its own. Call once per frame,
     // before writing: the frame the GPU is still drawing keeps the slot it was
     // recorded with, so nothing written past this offset can tear it.
-    function dynamicBufferFrameStart(buffer: borrow GraphicsBuffer) -> Int {
+    function dynamicBufferFrameStart(buffer: borrow EMGraphicsBuffer) -> Int {
         return self.renderBackend().dynamicBufferFrameStart(buffer)
     }
 
     // Hand the first `floatCount` slots written into `contents` to the GPU. A
     // call of its own rather than something every write does, because a backend
     // that stages may run it at most ONCE per buffer per frame.
-    function commitDynamicBuffer(buffer: borrow GraphicsBuffer, contents: RawPtr, floatCount: Int) {
+    function commitDynamicBuffer(buffer: borrow EMGraphicsBuffer, contents: RawPtr, floatCount: Int) {
         self.renderBackend().commitDynamicBuffer(buffer, contents, floatCount)
         return
     }
@@ -99,7 +99,7 @@ public class Graphics {
         return self.renderBackend().createIndexBuffer(descriptor)
     }
 
-    function destroyBuffer(buffer: borrow GraphicsBuffer) {
+    function destroyBuffer(buffer: borrow EMGraphicsBuffer) {
         self.renderBackend().destroyBuffer(buffer)
         return
     }
@@ -108,12 +108,12 @@ public class Graphics {
         return self.renderBackend().createUniform(descriptor)
     }
 
-    function updateUniform(uniform: borrow Uniform, data: borrow [F32]) {
+    function updateUniform(uniform: borrow EMUniform, data: borrow [F32]) {
         self.renderBackend().updateUniform(uniform, data)
         return
     }
 
-    function destroyUniform(uniform: borrow Uniform) {
+    function destroyUniform(uniform: borrow EMUniform) {
         self.renderBackend().destroyUniform(uniform)
         return
     }
@@ -122,7 +122,7 @@ public class Graphics {
         return self.renderBackend().createBindGroup(descriptor)
     }
 
-    function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow Uniform) -> BindGroupResult {
+    function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
         return self.renderBackend().createUniformBindGroup(label, uniformSlot, uniform)
     }
 
@@ -145,25 +145,25 @@ public class Graphics {
     }
 
     // Add a texture at `slot`; the fragment stage reads it at [[texture(slot)]].
-    function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow GraphicsTexture) {
+    function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) {
         self.renderBackend().bindGroupAddTexture(group, slot, texture)
         return
     }
 
     // Add a sampler at `slot`; the fragment stage reads it at [[sampler(slot)]].
-    function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow GraphicsSampler) {
+    function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) {
         self.renderBackend().bindGroupAddSampler(group, slot, sampler)
         return
     }
 
     // Add a uniform block at `slot`, so a group can carry the resources a shader
     // reads together rather than spending a second encoder slot on one number.
-    function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow Uniform) {
+    function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) {
         self.renderBackend().bindGroupAddUniform(group, slot, uniform)
         return
     }
 
-    function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow GraphicsTexture, samplerSlot: Int, sampler: borrow GraphicsSampler) -> BindGroupResult {
+    function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
         return self.renderBackend().createTextureSamplerBindGroup(label, textureSlot, texture, samplerSlot, sampler)
     }
 
@@ -216,7 +216,7 @@ public class Graphics {
     // CPU copy of a texture nobody asked it to remember.
     //
     // The texture must have been created with the `SampledStreaming` usage.
-    function updateTexture(texture: borrow GraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
+    function updateTexture(texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
         self.renderBackend().updateTexture(texture, width, height, pixels)
         return
     }
@@ -231,7 +231,7 @@ public class Graphics {
     //
     // The texture must have been created with the `SampledStreaming` usage,
     // and a backend may impose a once-per-frame upload limit.
-    function updateTextureBytes(texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Int) {
+    function updateTextureBytes(texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
         self.renderBackend().updateTextureBytes(texture, bytes, byteCount)
         return
     }
@@ -239,12 +239,12 @@ public class Graphics {
     // `updateTextureBytes` for an image of which only `rowCount` rows from
     // `firstRow` changed: a glyph atlas gains a few glyphs on a shelf or two,
     // and sending the whole image again for them costs more than the frame.
-    function updateTextureRows(texture: borrow GraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) {
+    function updateTextureRows(texture: borrow EMGraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) {
         self.renderBackend().updateTextureRows(texture, bytes, firstRow, rowCount)
         return
     }
 
-    function destroyTexture(texture: borrow GraphicsTexture) {
+    function destroyTexture(texture: borrow EMGraphicsTexture) {
         self.renderBackend().destroyTexture(texture)
         return
     }
@@ -286,7 +286,7 @@ public class Graphics {
         return self.renderBackend().createSampler(descriptor)
     }
 
-    function destroySampler(sampler: borrow GraphicsSampler) {
+    function destroySampler(sampler: borrow EMGraphicsSampler) {
         self.renderBackend().destroySampler(sampler)
         return
     }

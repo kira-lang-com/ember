@@ -18,7 +18,7 @@ function dawnPassIsActive(runtime: RawPtr) -> Bool {
     if pointerIsNull(runtime) {
         return false
     }
-    return nativeRecover<GraphicsAppRuntimeState>(runtime).dawn.passActive
+    return nativeRecover<EMGraphicsAppRuntimeState>(runtime).dawn.passActive
 }
 
 // Binds what the pipeline reads, however its shader says the slots are read.
@@ -29,7 +29,7 @@ function dawnPassIsActive(runtime: RawPtr) -> Bool {
 // slot is bound at its own index. Answers whether the draw may proceed.
 public @Native
 function dawnApplyBindings(
-    state: borrow mut GraphicsAppRuntimeState,
+    state: borrow mut EMGraphicsAppRuntimeState,
     pipelineHandle: RawPtr,
     pipelineId: U32,
     group0: borrow BindGroup,
@@ -61,7 +61,7 @@ function dawnApplyBindings(
 
 // Binds one group at `slot`, if the encoder has one there.
 public @Native
-function dawnApplyBindGroup(state: borrow mut GraphicsAppRuntimeState, pipelineHandle: RawPtr, pipelineId: U32, slot: Int, group: borrow BindGroup, present: Bool) {
+function dawnApplyBindGroup(state: borrow mut EMGraphicsAppRuntimeState, pipelineHandle: RawPtr, pipelineId: U32, slot: Int, group: borrow BindGroup, present: Bool) {
     if !present {
         return
     }
@@ -108,7 +108,7 @@ function dawnDrawWithBindings(
     if !dawnPassIsActive(runtime) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(runtime)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtime)
     let pipelineHandle = dawnObject(state, pipeline.id)
     if pointerIsNull(pipelineHandle) {
         return
@@ -176,7 +176,7 @@ function dawnEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBuf
     if !dawnPassIsActive(encoder.dawnRuntime) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(encoder.dawnRuntime)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(encoder.dawnRuntime)
     let pipelineHandle = dawnObject(state, encoder.pipeline.id)
     let arguments = dawnObject(state, U32(indirectBufferId))
     if pointerIsNull(pipelineHandle) || pointerIsNull(arguments) {
@@ -210,7 +210,7 @@ function dawnEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBuf
 
 // Counts one draw and the primitives it rasterized, for `frame.statistics()`.
 public @Native
-function dawnNoteDraw(state: borrow mut GraphicsAppRuntimeState, elementCount: Int) {
+function dawnNoteDraw(state: borrow mut EMGraphicsAppRuntimeState, elementCount: Int) {
     state.dawn.stats.drawCount = state.dawn.stats.drawCount + 1
     state.dawn.stats.triangleCount = state.dawn.stats.triangleCount + elementCount / 3
     return

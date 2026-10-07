@@ -1,4 +1,4 @@
-public enum AppEventKind {
+public enum EMAppEventKind {
     None
     KeyDown
     KeyUp
@@ -25,7 +25,7 @@ public enum AppEventKind {
     FilesDropped
 }
 
-public enum PointerButton {
+public enum EMPointerButton {
     None
     Left
     Right
@@ -37,7 +37,7 @@ public enum PointerButton {
 // report `Began`, then `Changed` while they move, then `Ended` when they lift
 // (or `Cancelled`); the glide the system adds after they lift arrives as a
 // second run of phases in `scrollMomentum`. A wheel reports `None` for both.
-public enum ScrollPhase {
+public enum EMScrollPhase {
     None
     MayBegin
     Began
@@ -46,7 +46,7 @@ public enum ScrollPhase {
     Cancelled
 }
 
-public struct ModifierState {
+public struct EMModifierState {
     let shift: Bool = false
     let control: Bool = false
     let alt: Bool = false
@@ -56,22 +56,22 @@ public struct ModifierState {
     let middlePointerButton: Bool = false
 }
 
-public struct AppEvent {
-    let kind: AppEventKind = .None
+public struct EMAppEvent {
+    let kind: EMAppEventKind = .None
     let frameCount: Int = 0
     let keyCode: Int = 0
     let textCodepoint: Int = 0
     let keyRepeat: Bool = false
-    let modifiers: ModifierState = ModifierState {}
-    let pointerButton: PointerButton = .None
+    let modifiers: EMModifierState = EMModifierState {}
+    let pointerButton: EMPointerButton = .None
     let pointerX: Float = 0.0
     let pointerY: Float = 0.0
     let pointerDeltaX: Float = 0.0
     let pointerDeltaY: Float = 0.0
     let scrollX: Float = 0.0
     let scrollY: Float = 0.0
-    let scrollPhase: ScrollPhase = .None
-    let scrollMomentum: ScrollPhase = .None
+    let scrollPhase: EMScrollPhase = .None
+    let scrollMomentum: EMScrollPhase = .None
     // Whether the deltas are points from a trackpad or tablet rather than a
     // wheel's lines, and whether they follow the fingers ("natural" scrolling)
     // rather than run against them.
@@ -89,7 +89,7 @@ public struct AppEvent {
     let framebufferHeight: Int = 0
 }
 
-public function graphicsEventKindFromRaw(kind: Int) -> AppEventKind {
+public function graphicsEventKindFromRaw(kind: Int) -> EMAppEventKind {
     if kind == 1 {
         return .KeyDown
     }
@@ -162,7 +162,7 @@ public function graphicsEventKindFromRaw(kind: Int) -> AppEventKind {
     return .None
 }
 
-public function graphicsPointerButtonFromRaw(button: Int) -> PointerButton {
+public function graphicsPointerButtonFromRaw(button: Int) -> EMPointerButton {
     if button == 0 {
         return .Left
     }
@@ -178,7 +178,7 @@ public function graphicsPointerButtonFromRaw(button: Int) -> PointerButton {
     return .Other
 }
 
-public function graphicsModifierStateFromRaw(raw: Int) -> ModifierState {
+public function graphicsModifierStateFromRaw(raw: Int) -> EMModifierState {
     let shift = (raw / 1) % 2 == 1
     let control = (raw / 2) % 2 == 1
     let alt = (raw / 4) % 2 == 1
@@ -186,7 +186,7 @@ public function graphicsModifierStateFromRaw(raw: Int) -> ModifierState {
     let leftPointerButton = (raw / 256) % 2 == 1
     let rightPointerButton = (raw / 512) % 2 == 1
     let middlePointerButton = (raw / 1024) % 2 == 1
-    return ModifierState {
+    return EMModifierState {
         shift: shift,
         control: control,
         alt: alt,
@@ -197,7 +197,7 @@ public function graphicsModifierStateFromRaw(raw: Int) -> ModifierState {
     }
 }
 
-public function graphicsEventUsesPointerPosition(kind: borrow AppEventKind) -> Bool {
+public function graphicsEventUsesPointerPosition(kind: borrow EMAppEventKind) -> Bool {
     if kind == .PointerDown {
         return true
     }

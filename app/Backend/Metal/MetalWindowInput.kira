@@ -4,7 +4,7 @@ import Foundation
 //
 // AppKit hands back NSEvents: a type number, a location in window coordinates, a
 // modifier bitfield, a key code in a layout nobody chose. This turns them into
-// the backend's own AppEvent — the vocabulary the rest of Kira Graphics and
+// the backend's own EMAppEvent — the vocabulary the rest of Ember and
 // every UI above it speaks — and pumps the queue between frames.
 //
 // Split from MetalWindow.kira, which owns the window, the cursor, the live
@@ -130,8 +130,8 @@ function metalWindowIsUnderCursor(app: RawPtr, window: RawPtr) -> Bool {
 // Modifier state from -[NSEvent modifierFlags] (bit 17 shift, 18 control,
 // 19 option, 20 command), extracted with div/mod (no bitwise ops needed).
 public @Native
-function metalModifiersFromFlags(flags: Int) -> ModifierState {
-    return ModifierState {
+function metalModifiersFromFlags(flags: Int) -> EMModifierState {
+    return EMModifierState {
         shift: (flags / 131072) - ((flags / 131072) / 2) * 2 == 1,
         control: (flags / 262144) - ((flags / 262144) / 2) * 2 == 1,
         alt: (flags / 524288) - ((flags / 524288) / 2) * 2 == 1,
@@ -139,15 +139,15 @@ function metalModifiersFromFlags(flags: Int) -> ModifierState {
     }
 }
 
-// Translate one queued NSEvent into a AppEvent (kind None when the event
+// Translate one queued NSEvent into an EMAppEvent (kind None when the event
 // carries nothing for the app). Pointer coordinates convert from window space
 // (bottom-left origin, points) to view-local top-left via the content view's
 // bounds height.
 public @Native
-function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEvent {
+function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> EMAppEvent {
     let etype = Int(metalMsgSendCount(event, metalSel("type")))
-    var kind: AppEventKind = .None
-    var button: PointerButton = .None
+    var kind: EMAppEventKind = .None
+    var button: EMPointerButton = .None
     var isPointer = false
     if etype == metalNsLeftDown() {
         kind = .PointerDown
@@ -211,7 +211,7 @@ function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEve
         let hoverOnly = etype == metalNsMoved() || etype == metalNsScroll()
         if hoverOnly {
             if !metalWindowIsUnderCursor(metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication")), metalMsgSend(event, metalSel("window"))) {
-                return AppEvent {
+                return EMAppEvent {
                     kind: .PointerExited,
                     modifiers: metalModifiersFromFlags(flags)
                 }
@@ -236,8 +236,8 @@ function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEve
         let stamp = metalDoubleBitsToFloat(metalMemReadU64(buf, 0))
         var sx = 0.0
         var sy = 0.0
-        var phase: ScrollPhase = .None
-        var momentum: ScrollPhase = .None
+        var phase: EMScrollPhase = .None
+        var momentum: EMScrollPhase = .None
         var precise = false
         var inverted = false
         if etype == metalNsScroll() {
@@ -288,7 +288,7 @@ function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEve
             metalMemWriteU64(ctx, metalOffsetLockedY(), metalLockCoordStore(py))
         }
         metalMemFree(buf)
-        return AppEvent {
+        return EMAppEvent {
             kind: kind,
             pointerButton: button,
             pointerX: px,
@@ -312,7 +312,7 @@ function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEve
         if cmdHeld && rawKey == 0 {
             mappedKey = 300
         }
-        return AppEvent {
+        return EMAppEvent {
             kind: .KeyDown,
             keyCode: mappedKey,
             keyRepeat: metalMsgSend(event, metalSel("isARepeat")),
@@ -320,13 +320,13 @@ function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEve
         }
     }
     if etype == metalNsKeyUp() {
-        return AppEvent {
+        return EMAppEvent {
             kind: .KeyUp,
             keyCode: metalMapKeyCode(Int(metalMsgSendCount(event, metalSel("keyCode")))),
             modifiers: metalModifiersFromFlags(flags)
         }
     }
-    return AppEvent {
+    return EMAppEvent {
         kind: .None
     }
 }
@@ -380,7 +380,7 @@ function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
 // SOURCES; it does not dequeue NSApplication's event queue or call -sendEvent:, so
 // without this the window never receives mouse/keyboard/resize events — it never
 // becomes the active key window (its traffic lights stay grayed) and the resize
-// control does nothing. Each event is ALSO translated into a AppEvent and
+// control does nothing. Each event is ALSO translated into an EMAppEvent and
 // RETURNED to the caller (pointer, scroll, keys): the caller owns the app's event
 // handler closure, which must be bound exactly once — moving it into this function
 // per frame would free its captured environment after the first pump and later
@@ -389,11 +389,11 @@ function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
 // behavior, except key-downs (kept from the window so the unhandled-key beep
 // never fires).
 public @Native
-function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: borrow (Float, Float) -> Bool) -> [AppEvent] {
+function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: borrow (Float, Float) -> Bool) -> [EMAppEvent] {
     if metalUsesUIKit!() {
         return metalUIKitTakeEvents()
     }
-    var out: [AppEvent] = []
+    var out: [EMAppEvent] = []
     let distantPast: RawPtr = metalMsgSend(metalObjcGetClass("NSDate"), metalSel("distantPast"))
     let mode: RawPtr = metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), "kCFRunLoopDefaultMode")
     var draining = true
@@ -466,7 +466,7 @@ function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: bor
                             let raw8 = metalMemReadU64(utf8, 0)
                             let b0 = raw8 - (raw8 / 256) * 256
                             if b0 >= 32 && b0 < 127 {
-                                out.append(AppEvent {
+                                out.append(EMAppEvent {
                                     kind: .TextInput,
                                     textCodepoint: Int(b0)
                                 })
@@ -519,7 +519,7 @@ function metalStringEquals(string: RawPtr, literal: String) -> Bool {
 // AppKit's `NSEventPhase` bits as the phase of a scroll: began 1, stationary
 // 2, changed 4, ended 8, cancelled 16, may begin 32. A finger resting still
 // mid-gesture is still the gesture changing.
-public function metalScrollPhase(bits: Int) -> ScrollPhase {
+public function metalScrollPhase(bits: Int) -> EMScrollPhase {
     if bits == 1 {
         return .Began
     }

@@ -11,7 +11,7 @@ function vulkanCreateSharedTexture(context: RawPtr, width: Int, height: Int) -> 
         graphicsFail(.Resource, "a shared texture was created " + String(width) + "x" + String(height))
         return SharedTexture {}
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let record = kira_shared_surface_vulkan_create(
         runtime.vulkan.device,
         runtime.vulkan.physicalDevice,
@@ -46,7 +46,7 @@ function vulkanCreateSharedTexture(context: RawPtr, width: Int, height: Int) -> 
         return SharedTexture {}
     }
     return SharedTexture {
-        texture: GraphicsTexture {
+        texture: EMGraphicsTexture {
             id: imageId,
             colorViewId: colorViewId,
             width: width,
@@ -69,7 +69,7 @@ function vulkanImportSharedTexture(context: RawPtr, surface: borrow SharedSurfac
         graphicsFail(.Resource, "a shared texture was imported from a surface that is not valid")
         return SharedTexture {}
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let record = kira_shared_surface_vulkan_import(runtime.vulkan.device, I32(surface.id.raw))
     if pointerIsNull(record) {
         graphicsFail(.Resource, "could not import the shared surface (" + sharedSurfaceDiagnostic() + ")")
@@ -93,7 +93,7 @@ function vulkanImportSharedTexture(context: RawPtr, surface: borrow SharedSurfac
         return SharedTexture {}
     }
     return SharedTexture {
-        texture: GraphicsTexture {
+        texture: EMGraphicsTexture {
             id: imageId,
             colorViewId: colorViewId,
             width: surface.width,

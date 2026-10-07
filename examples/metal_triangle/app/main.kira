@@ -1,4 +1,4 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 // A real triangle through the from-scratch Metal backend (no shim): MSL shader
@@ -8,9 +8,9 @@ import Foundation
 // rasterized (center = triangle color, not the clear color).
 
 struct TriangleState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 function triangleVertices() -> [F32] {
@@ -81,8 +81,8 @@ function trianglePass() -> RenderPassDescriptor {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Metal Triangle"
+    var app = EMGraphicsApplication {
+        title: "Ember Metal Triangle"
         width: 480
         height: 480
         sampleCount: 1

@@ -389,11 +389,11 @@ function metalContextHeight(ctx: RawPtr) -> Int {
 // fields the HUD used to read one accessor at a time, gathered into the shape
 // both backends report in.
 public @Native
-function metalFrameStatistics(ctx: RawPtr, framesInFlight: Int) -> FrameStatistics {
+function metalFrameStatistics(ctx: RawPtr, framesInFlight: Int) -> EMFrameStatistics {
     if pointerIsNull(ctx) {
-        return FrameStatistics {}
+        return EMFrameStatistics {}
     }
-    return FrameStatistics {
+    return EMFrameStatistics {
         frameSeconds: metalContextFrameDuration(ctx),
         cpuSeconds: metalContextCpuDuration(ctx),
         gpuSeconds: metalContextGpuDuration(ctx),

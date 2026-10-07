@@ -4,8 +4,8 @@
 // Dawn and Vulkan split the two — an image holds the pixels, and a view is what a bind
 // group, a UI draw and a pass attachment each take — so the ids it mints travel
 // here with the image rather than in a table keyed on it. A caller passes a
-// `GraphicsTexture` and never learns which of the two shapes it has.
-public struct GraphicsTexture {
+// `EMGraphicsTexture` and never learns which of the two shapes it has.
+public struct EMGraphicsTexture {
     var id: U32 = 0
     // The view a shader samples through, for a texture whose usage is sampled.
     var viewId: U32 = 0
@@ -38,16 +38,16 @@ public struct GraphicsTexture {
 // attaching a pass to one needs the attachment views; neither can be recovered
 // from a sampled view.
 public @Native
-function sampledTextureFromViewId(viewId: U32) -> GraphicsTexture {
-    return GraphicsTexture {
+function sampledTextureFromViewId(viewId: U32) -> EMGraphicsTexture {
+    return EMGraphicsTexture {
         id: viewId,
         viewId: viewId
     }
 }
 
 public @Native
-function emptyGraphicsTexture() -> GraphicsTexture {
-    return GraphicsTexture {
+function emptyGraphicsTexture() -> EMGraphicsTexture {
+    return EMGraphicsTexture {
         id: 0
     }
 }

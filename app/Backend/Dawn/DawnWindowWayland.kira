@@ -70,11 +70,11 @@ public function waylandOnGlobalRemove(data: RawPtr, registry: RawPtr, name: U32)
 }
 
 public construct DawnWindowWayland() extends DawnWindow {
-    function open(title: borrow String, width: Int, height: Int, mode: borrow WindowMode, transparent: Bool, opacity: Float) -> RawPtr {
+    function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr {
         let display = kira_wayland_display_connect()
         if pointerIsNull(display) {
             graphicsFail(.Window, 
-                "Kira Graphics: no Wayland display to open the Dawn backend's window on"
+                "Ember: no Wayland display to open the Dawn backend's window on"
             )
             return nullPointer()
         }
@@ -115,7 +115,7 @@ public construct DawnWindowWayland() extends DawnWindow {
         let shell = kira_wayland_proxy_get_user_data(shellRegistry)
         if pointerIsNull(compositor) || pointerIsNull(shell) {
             graphicsFail(.Window, 
-                "Kira Graphics: this Wayland compositor offers no wl_compositor or no \
+                "Ember: this Wayland compositor offers no wl_compositor or no \
                  xdg_wm_base, and a window needs both"
             )
             kira_wayland_proxy_destroy(registry)
@@ -205,7 +205,7 @@ public construct DawnWindowWayland() extends DawnWindow {
                 display: kira_wayland_proxy_get_display(window),
                 surface: window
             },
-            label: dawnText("kira-graphics-surface")
+            label: dawnText("ember-surface")
         })
     }
 

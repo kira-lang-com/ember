@@ -6,7 +6,7 @@
 //
 //   KIRA_PURE_TEST=1 kira test --backend hybrid tests/metal_kik
 import Foundation
-import KiraGraphics
+import Ember
 
 @Main
 @Runtime

@@ -1,4 +1,4 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 // One triangle, drawn on Dawn.
@@ -15,9 +15,9 @@ import Foundation
 // link lock on itself.
 
 struct TriangleState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 // Position and color per vertex, so the frame carries more than one flat fill:
@@ -53,8 +53,8 @@ function dawnTriangleVertexLayout() -> VertexLayout {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Dawn Triangle"
+    var app = EMGraphicsApplication {
+        title: "Ember Dawn Triangle"
         width: 640
         height: 480
         sampleCount: 1

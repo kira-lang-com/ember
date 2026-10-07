@@ -1,10 +1,10 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct FrameTriangleState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 function frameTriangleVertexSource() -> String {
@@ -26,8 +26,8 @@ function frameTriangleVertices() -> [F32] {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Frame API Triangle"
+    var app = EMGraphicsApplication {
+        title: "Ember Frame API Triangle"
         width: 640
         height: 480
         sampleCount: 1

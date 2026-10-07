@@ -297,7 +297,7 @@ function metalContextFree(ctx: RawPtr) {
 
 public function metalPixelFormatR32Uint() -> U64 { return 53 }
 
-// Map a KiraGraphics texture format (Constants.kira) to an MTLPixelFormat.
+// Map a Ember texture format (Constants.kira) to an MTLPixelFormat.
 public function metalPixelFormatForTexture(kiraFormat: Int) -> U64 {
     if kiraFormat == 10 { return metalPixelFormatR32Uint() }   // textureFormatR32Uint
     return metalPixelFormatBGRA8Unorm()                        // swapchain / default

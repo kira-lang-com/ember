@@ -1,11 +1,11 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Clear Color"
+    var app = EMGraphicsApplication {
+        title: "Ember Clear Color"
         width: 640
         height: 480
         sampleCount: 1

@@ -95,18 +95,18 @@ public function vulkanUniformBlocks(reflection: borrow KslResourceReflection) ->
 }
 
 public @Native
-function vulkanRecordShader(state: borrow mut VulkanState, record: VulkanShaderRecord) -> GraphicsShader {
+function vulkanRecordShader(state: borrow mut VulkanState, record: VulkanShaderRecord) -> EMGraphicsShader {
     for index in 0..state.shaders.count {
         if !state.shaders[index].live {
             state.shaders[index] = record
-            return GraphicsShader {
+            return EMGraphicsShader {
                 id: U32(index + 1),
                 uniformBlocks: vulkanUniformBlocks(record.reflection)
             }
         }
     }
     state.shaders.append(record)
-    return GraphicsShader {
+    return EMGraphicsShader {
         id: U32(state.shaders.count),
         uniformBlocks: vulkanUniformBlocks(record.reflection)
     }
@@ -117,7 +117,7 @@ function vulkanCreateGraphicsShader(context: RawPtr, label: borrow String, verte
     if !vulkanRequireDevice(context, "vulkanCreateGraphicsShader") {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let vertex = vulkanCreateShaderModule(state.vulkan, label + " vertex", vertexSpirv)
     let fragment = vulkanCreateShaderModule(state.vulkan, label + " fragment", fragmentSpirv)
     if pointerIsNull(vertex) || pointerIsNull(fragment) {
@@ -141,7 +141,7 @@ function vulkanCreateComputeShader(context: RawPtr, label: borrow String, comput
     if !vulkanRequireDevice(context, "vulkanCreateComputeShader") {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let module = vulkanCreateShaderModule(state.vulkan, label + " compute", computeSpirv)
     if pointerIsNull(module) {
         return .Error(.ShaderRejected)
@@ -198,11 +198,11 @@ function vulkanCreateShaderFromSources(context: RawPtr, descriptor: borrow Shade
 }
 
 public @Native
-function vulkanDestroyShader(context: RawPtr, shader: borrow GraphicsShader) {
+function vulkanDestroyShader(context: RawPtr, shader: borrow EMGraphicsShader) {
     if !vulkanHasDevice(context) || shader.id == 0 {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let index = Int(shader.id) - 1
     if index < 0 || index >= state.vulkan.shaders.count || !state.vulkan.shaders[index].live {
         return

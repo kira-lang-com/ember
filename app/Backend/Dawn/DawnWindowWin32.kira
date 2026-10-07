@@ -7,12 +7,12 @@
 // at all -- a caller that had to know about it would be a caller that knows which
 // window it is holding.
 public construct DawnWindowWin32() extends DawnWindow {
-    function open(title: borrow String, width: Int, height: Int, mode: borrow WindowMode, transparent: Bool, opacity: Float) -> RawPtr {
+    function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr {
         let instance = moduleHandle("")
-        if !dawnRegisterWindowClass(instance, "KiraGraphicsDawnWindow") {
+        if !dawnRegisterWindowClass(instance, "EmberDawnWindow") {
             return nullPointer()
         }
-        return dawnOpenWindow(instance, "KiraGraphicsDawnWindow", title, width, height, mode, transparent, opacity)
+        return dawnOpenWindow(instance, "EmberDawnWindow", title, width, height, mode, transparent, opacity)
     }
 
     function clientWidth(window: RawPtr) -> Int { return dawnClientWidth(window) }
@@ -31,7 +31,7 @@ public construct DawnWindowWin32() extends DawnWindow {
                 hinstance: moduleHandle(""),
                 hwnd: window
             },
-            label: dawnText("kira-graphics-surface")
+            label: dawnText("ember-surface")
         })
     }
 

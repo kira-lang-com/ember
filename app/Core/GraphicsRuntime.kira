@@ -7,7 +7,7 @@
 // so folding it in makes a 300-frame run's average say more about start-up than
 // about drawing — a 2.5 s first frame moves a 300-frame mean by 8 ms.
 public @Native
-function noteFrameCost(state: borrow mut GraphicsAppRuntimeState, seconds: Float, passes: Int, draws: Int) {
+function noteFrameCost(state: borrow mut EMGraphicsAppRuntimeState, seconds: Float, passes: Int, draws: Int) {
     if state.frameCostCount == 0 && state.frameCostFirstSeconds == 0.0 {
         state.frameCostFirstSeconds = seconds
         return
@@ -47,14 +47,14 @@ function graphicsHundredths(value: Float) -> String {
 // Mean and worst rather than a rate, and in milliseconds because that is the
 // unit a frame budget is written in.
 public @Native
-function reportFrameCost(state: borrow GraphicsAppRuntimeState) {
+function reportFrameCost(state: borrow EMGraphicsAppRuntimeState) {
     if !state.logFps || state.frameCostCount == 0 {
         return
     }
     let mean = state.frameCostTotalSeconds / Float(state.frameCostCount) * 1000.0
     var sorted = graphicsSortedCosts(state.frameCostSamples)
     graphicsFail(.Frame, 
-        "KiraGraphics: frames=" + String(state.frameCostCount)
+        "Ember: frames=" + String(state.frameCostCount)
             + " mean=" + graphicsHundredths(mean) + "ms"
             + " p50=" + graphicsHundredths(graphicsPercentile(sorted, 50) * 1000.0) + "ms"
             + " p95=" + graphicsHundredths(graphicsPercentile(sorted, 95) * 1000.0) + "ms"
@@ -75,7 +75,7 @@ function reportFrameCost(state: borrow GraphicsAppRuntimeState) {
 
 // The frames whose cost exceeded `budgetMs`, counted and located.
 public @Native
-function graphicsReportBudgetMisses(state: borrow GraphicsAppRuntimeState, budgetMs: Float) {
+function graphicsReportBudgetMisses(state: borrow EMGraphicsAppRuntimeState, budgetMs: Float) {
     var count = 0
     var where = ""
     var index = 0
@@ -89,7 +89,7 @@ function graphicsReportBudgetMisses(state: borrow GraphicsAppRuntimeState, budge
         index = index + 1
     }
     graphicsFail(.Frame, 
-        "KiraGraphics: over" + graphicsHundredths(budgetMs) + "ms=" + String(count)
+        "Ember: over" + graphicsHundredths(budgetMs) + "ms=" + String(count)
             + " of " + String(state.frameCostSamples.count)
             + " at" + (where.count > 0 ? where : " none")
             + (count > 12 ? " …" : "")
@@ -131,8 +131,8 @@ function graphicsPercentile(sorted: borrow [Float], percent: Int) -> Float {
 }
 
 public @Native
-function graphicsRuntimeRun(app: borrow GraphicsApplication, userData: RawPtr) {
-    var runtimeState = nativeState(GraphicsAppRuntimeState {
+function graphicsRuntimeRun(app: borrow EMGraphicsApplication, userData: RawPtr) {
+    var runtimeState = nativeState(EMGraphicsAppRuntimeState {
         app: app,
         userData: userData,
         frameIndex: 0

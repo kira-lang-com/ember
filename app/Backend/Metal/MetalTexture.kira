@@ -20,14 +20,14 @@ function metalCreateTexture(ctx: RawPtr, width: Int, height: Int) -> Int {
     return metalRegister(ctx, texture)
 }
 
-// The `GraphicsTexture` the public API hands back, so a caller never learns
+// The `EMGraphicsTexture` the public API hands back, so a caller never learns
 // which backend minted the id. Metal has one object where sokol has an image
 // and separate views onto it, so the view fields repeat the texture rather than
 // sit at zero: code that reads `viewId` gets something that works on both.
 public @Native
-function metalGraphicsTexture(textureId: Int) -> GraphicsTexture {
+function metalGraphicsTexture(textureId: Int) -> EMGraphicsTexture {
     let id = U32(textureId)
-    return GraphicsTexture {
+    return EMGraphicsTexture {
         id: id,
         viewId: id,
         colorViewId: id,
@@ -92,7 +92,7 @@ function metalCreateGraphicsTextureFromPixels(ctx: RawPtr, descriptor: borrow Te
 // that will be updated again — a glyph atlas — and optimizing it would undo the
 // linear layout the next upload needs.
 public @Native
-function metalUpdateGraphicsTexture(ctx: RawPtr, texture: borrow GraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
+function metalUpdateGraphicsTexture(ctx: RawPtr, texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
     metalUpdateTexture(ctx, Int(texture.id), width, height, pixels)
     return
 }

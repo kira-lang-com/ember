@@ -27,7 +27,7 @@ public struct MetalHarnessKnobs {
 // none — the same resolution, and the same defaults, the sokol and Dawn loops
 // apply: an unset capture frame with a path means the LAST frame drawn, and a
 // path-less harness captures nothing.
-public function metalHarnessKnobs(app: borrow GraphicsApplication) -> MetalHarnessKnobs {
+public function metalHarnessKnobs(app: borrow EMGraphicsApplication) -> MetalHarnessKnobs {
     var knobs = MetalHarnessKnobs {}
     if app.harness.configured {
         knobs.capturePath = copy app.harness.capturePath

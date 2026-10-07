@@ -26,7 +26,7 @@ import Foundation
 // which is what a resize does. Reconfiguring and asking again is the answer, and
 // only a second refusal is worth a line.
 public @Native
-function dawnAcquireSurfaceTexture(state: borrow mut GraphicsAppRuntimeState) -> Bool {
+function dawnAcquireSurfaceTexture(state: borrow mut EMGraphicsAppRuntimeState) -> Bool {
     if !pointerIsNull(state.dawn.frameView) {
         return true
     }
@@ -70,7 +70,7 @@ public function dawnSurfaceStatusIsUsable(status: I32) -> Bool {
 // is what every depth-enabled pipeline bakes in, so the pass and the pipeline
 // agree.
 public @Native
-function dawnEnsureDepthTarget(state: borrow mut GraphicsAppRuntimeState, width: Int, height: Int) -> U32 {
+function dawnEnsureDepthTarget(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> U32 {
     if width <= 0 || height <= 0 {
         return U32(0)
     }
@@ -109,7 +109,7 @@ function dawnEnsureDepthTarget(state: borrow mut GraphicsAppRuntimeState, width:
 }
 
 public @Native
-function dawnReleaseDepthTarget(state: borrow mut GraphicsAppRuntimeState) {
+function dawnReleaseDepthTarget(state: borrow mut EMGraphicsAppRuntimeState) {
     dawnReleaseView(state, state.dawn.depthViewId)
     state.dawn.depthViewId = 0
     let texture = dawnObject(state, state.dawn.depthTextureId)
@@ -128,10 +128,10 @@ function dawnReleaseDepthTarget(state: borrow mut GraphicsAppRuntimeState) {
 public @Native
 function dawnBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) -> Bool {
     if !dawnHasDevice(context) {
-        graphicsFail(.Pass, "Kira Graphics skipped a render pass because the frame carries no Dawn device")
+        graphicsFail(.Pass, "Ember skipped a render pass because the frame carries no Dawn device")
         return false
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if state.dawn.passActive {
         graphicsFail(.Pass, "a Dawn render pass is already open; end it before beginning another")
         return false
@@ -262,7 +262,7 @@ function dawnBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) -> Bool
 // The frame's command encoder, opened on first use. Every pass of the frame —
 // and every compute dispatch between them — records into this one.
 public @Native
-function dawnFrameEncoder(state: borrow mut GraphicsAppRuntimeState) -> RawPtr {
+function dawnFrameEncoder(state: borrow mut EMGraphicsAppRuntimeState) -> RawPtr {
     if pointerIsNull(state.dawn.encoder) {
         state.dawn.encoder = wgpuDeviceCreateCommandEncoder(state.dawn.device, WGPUCommandEncoderDescriptor {
             label: dawnText("kira-frame-encoder")
@@ -277,7 +277,7 @@ function dawnEndPassAndCommit(context: RawPtr) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if !state.dawn.passActive {
         graphicsFail(.Pass, "end pass skipped because no Dawn render pass is currently active")
         return
@@ -296,7 +296,7 @@ function dawnEndPassAndCommit(context: RawPtr) {
 
 // Finishes whatever the frame's encoder holds and submits it.
 public @Native
-function dawnSubmitEncoder(state: borrow mut GraphicsAppRuntimeState) {
+function dawnSubmitEncoder(state: borrow mut EMGraphicsAppRuntimeState) {
     if pointerIsNull(state.dawn.encoder) {
         return
     }
@@ -321,7 +321,7 @@ function dawnPresentFrame(context: RawPtr, capturePath: borrow String) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if state.dawn.passActive {
         graphicsFail(.Pass, "the frame ended with a Dawn render pass still open")
         dawnEndPassAndCommit(context)
@@ -347,7 +347,7 @@ function dawnPresentFrame(context: RawPtr, capturePath: borrow String) {
     state.dawn.frameTexture = nullPointer()
     if !state.dawn.announcedFrameSubmitted {
         state.dawn.announcedFrameSubmitted = true
-        kiraGraphicsLiveFramePresented()
+        emberLiveFramePresented()
     }
     return
 }

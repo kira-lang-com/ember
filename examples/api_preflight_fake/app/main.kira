@@ -1,4 +1,4 @@
-import KiraGraphics
+import Ember
 
 // The fake backend's declarations live one concern per file beside this one
 // (`Fake*.kira`), and every `.kira` under `app/` is a member of the package —

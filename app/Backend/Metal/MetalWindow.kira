@@ -28,7 +28,7 @@ function metalActivateApp(): Void {
 
 // Create the application + window and return the content view to render into.
 public @Native
-function metalCreateWindow(width: Int, height: Int, title: borrow String, mode: borrow WindowMode, titlebar: borrow WindowTitlebar) -> RawPtr {
+function metalCreateWindow(width: Int, height: Int, title: borrow String, mode: borrow EMWindowMode, titlebar: borrow EMWindowTitlebar) -> RawPtr {
     if metalUsesUIKit!() { return metalUIKitContentView() }
     let app: RawPtr = metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication"))
     metalMsgSend(app, metalSel("setActivationPolicy:"), metalActivationPolicyRegular())
@@ -162,13 +162,13 @@ function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: Ra
     let pool = metalAutoreleasePoolPush()
     metalContextBeginFrameTiming(ctx)
     metalContextSyncViewportFromView(ctx)
-    let graphics = Graphics {
+    let graphics = EMGraphics {
         userData: userData,
         backend: .Metal,
         backendContext: ctx
     }
     var frame = graphics.frame()
-    var runtimeState = nativeRecover<GraphicsAppRuntimeState>(runtimeUserData)
+    var runtimeState = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     runtimeState.app.frameHandler(frame)
     graphicsSubmitFrame(frame)
     metalContextEndFrameTiming(ctx)

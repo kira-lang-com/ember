@@ -2,7 +2,7 @@ import Foundation
 // Dawn's answers to `RenderBackend`.
 //
 // The third declaration of the family, beside `MetalRenderBackend` and
-// `SokolRenderBackend`. `context` is the `GraphicsAppRuntimeState` the run loop
+// `SokolRenderBackend`. `context` is the `EMGraphicsAppRuntimeState` the run loop
 // keeps its window, its device and its resource table on; it is null only inside
 // `runApplication`, which is what creates it.
 //
@@ -25,7 +25,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateShaderFromArtifact(context, label, artifact)
     }
 
-    function destroyShader(shader: borrow GraphicsShader) -> Void {
+    function destroyShader(shader: borrow EMGraphicsShader) -> Void {
         dawnDestroyShader(context, shader)
         return
     }
@@ -49,11 +49,11 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
     // into staging the queue owns before it returns, so nothing the GPU is still
     // reading is what the next write lands on, and every frame writes from the
     // buffer's own base.
-    function dynamicBufferFrameStart(buffer: borrow GraphicsBuffer) -> Int {
+    function dynamicBufferFrameStart(buffer: borrow EMGraphicsBuffer) -> Int {
         return 0
     }
 
-    function commitDynamicBuffer(buffer: borrow GraphicsBuffer, contents: RawPtr, floatCount: Int) -> Void {
+    function commitDynamicBuffer(buffer: borrow EMGraphicsBuffer, contents: RawPtr, floatCount: Int) -> Void {
         dawnCommitDynamicBuffer(context, buffer, contents, floatCount)
         return
     }
@@ -66,9 +66,9 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateIndexBuffer(context, descriptor)
     }
 
-    function destroyBuffer(buffer: borrow GraphicsBuffer) -> Void {
+    function destroyBuffer(buffer: borrow EMGraphicsBuffer) -> Void {
         if dawnHasDevice(context) {
-            var state = nativeRecover<GraphicsAppRuntimeState>(context)
+            var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
             dawnDestroyBufferId(state, buffer.id)
         }
         return
@@ -79,12 +79,12 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateUniform(context, descriptor)
     }
 
-    function updateUniform(uniform: borrow Uniform, data: borrow [F32]) -> Void {
+    function updateUniform(uniform: borrow EMUniform, data: borrow [F32]) -> Void {
         dawnUpdateUniform(context, uniform, data)
         return
     }
 
-    function destroyUniform(uniform: borrow Uniform) -> Void {
+    function destroyUniform(uniform: borrow EMUniform) -> Void {
         dawnDestroyUniform(context, uniform)
         return
     }
@@ -94,7 +94,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateBindGroup(context, descriptor)
     }
 
-    function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow Uniform) -> BindGroupResult {
+    function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
         return dawnCreateUniformBindGroup(context, label, uniformSlot, uniform)
     }
 
@@ -106,22 +106,22 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnBeginBindGroup(label)
     }
 
-    function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow GraphicsTexture) -> Void {
+    function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) -> Void {
         dawnBindGroupAddTexture(group, slot, texture)
         return
     }
 
-    function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow GraphicsSampler) -> Void {
+    function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) -> Void {
         dawnBindGroupAddSampler(group, slot, sampler)
         return
     }
 
-    function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow Uniform) -> Void {
+    function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) -> Void {
         dawnBindGroupAddUniform(group, slot, uniform)
         return
     }
 
-    function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow GraphicsTexture, samplerSlot: Int, sampler: borrow GraphicsSampler) -> BindGroupResult {
+    function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
         return dawnCreateTextureSamplerBindGroup(context, label, textureSlot, texture, samplerSlot, sampler)
     }
 
@@ -139,22 +139,22 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateTextureFromPixels(context, descriptor, pixels)
     }
 
-    function updateTexture(texture: borrow GraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) -> Void {
+    function updateTexture(texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) -> Void {
         dawnWriteTexturePixels(context, texture, pixels)
         return
     }
 
-    function updateTextureBytes(texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Int) -> Void {
+    function updateTextureBytes(texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) -> Void {
         dawnWriteTextureBytes(context, texture, bytes, byteCount)
         return
     }
 
-    function updateTextureRows(texture: borrow GraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) -> Void {
+    function updateTextureRows(texture: borrow EMGraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) -> Void {
         dawnWriteTextureBytes(context, texture, bytes, texture.width * texture.height * 4)
         return
     }
 
-    function destroyTexture(texture: borrow GraphicsTexture) -> Void {
+    function destroyTexture(texture: borrow EMGraphicsTexture) -> Void {
         dawnDestroyTexture(context, texture)
         return
     }
@@ -163,7 +163,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return dawnCreateSampler(context, descriptor)
     }
 
-    function destroySampler(sampler: borrow GraphicsSampler) -> Void {
+    function destroySampler(sampler: borrow EMGraphicsSampler) -> Void {
         dawnDestroySampler(context, sampler)
         return
     }
@@ -173,21 +173,21 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         if pointerIsNull(context) {
             return 1.0
         }
-        return dawnWindowFor(dawnPlatformForHost()).scale(nativeRecover<GraphicsAppRuntimeState>(context).dawn.window)
+        return dawnWindowFor(dawnPlatformForHost()).scale(nativeRecover<EMGraphicsAppRuntimeState>(context).dawn.window)
     }
 
     function contextWidth() -> Int {
         if pointerIsNull(context) {
             return 0
         }
-        return nativeRecover<GraphicsAppRuntimeState>(context).dawn.surfaceWidth
+        return nativeRecover<EMGraphicsAppRuntimeState>(context).dawn.surfaceWidth
     }
 
     function contextHeight() -> Int {
         if pointerIsNull(context) {
             return 0
         }
-        return nativeRecover<GraphicsAppRuntimeState>(context).dawn.surfaceHeight
+        return nativeRecover<EMGraphicsAppRuntimeState>(context).dawn.surfaceHeight
     }
 
     // Framebuffer pixels over the backing scale. The client area is measured in
@@ -196,7 +196,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         if pointerIsNull(context) {
             return 0.0
         }
-        let state = nativeRecover<GraphicsAppRuntimeState>(context)
+        let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         return Float(state.dawn.surfaceWidth) / dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
     }
 
@@ -204,26 +204,26 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         if pointerIsNull(context) {
             return 0.0
         }
-        let state = nativeRecover<GraphicsAppRuntimeState>(context)
+        let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         return Float(state.dawn.surfaceHeight) / dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
     }
 
-    function safeAreaInsets() -> ViewportInsets {
-        return ViewportInsets {}
+    function safeAreaInsets() -> EMViewportInsets {
+        return EMViewportInsets {}
     }
 
-    function windowMode() -> WindowMode {
+    function windowMode() -> EMWindowMode {
         if pointerIsNull(context) {
             return .Windowed
         }
-        return dawnReadWindowMode(nativeRecover<GraphicsAppRuntimeState>(context).dawn.window)
+        return dawnReadWindowMode(nativeRecover<EMGraphicsAppRuntimeState>(context).dawn.window)
     }
 
-    function setWindowMode(mode: borrow WindowMode) -> Void {
+    function setWindowMode(mode: borrow EMWindowMode) -> Void {
         if pointerIsNull(context) {
             return
         }
-        let state = nativeRecover<GraphicsAppRuntimeState>(context)
+        let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         dawnApplyWindowMode(state.dawn.window, mode, state.app.width, state.app.height)
         return
     }
@@ -232,7 +232,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         if pointerIsNull(context) || hostPlatform() != .Linux {
             return
         }
-        dawnWaylandMinimize(nativeRecover<GraphicsAppRuntimeState>(context))
+        dawnWaylandMinimize(nativeRecover<EMGraphicsAppRuntimeState>(context))
         return
     }
 
@@ -240,7 +240,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         if pointerIsNull(context) || hostPlatform() != .Linux {
             return
         }
-        dawnWaylandToggleMaximize(nativeRecover<GraphicsAppRuntimeState>(context))
+        dawnWaylandToggleMaximize(nativeRecover<EMGraphicsAppRuntimeState>(context))
         return
     }
 
@@ -249,21 +249,21 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return true
     }
 
-    function createComputePipeline(label: borrow String, shader: borrow GraphicsShader, entryName: borrow String) -> Int {
+    function createComputePipeline(label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
         return dawnCreateComputePipeline(context, label, shader, entryName)
     }
 
     function dispatchTextureComputePair(
         horizontalPipeline: Int,
         verticalPipeline: Int,
-        source: borrow GraphicsTexture,
-        secondSource: borrow GraphicsTexture,
+        source: borrow EMGraphicsTexture,
+        secondSource: borrow EMGraphicsTexture,
         blend: Float,
-        tempNear: borrow GraphicsTexture,
-        tempFar: borrow GraphicsTexture,
-        outputNear: borrow GraphicsTexture,
-        outputFar: borrow GraphicsTexture,
-        sampler: borrow GraphicsSampler,
+        tempNear: borrow EMGraphicsTexture,
+        tempFar: borrow EMGraphicsTexture,
+        outputNear: borrow EMGraphicsTexture,
+        outputFar: borrow EMGraphicsTexture,
+        sampler: borrow EMGraphicsSampler,
         width: Int,
         height: Int,
     ) -> Void {
@@ -297,7 +297,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
 
     function dispatchDepthComputeBuffers(
         pipeline: Int,
-        depth: borrow GraphicsTexture,
+        depth: borrow EMGraphicsTexture,
         bufferIds: borrow [U32],
         threadCount: Int,
         threadsPerGroup: Int,
@@ -306,7 +306,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return
     }
 
-    function readBufferU32(buffer: borrow GraphicsBuffer, index: Int) -> U32 {
+    function readBufferU32(buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
         return dawnReadBufferWord(context, buffer, index)
     }
 
@@ -336,7 +336,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
         return 2
     }
 
-    function statistics() -> FrameStatistics {
+    function statistics() -> EMFrameStatistics {
         return dawnFrameStatistics(context)
     }
 
@@ -396,7 +396,7 @@ public construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
     }
 
     // --- the run loop ----------------------------------------------------
-    function runApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) -> Void {
+    function runApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Void {
         dawnRunApplication(app, runtimeUserData)
         return
     }

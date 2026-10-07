@@ -1,14 +1,14 @@
 # Architecture
 
-Kira Graphics is organized around a stable public facade, explicit descriptor data, a runtime/validation core, and backend implementations for Metal, Dawn, and Vulkan.
+Ember is organized around a stable public facade, explicit descriptor data, a runtime/validation core, and backend implementations for Metal, Dawn, and Vulkan.
 
 ## Layers
 
 `app/Public/`
 
-- user-facing API objects and handles such as `GraphicsApplication`, `Graphics`, `RenderFrame`, `RenderEncoder`, `GraphicsBuffer`, `GraphicsTexture`, `GraphicsShader`, and `RenderPipeline`
+- user-facing API objects and handles such as `EMGraphicsApplication`, `EMGraphics`, `RenderFrame`, `RenderEncoder`, `EMGraphicsBuffer`, `EMGraphicsTexture`, `EMGraphicsShader`, and `RenderPipeline`
 - typed enum values for formats, usage, topology, blending, and depth
-- lifecycle callback surface that examples import directly through `KiraGraphics`
+- lifecycle callback surface that examples import directly through `Ember`
 
 `app/Core/`
 
@@ -35,7 +35,7 @@ Because of that, the public API is built around `RenderPassDescriptor` with expl
 
 ## Why The Core Encoder Stays Generic
 
-Kira UI Foundation is expected to be a client of Kira Graphics, not the definition of Kira Graphics. The core encoder therefore exposes generic pipeline/buffer/indexed draw operations instead of UI-specific methods like panel draws or glow passes.
+Kira UI Foundation is expected to be a client of Ember, not the definition of Ember. The core encoder therefore exposes generic pipeline/buffer/indexed draw operations instead of UI-specific methods like panel draws or glow passes.
 
 That preserves room for:
 
@@ -124,7 +124,7 @@ for headless tests, or a `CAMetalLayer` drawable on screen), the in-flight comma
 buffer + encoder, an optional `Depth32Float` target + depth-stencil state, and a
 small id→pointer registry that maps the public U32 resource handles to live Metal
 objects. Resource creation and draw encoding are dispatched by backend from the
-public `Graphics`/`RenderEncoder` facade; the encoder selects Metal mode by the
+public `EMGraphics`/`RenderEncoder` facade; the encoder selects Metal mode by the
 presence of a non-null context handle.
 
 Implemented and verified (via the `tests/metal_kik` Test harness, which renders

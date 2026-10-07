@@ -281,7 +281,7 @@ function vulkanDrawWithBindings(
     instanceCount: Int,
 ) {
     if !vulkanRequireDevice(runtime, "vulkanDrawWithBindings") { return }
-    var state = nativeRecover<GraphicsAppRuntimeState>(runtime)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtime)
     if !state.vulkan.passActive {
         graphicsFail(.Draw, "a draw was issued outside a render pass; it was dropped")
         return
@@ -383,7 +383,7 @@ function vulkanEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectB
         graphicsFail(.Draw, "an indirect draw came from an encoder with no Vulkan runtime")
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(encoder.vulkanRuntime)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(encoder.vulkanRuntime)
     if !state.vulkan.passActive {
         graphicsFail(.Draw, "an indirect draw was issued outside a render pass; it was dropped")
         return

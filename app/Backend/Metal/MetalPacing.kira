@@ -2,7 +2,7 @@
 // for the next frame goes so it does not land in memory the current one is still
 // reading.
 //
-// Uniform and dynamic vertex buffers are `StorageModeShared` and used to be
+// EMUniform and dynamic vertex buffers are `StorageModeShared` and used to be
 // rewritten in place every frame. Presenting a drawable sequences the GPU's own work
 // but says nothing about the CPU's next write, so with a scene big enough that a
 // frame is still running when the next one starts writing, a shader could read a

@@ -53,8 +53,8 @@ public class RenderFrame {
         return self.renderBackend().viewportHeight()
     }
 
-    // Viewport edges reserved for system controls, in logical points.
-    function safeAreaInsets() -> ViewportInsets {
+    // EMViewport edges reserved for system controls, in logical points.
+    function safeAreaInsets() -> EMViewportInsets {
         return self.renderBackend().safeAreaInsets()
     }
 
@@ -82,11 +82,11 @@ public class RenderFrame {
     // Read rather than remembered — a user can leave fullscreen through the
     // window manager without the program hearing about it — so this is also the
     // way to find out whether a `setWindowMode` request was honored.
-    function windowMode() -> WindowMode {
+    function windowMode() -> EMWindowMode {
         return self.renderBackend().windowMode()
     }
 
-    function setWindowMode(mode: borrow WindowMode) -> Void {
+    function setWindowMode(mode: borrow EMWindowMode) -> Void {
         self.renderBackend().setWindowMode(mode)
         return
     }
@@ -104,7 +104,7 @@ public class RenderFrame {
     // What the frame BEFORE this one cost. An application lays its HUD out
     // while the frame the HUD will appear in is still being built, so the last
     // completed frame is what there is to report.
-    function statistics() -> FrameStatistics {
+    function statistics() -> EMFrameStatistics {
         return self.renderBackend().statistics()
     }
 
@@ -130,7 +130,7 @@ public class RenderFrame {
         self.renderPassActive = self.renderBackend().beginRenderPass(self)
 
         if (!self.renderPassActive) {
-            graphicsFail(.Frame, "Kira Graphics skipped render pass because the backend could not begin it")
+            graphicsFail(.Frame, "Ember skipped render pass because the backend could not begin it")
         }
 
         // The pass encoder has a single owner: the caller that draws with it,
@@ -169,16 +169,16 @@ public class RenderFrame {
     function dispatchTextureComputePair(
         horizontalPipeline: Int,
         verticalPipeline: Int,
-        source: borrow GraphicsTexture,
-        secondSource: borrow GraphicsTexture,
+        source: borrow EMGraphicsTexture,
+        secondSource: borrow EMGraphicsTexture,
         blend: Float,
-        tempNear: borrow GraphicsTexture,
-        tempFar: borrow GraphicsTexture,
-        outputNear: borrow GraphicsTexture,
-        outputFar: borrow GraphicsTexture,
+        tempNear: borrow EMGraphicsTexture,
+        tempFar: borrow EMGraphicsTexture,
+        outputNear: borrow EMGraphicsTexture,
+        outputFar: borrow EMGraphicsTexture,
         // The kernels sample through this rather than declaring a sampler
         // inline, which is not something a compute stage can express.
-        sampler: borrow GraphicsSampler,
+        sampler: borrow EMGraphicsSampler,
         width: Int,
         height: Int,
     ) {
@@ -201,7 +201,7 @@ public class RenderFrame {
 
     // One dispatch over buffers, encoded on this frame's command buffer.
     //
-    // On the frame rather than on `Graphics` when the step belongs to a frame's
+    // On the frame rather than on `EMGraphics` when the step belongs to a frame's
     // ordering: a step that has to land between two passes needs the frame, and
     // the frame is what a caller holds at that point.
     function dispatchComputeBuffers(pipeline: Int, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
@@ -230,7 +230,7 @@ public class RenderFrame {
     // One 32-bit word out of a buffer a kernel dispatched on this frame has
     // written — what a gate checks after stepping. A backend that cannot read a
     // buffer back answers 0 and says so.
-    function readStorageU32(buffer: borrow GraphicsBuffer, index: Int) -> U32 {
+    function readStorageU32(buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
         return self.renderBackend().readBufferU32(buffer, index)
     }
 
@@ -267,7 +267,7 @@ public class RenderFrame {
     }
 }
 
-public function drawPass(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow GraphicsBuffer, vertexCount: Int) {
+public function drawPass(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow EMGraphicsBuffer, vertexCount: Int) {
     var encoder = frame.beginRenderPass(descriptor)
     encoder.setPipeline(pipeline)
     encoder.setVertexBuffer(vertexBuffer)
@@ -276,7 +276,7 @@ public function drawPass(frame: borrow mut RenderFrame, descriptor: borrow Rende
     return
 }
 
-public function drawPassWithBindGroups(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow GraphicsBuffer, bindGroup0: borrow BindGroup, bindGroup1: borrow BindGroup, vertexCount: Int) {
+public function drawPassWithBindGroups(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow EMGraphicsBuffer, bindGroup0: borrow BindGroup, bindGroup1: borrow BindGroup, vertexCount: Int) {
     var encoder = frame.beginRenderPass(descriptor)
     encoder.setPipeline(pipeline)
     encoder.setVertexBuffer(vertexBuffer)

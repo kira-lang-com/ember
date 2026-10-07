@@ -2,7 +2,7 @@ import Foundation
 // Everything a renderer asks of the GPU, as one construct family.
 //
 // This replaces 43 hand-written `match self.backend` sites spread across
-// `Graphics` (34), `RenderFrame` (7) and `Graphics`'s compute extension (2).
+// `EMGraphics` (34), `RenderFrame` (7) and `EMGraphics`'s compute extension (2).
 // Each was a two-arm switch over `RenderBackendKind`, so a third backend would
 // have had to find all 43 by hand, and two of them were `if self.backend ==
 // .Metal` with nothing on the other side: the non-Metal path did nothing and
@@ -25,7 +25,7 @@ import Foundation
 //
 // # What is NOT here
 //
-// Decoding an image file. `Graphics.createTextureFromFile` decodes in Kira and
+// Decoding an image file. `EMGraphics.createTextureFromFile` decodes in Kira and
 // then calls `createTextureFromPixels`, which both backends implement, so
 // loading a PNG is not a question about which GPU is in the machine.
 //
@@ -45,7 +45,7 @@ public construct RenderBackend {
     // on WebGPU, GLSL on desktop GL, and the compute kernel rather than the
     // graphics pair when the shader has one.
     @Required function createShaderFromKslArtifact(label: borrow String, artifact: borrow KslArtifact) -> ShaderResult
-    @Required function destroyShader(shader: borrow GraphicsShader) -> Void
+    @Required function destroyShader(shader: borrow EMGraphicsShader) -> Void
 
     // --- pipelines -------------------------------------------------------
     @Required function createRenderPipeline(descriptor: borrow RenderPipelineDescriptor) -> PipelineResult
@@ -62,23 +62,23 @@ public construct RenderBackend {
     // every write into it this frame must add to its own. Called once per frame
     // before writing, so the frame the GPU is still drawing keeps the slot it
     // was recorded with.
-    @Required function dynamicBufferFrameStart(buffer: borrow GraphicsBuffer) -> Int
+    @Required function dynamicBufferFrameStart(buffer: borrow EMGraphicsBuffer) -> Int
     // Hand the first `floatCount` slots written into `contents` to the GPU. A
     // call of its own rather than something every write does, because a backend
     // that stages may run it at most ONCE per buffer per frame.
-    @Required function commitDynamicBuffer(buffer: borrow GraphicsBuffer, contents: RawPtr, floatCount: Int) -> Void
+    @Required function commitDynamicBuffer(buffer: borrow EMGraphicsBuffer, contents: RawPtr, floatCount: Int) -> Void
     @Required function createBuffer(descriptor: borrow BufferDescriptor) -> BufferResult
     @Required function createIndexBuffer(descriptor: borrow IndexBufferDescriptor) -> BufferResult
-    @Required function destroyBuffer(buffer: borrow GraphicsBuffer) -> Void
+    @Required function destroyBuffer(buffer: borrow EMGraphicsBuffer) -> Void
 
     // --- uniforms --------------------------------------------------------
     @Required function createUniform(descriptor: borrow UniformDescriptor) -> UniformResult
-    @Required function updateUniform(uniform: borrow Uniform, data: borrow [F32]) -> Void
-    @Required function destroyUniform(uniform: borrow Uniform) -> Void
+    @Required function updateUniform(uniform: borrow EMUniform, data: borrow [F32]) -> Void
+    @Required function destroyUniform(uniform: borrow EMUniform) -> Void
 
     // --- bind groups -----------------------------------------------------
     @Required function createBindGroup(descriptor: borrow BindGroupDescriptor) -> BindGroupResult
-    @Required function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow Uniform) -> BindGroupResult
+    @Required function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult
     // Bind a buffer a shader reads as storage — the compositor's quad stream, or
     // any per-instance table a vertex stage indexes by vertex id.
     @Required function createStorageBufferBindGroup(label: borrow String, slot: Int, bufferId: U32) -> BindGroupResult
@@ -90,13 +90,13 @@ public construct RenderBackend {
     // texture/sampler pairs, or a buffer beside a texture, and no fixed shape
     // covers them all.
     @Required function beginBindGroup(label: borrow String) -> BindGroupResult
-    @Required function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow GraphicsTexture) -> Void
-    @Required function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow GraphicsSampler) -> Void
+    @Required function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) -> Void
+    @Required function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) -> Void
     // A uniform block beside them, for a group that carries one — a shader whose
     // textures and the number that says which of them to believe are read
     // together has no reason to split them across two of the encoder's slots.
-    @Required function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow Uniform) -> Void
-    @Required function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow GraphicsTexture, samplerSlot: Int, sampler: borrow GraphicsSampler) -> BindGroupResult
+    @Required function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) -> Void
+    @Required function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult
     @Required function destroyBindGroup(bindGroup: borrow BindGroup) -> Void
 
     // --- textures and samplers -------------------------------------------
@@ -107,18 +107,18 @@ public construct RenderBackend {
     @Required function createTextureFromPixels(descriptor: borrow TextureDescriptor, pixels: borrow [U8]) -> TextureResult
     // Replace a texture's pixels, whole-image — the shape both backends share,
     // since the portable upload contract is whole-image.
-    @Required function updateTexture(texture: borrow GraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) -> Void
+    @Required function updateTexture(texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) -> Void
     // Replace a texture's contents from raw memory the caller already owns, for
     // a texture the caller composites into itself — a glyph atlas, whose CPU
     // side has to exist anyway so a new glyph can be packed beside the old ones.
-    @Required function updateTextureBytes(texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Int) -> Void
+    @Required function updateTextureBytes(texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) -> Void
     // The same image, of which only `rowCount` rows from `firstRow` changed:
     // `bytes` is still the whole image. A backend that cannot upload part of
     // one uploads all of it.
-    @Required function updateTextureRows(texture: borrow GraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) -> Void
-    @Required function destroyTexture(texture: borrow GraphicsTexture) -> Void
+    @Required function updateTextureRows(texture: borrow EMGraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) -> Void
+    @Required function destroyTexture(texture: borrow EMGraphicsTexture) -> Void
     @Required function createSampler(descriptor: borrow SamplerDescriptor) -> SamplerResult
-    @Required function destroySampler(sampler: borrow GraphicsSampler) -> Void
+    @Required function destroySampler(sampler: borrow EMGraphicsSampler) -> Void
 
     // --- the drawable ----------------------------------------------------
     // The Retina backing scale (physical pixels per point) of the current
@@ -142,7 +142,7 @@ public construct RenderBackend {
     // would lose the fraction every layout pass below needs.
     @Required function viewportWidth() -> Float
     @Required function viewportHeight() -> Float
-    @Required function safeAreaInsets() -> ViewportInsets
+    @Required function safeAreaInsets() -> EMViewportInsets
     // How the window is presented right now, and moving it to another mode.
     //
     // Read from the window itself rather than remembered from the last request:
@@ -150,8 +150,8 @@ public construct RenderBackend {
     // being asked, so a stored copy would go stale the moment it mattered. A
     // backend whose window system cannot tell two of the modes apart therefore
     // reads back the one it actually put on screen.
-    @Required function windowMode() -> WindowMode
-    @Required function setWindowMode(mode: borrow WindowMode) -> Void
+    @Required function windowMode() -> EMWindowMode
+    @Required function setWindowMode(mode: borrow EMWindowMode) -> Void
     // Client-side window furniture uses these on platforms where the
     // compositor does not provide a titlebar. Backends with native furniture
     // implement them as no-ops because application UI never exposes them.
@@ -180,7 +180,7 @@ public construct RenderBackend {
     // that grows compute starts running the compute path without every caller
     // being edited to add its name to a list.
     @Required function supportsCompute() -> Bool
-    @Required function createComputePipeline(label: borrow String, shader: borrow GraphicsShader, entryName: borrow String) -> Int
+    @Required function createComputePipeline(label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int
     // Run a two-axis separable blur over `mix(source, secondSource, blend)`, one
     // dispatch per axis. Both kernels produce two levels at once — near and far
     // read the same input and write their own target — so the pyramid costs one
@@ -199,14 +199,14 @@ public construct RenderBackend {
     @Required function dispatchTextureComputePair(
         horizontalPipeline: Int,
         verticalPipeline: Int,
-        source: borrow GraphicsTexture,
-        secondSource: borrow GraphicsTexture,
+        source: borrow EMGraphicsTexture,
+        secondSource: borrow EMGraphicsTexture,
         blend: Float,
-        tempNear: borrow GraphicsTexture,
-        tempFar: borrow GraphicsTexture,
-        outputNear: borrow GraphicsTexture,
-        outputFar: borrow GraphicsTexture,
-        sampler: borrow GraphicsSampler,
+        tempNear: borrow EMGraphicsTexture,
+        tempFar: borrow EMGraphicsTexture,
+        outputNear: borrow EMGraphicsTexture,
+        outputFar: borrow EMGraphicsTexture,
+        sampler: borrow EMGraphicsSampler,
         width: Int,
         height: Int,
     ) -> Void
@@ -227,7 +227,7 @@ public construct RenderBackend {
     // kernel that reads the depth a pass just rasterized.
     @Required function dispatchDepthComputeBuffers(
         pipeline: Int,
-        depth: borrow GraphicsTexture,
+        depth: borrow EMGraphicsTexture,
         bufferIds: borrow [U32],
         threadCount: Int,
         threadsPerGroup: Int,
@@ -235,7 +235,7 @@ public construct RenderBackend {
     // One 32-bit word out of a buffer a kernel has written, for a headless gate
     // that checks what a dispatch produced. A backend that cannot read a buffer
     // back answers 0 and says so.
-    @Required function readBufferU32(buffer: borrow GraphicsBuffer, index: Int) -> U32
+    @Required function readBufferU32(buffer: borrow EMGraphicsBuffer, index: Int) -> U32
     // A storage buffer whose payload is 32-bit WORDS. A kernel's parameter block
     // is counts and flags, and handing those over as floats would give the
     // shader different numbers than the caller wrote.
@@ -259,7 +259,7 @@ public construct RenderBackend {
     // What the frame BEFORE this one cost. An application lays its HUD out while
     // the frame the HUD will appear in is still being built, so the last
     // completed frame is what there is to report.
-    @Required function statistics() -> FrameStatistics
+    @Required function statistics() -> EMFrameStatistics
     @Required function beginRenderPass(frame: borrow RenderFrame) -> Bool
     @Required function endPassAndCommit(frame: borrow RenderFrame) -> Void
     // The encoder a pass hands its caller. It selects its draw path on which of
@@ -273,13 +273,13 @@ public construct RenderBackend {
     // called before a backend context exists, so it is the one whose `context`
     // is null: the run loop is what creates the context every other member
     // reads.
-    @Required function runApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) -> Void
+    @Required function runApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Void
 }
 
 // The backend a selection names, holding the per-run context every member reads.
 //
 // The one place a `RenderBackendKind` still decides anything. `RenderBackendKind`
-// stays the *selection* vocabulary — what a `GraphicsApplication` asks for and
+// stays the *selection* vocabulary — what a `EMGraphicsApplication` asks for and
 // what `validateRenderBackend` checks against a platform, both of which happen
 // before any context exists — and `Any RenderBackend` is the *dispatch*
 // vocabulary. Everything past this line asks the backend rather than asking

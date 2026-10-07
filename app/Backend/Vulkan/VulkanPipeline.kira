@@ -274,7 +274,7 @@ function vulkanCreateRenderPipeline(context: RawPtr, descriptor: borrow RenderPi
         graphicsFail(.Pipeline, "currently exposes one color attachment and at most sixteen vertex attributes per pipeline")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let shader = vulkanShaderRecord(state.vulkan, descriptor.shader.id)
     if !shader.live || pointerIsNull(shader.vertexModule) || pointerIsNull(shader.fragmentModule) {
         graphicsFail(.Pipeline, "a render pipeline names shader " + String(Int(descriptor.shader.id)) + ", which " + (!shader.live ? "is not live" : pointerIsNull(shader.vertexModule) ? "has no vertex stage" : "has no fragment stage"))
@@ -430,7 +430,7 @@ function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline)
     if !vulkanHasDevice(context) || pipeline.id == 0 {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let index = Int(pipeline.id) - 1
     if index < 0 || index >= state.vulkan.pipelines.count || !state.vulkan.pipelines[index].live {
         return

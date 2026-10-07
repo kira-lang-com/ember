@@ -8,7 +8,7 @@ import Foundation
 //
 // # Why shaders have a table of their own
 //
-// A `GraphicsShader` is one `U32`, and a WebGPU graphics shader is two modules
+// A `EMGraphicsShader` is one `U32`, and a WebGPU graphics shader is two modules
 // and two entry names — a pipeline names the vertex stage and the fragment stage
 // separately, and a module carries neither name nor stage. So the id indexes a
 // record here rather than the flat object table, which holds one handle per
@@ -44,7 +44,7 @@ function dawnEmptyShaderRecord() -> DawnShaderRecord {
 // rejects — the refusal arrives on the uncaptured-error callback — so an empty
 // source is caught here, where the label is still in hand.
 public @Native
-function dawnCompileWgsl(state: borrow GraphicsAppRuntimeState, label: borrow String, source: borrow String) -> RawPtr {
+function dawnCompileWgsl(state: borrow EMGraphicsAppRuntimeState, label: borrow String, source: borrow String) -> RawPtr {
     if source.count == 0 {
         graphicsFail(.Shader, "shader '" + label + "' has no WGSL for this stage")
         return nullPointer()
@@ -60,21 +60,21 @@ function dawnCompileWgsl(state: borrow GraphicsAppRuntimeState, label: borrow St
     })
 }
 
-// Records a compiled shader and answers the `GraphicsShader` that names it.
+// Records a compiled shader and answers the `EMGraphicsShader` that names it.
 public @Native
-function dawnRecordShader(state: borrow mut GraphicsAppRuntimeState, record: DawnShaderRecord) -> GraphicsShader {
+function dawnRecordShader(state: borrow mut EMGraphicsAppRuntimeState, record: DawnShaderRecord) -> EMGraphicsShader {
     for slot in 0..state.dawn.shaders.count {
         if !state.dawn.shaders[slot].live {
             state.dawn.shaders[slot] = record
-            return GraphicsShader { id: U32(slot + 1) }
+            return EMGraphicsShader { id: U32(slot + 1) }
         }
     }
     state.dawn.shaders.append(record)
-    return GraphicsShader { id: U32(state.dawn.shaders.count) }
+    return EMGraphicsShader { id: U32(state.dawn.shaders.count) }
 }
 
 public @Native
-function dawnShaderRecord(state: borrow GraphicsAppRuntimeState, id: U32) -> DawnShaderRecord {
+function dawnShaderRecord(state: borrow EMGraphicsAppRuntimeState, id: U32) -> DawnShaderRecord {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.shaders.count {
         return dawnEmptyShaderRecord()
@@ -93,7 +93,7 @@ function dawnCreateGraphicsShader(context: RawPtr, label: borrow String, vertexW
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let vertexModule = dawnCompileWgsl(state, label + " vertex", vertexWgsl)
     if pointerIsNull(vertexModule) {
         return .Error(.ShaderRejected)
@@ -122,7 +122,7 @@ function dawnCreateComputeShader(context: RawPtr, label: borrow String, computeW
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let module = dawnCompileWgsl(state, label + " compute", computeWgsl)
     if pointerIsNull(module) {
         return .Error(.ShaderRejected)
@@ -138,7 +138,7 @@ function dawnCreateComputeShader(context: RawPtr, label: borrow String, computeW
     }))
 }
 
-// `Graphics.createShaderFromKslArtifact`. A shader with a compute entry is a
+// `EMGraphics.createShaderFromKslArtifact`. A shader with a compute entry is a
 // kernel and nothing else — that is what an empty `computeEntry` already says
 // about a graphics shader — so the two are separated here rather than by the
 // caller.
@@ -150,7 +150,7 @@ function dawnCreateShaderFromArtifact(context: RawPtr, label: borrow String, art
     return dawnCreateGraphicsShader(context, label, artifact.vertexWgsl, artifact.fragmentWgsl, artifact.vertexEntry, artifact.fragmentEntry, artifact.resourceReflection)
 }
 
-// `Graphics.createShaderFromKsl`, reading the files `kira shader build` wrote.
+// `EMGraphics.createShaderFromKsl`, reading the files `kira shader build` wrote.
 //
 // The entry names are the ones the WGSL backend emits — `vertex_main` and
 // `fragment_main` — rather than names a caller supplies: a name that does not
@@ -173,7 +173,7 @@ function dawnCreateShaderFromKsl(context: RawPtr, descriptor: borrow KslShaderDe
     return dawnCreateGraphicsShader(context, descriptor.label, vertex.text, fragment.text, "vertex_main", "fragment_main", reflection.ok ? reflection.text : "")
 }
 
-// `Graphics.createShader`, from sources or paths the caller names itself.
+// `EMGraphics.createShader`, from sources or paths the caller names itself.
 //
 // The sources are WGSL, because that is what this device compiles. A caller
 // holding GLSL or MSL has a shader for another backend, and saying so here is
@@ -203,11 +203,11 @@ function dawnCreateShaderFromSources(context: RawPtr, descriptor: borrow ShaderD
 }
 
 public @Native
-function dawnDestroyShader(context: RawPtr, shader: borrow GraphicsShader) {
+function dawnDestroyShader(context: RawPtr, shader: borrow EMGraphicsShader) {
     if !dawnHasDevice(context) || shader.id == 0 {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let slot = Int(shader.id) - 1
     if slot < 0 || slot >= state.dawn.shaders.count {
         return

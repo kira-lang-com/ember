@@ -79,7 +79,7 @@ public struct VulkanState {
     var initialized: Bool = false
     var announcedFramePresented: Bool = false
     var quitRequested: Bool = false
-    var stats: FrameStatistics = FrameStatistics()
+    var stats: EMFrameStatistics = EMFrameStatistics()
     var framePassCount: Int = 0
     var frameDrawCount: Int = 0
     var frameTriangleCount: Int = 0
@@ -112,7 +112,7 @@ function vulkanHasDevice(context: RawPtr) -> Bool {
     if pointerIsNull(context) {
         return false
     }
-    return !pointerIsNull(nativeRecover<GraphicsAppRuntimeState>(context).vulkan.device)
+    return !pointerIsNull(nativeRecover<EMGraphicsAppRuntimeState>(context).vulkan.device)
 }
 
 // `vulkanHasDevice` for an operation that cannot proceed without one: a missing
@@ -320,7 +320,7 @@ public @Native
 function vulkanCreateInstance(state: borrow mut VulkanState, needsSurface: Bool) -> Bool {
     let application = VkApplicationInfo {
         sType: vulkanStructureApplicationInfo(),
-        pApplicationName: "Kira Graphics Vulkan",
+        pApplicationName: "Ember Vulkan",
         applicationVersion: U32(1),
         pEngineName: "Kira",
         engineVersion: U32(1),

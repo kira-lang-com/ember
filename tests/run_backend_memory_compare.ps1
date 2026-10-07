@@ -51,9 +51,9 @@ function Assert-ZeroLifetimeReport {
         [string]$Context
     )
 
-    $expected = "Kira Graphics lifetime report: buffers=0 images=0 samplers=0 views=0 shaders=0 pipelines=0"
+    $expected = "Ember lifetime report: buffers=0 images=0 samplers=0 views=0 shaders=0 pipelines=0"
     if ($Output -notlike "*$expected*") {
-        throw "$Context did not end with zero Kira Graphics lifetime counters."
+        throw "$Context did not end with zero Ember lifetime counters."
     }
 }
 
@@ -126,8 +126,8 @@ function Measure-KiraRun {
     }
 
     Assert-ZeroLifetimeReport -Output $output -Context "$Backend $FrameCount frames"
-    $lifetime = ($output -split "`r?`n" | Where-Object { $_ -like "*Kira Graphics lifetime report:*" } | Select-Object -Last 1)
-    $detail = ($output -split "`r?`n" | Where-Object { $_ -like "*Kira Graphics lifetime detail:*" } | Select-Object -Last 1)
+    $lifetime = ($output -split "`r?`n" | Where-Object { $_ -like "*Ember lifetime report:*" } | Select-Object -Last 1)
+    $detail = ($output -split "`r?`n" | Where-Object { $_ -like "*Ember lifetime detail:*" } | Select-Object -Last 1)
 
     return [pscustomobject]@{
         Backend = $Backend

@@ -1,15 +1,15 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct CubeState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
     var edgePipeline: RenderPipeline
-    var vertices: GraphicsBuffer
-    var edges: GraphicsBuffer
-    var sceneUniform: Uniform
-    var objectUniform: Uniform
-    var edgeUniform: Uniform
+    var vertices: EMGraphicsBuffer
+    var edges: EMGraphicsBuffer
+    var sceneUniform: EMUniform
+    var objectUniform: EMUniform
+    var edgeUniform: EMUniform
     var sceneBindGroup: BindGroup
     var objectBindGroup: BindGroup
     var edgeBindGroup: BindGroup
@@ -228,8 +228,8 @@ function cubeRenderPass() -> RenderPassDescriptor {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Basic 3D Cube"
+    var app = EMGraphicsApplication {
+        title: "Ember Basic 3D Cube"
         width: 640
         height: 480
         sampleCount: 1

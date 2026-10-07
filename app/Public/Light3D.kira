@@ -53,7 +53,7 @@ public function sceneUniformData(uniforms: borrow SceneUniforms) -> [F32] {
     let lightDirection = uniforms.lightDirection
     let lightColor = uniforms.lightColor
 
-    // Kira Graphics stores matrices as row/column fields for column-vector math.
+    // Ember stores matrices as row/column fields for column-vector math.
     // GLSL receives mat4 values in column-major float order through sg_apply_uniforms.
     return [
         F32(m.m00), F32(m.m10), F32(m.m20), F32(m.m30),
@@ -69,7 +69,7 @@ public function objectUniformData(uniforms: borrow ObjectUniforms) -> [F32] {
     let m = uniforms.model
     let baseColor = uniforms.baseColor
 
-    // Kira Graphics stores matrices as row/column fields for column-vector math.
+    // Ember stores matrices as row/column fields for column-vector math.
     // GLSL receives mat4 values in column-major float order through sg_apply_uniforms.
     return [
         F32(m.m00), F32(m.m10), F32(m.m20), F32(m.m30),

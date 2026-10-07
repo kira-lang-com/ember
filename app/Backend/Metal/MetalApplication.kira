@@ -1,4 +1,4 @@
-// Kira Graphics Metal backend — application lifecycle.
+// Ember Metal backend — application lifecycle.
 //
 // This backend talks to Metal, QuartzCore and AppKit/UIKit DIRECTLY through
 // Kira FFI (the Objective-C runtime: objc_getClass / sel_registerName /
@@ -13,7 +13,7 @@
 // MetalSelfTest entry points).
 
 public @Native
-function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr): Void {
+function metalRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr): Void {
     // Become a foreground GUI app BEFORE creating the Metal device. The device
     // (MTLCreateSystemDefaultDevice) and the window both need a WindowServer
     // connection; establishing the app up front keeps the ordering explicit.
@@ -32,7 +32,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
     // come directly from the borrowed application (closures captured in the app do
     // not survive the nativeState round-trip on the hybrid backend, but the borrowed
     // `app` retains them intact).
-    var state = nativeRecover<GraphicsAppRuntimeState>(runtimeUserData)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     let userData = state.userData
 
     let offscreenEnv = metalGetEnv("KIRA_METAL_OFFSCREEN")
@@ -53,10 +53,10 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
     metalContextAttachLayerToView(ctxPtr, view, app.width, app.height, harness.capturePath.count > 0)
     metalWindowApplyCornerRadius(view, app.cornerRadius)
     let nsApp = metalSharedApp()
-    kiraGraphicsLiveBackendInitialized()
+    emberLiveBackendInitialized()
 
-    let onInit: (Graphics) -> Void = app.initHandler
-    let initGraphics = Graphics {
+    let onInit: (EMGraphics) -> Void = app.initHandler
+    let initGraphics = EMGraphics {
         userData: userData,
         backend: .Metal,
         backendContext: ctxPtr
@@ -84,7 +84,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
     // Bound ONCE for the whole loop (like onFrame): calling a closure does not
     // consume it, but re-taking it from the app each frame would move its
     // captured environment out and leave later fetches dangling.
-    let onWindowEvent: (borrow AppEvent) -> Void = app.eventHandler
+    let onWindowEvent: (borrow EMAppEvent) -> Void = app.eventHandler
     let windowDragRegion: (Float, Float) -> Bool = app.windowDragRegion
     // Same synthetic-event scripts the offscreen harness honors, so on-screen
     // crashes reproduce deterministically under a debugger.
@@ -207,13 +207,13 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
             if onClicks[oci] == onFrameIndex {
                 let opx = Float(onClicks[oci + 1])
                 let opy = Float(onClicks[oci + 2])
-                let odown = AppEvent {
+                let odown = EMAppEvent {
                     kind: .PointerDown,
                     pointerX: opx,
                     pointerY: opy
                 }
                 onWindowEvent(odown)
-                let oup = AppEvent {
+                let oup = EMAppEvent {
                     kind: .PointerUp,
                     pointerX: opx,
                     pointerY: opy
@@ -234,7 +234,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
                 let oby = Float(onDrags[odi + 2])
                 let obutton = graphicsPointerButtonFromRaw(onDrags[odi + 5])
                 if onFrameIndex == dragStart {
-                    onWindowEvent(AppEvent {
+                    onWindowEvent(EMAppEvent {
                         kind: .PointerDown,
                         pointerButton: obutton,
                         pointerX: obx,
@@ -249,14 +249,14 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
                     let omx = obx + Float(onDrags[odi + 3]) * ot
                     let omy = oby + Float(onDrags[odi + 4]) * ot
                     if onFrameIndex <= dragStart + dragSteps {
-                        onWindowEvent(AppEvent {
+                        onWindowEvent(EMAppEvent {
                             kind: .PointerMoved,
                             pointerButton: obutton,
                             pointerX: omx,
                             pointerY: omy
                         })
                     } else {
-                        onWindowEvent(AppEvent {
+                        onWindowEvent(EMAppEvent {
                             kind: .PointerUp,
                             pointerButton: obutton,
                             pointerX: omx,
@@ -270,7 +270,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         var oki = 0
         while oki + 3 <= onKeys.count {
             if onKeys[oki] == onFrameIndex {
-                onWindowEvent(AppEvent {
+                onWindowEvent(EMAppEvent {
                     kind: onKeys[oki + 2] == 1 ? .KeyDown : .KeyUp,
                     keyCode: onKeys[oki + 1]
                 })
@@ -280,7 +280,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         var oti = 0
         while oti + 2 <= onTexts.count {
             if onTexts[oti] == onFrameIndex {
-                onWindowEvent(AppEvent {
+                onWindowEvent(EMAppEvent {
                     kind: .TextInput,
                     textCodepoint: onTexts[oti + 1]
                 })
@@ -292,7 +292,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
             let swipeStart = onSwipes[osi]
             let swipeSteps = onSwipes[osi + 5] > 1 ? onSwipes[osi + 5] : 1
             if onFrameIndex >= swipeStart && onFrameIndex <= swipeStart + swipeSteps + 1 {
-                var phase: ScrollPhase = .Changed
+                var phase: EMScrollPhase = .Changed
                 var sdx = Float(onSwipes[osi + 3]) / Float(swipeSteps)
                 var sdy = Float(onSwipes[osi + 4]) / Float(swipeSteps)
                 if onFrameIndex == swipeStart {
@@ -305,7 +305,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
                     sdx = 0.0
                     sdy = 0.0
                 }
-                onWindowEvent(AppEvent {
+                onWindowEvent(EMAppEvent {
                     kind: .Scroll,
                     pointerX: Float(onSwipes[osi + 1]),
                     pointerY: Float(onSwipes[osi + 2]),
@@ -342,7 +342,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         metalContextSetWindowState(ctxPtr, windowState)
         metalContextBeginFrameTiming(ctxPtr)
         metalContextSyncViewportFromView(ctxPtr)
-        let frameGraphics = Graphics {
+        let frameGraphics = EMGraphics {
             userData: userData,
             backend: .Metal,
             backendContext: ctxPtr
@@ -363,9 +363,9 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
             let captureW = metalContextPhysicalWidth(ctxPtr)
             let captureH = metalContextPhysicalHeight(ctxPtr)
             if metalCapturePpm(ctxPtr, capturedTexture, captureW, captureH, harness.capturePath) {
-                graphicsFail(.Device, "Kira Graphics wrote the presented frame to " + harness.capturePath)
+                graphicsFail(.Device, "Ember wrote the presented frame to " + harness.capturePath)
             } else {
-                graphicsFail(.Device, "Kira Graphics could not read the drawable back into " + harness.capturePath)
+                graphicsFail(.Device, "Ember could not read the drawable back into " + harness.capturePath)
             }
         }
         metalContextEndFrameTiming(ctxPtr)
@@ -382,7 +382,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         // `live.frame.presented` and fails with KCL038.
         if !liveFramePresented {
             liveFramePresented = true
-            kiraGraphicsLiveFramePresented()
+            emberLiveFramePresented()
         }
         if !pointerIsNull(onScreenDumpEnv) {
             let onScreenW = metalContextPhysicalWidth(ctxPtr)
@@ -438,7 +438,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         return running
     }
 
-    let onCleanup: (Graphics) -> Void = app.cleanupHandler
+    let onCleanup: (EMGraphics) -> Void = app.cleanupHandler
     let cleanup: () -> Void = { in
         if benchFrames > 0 {
             metalBenchReport(ctxPtr, benchFrameNs, benchCpuNs, benchGpuNs)
@@ -446,7 +446,7 @@ function metalRunApplication(app: borrow GraphicsApplication, runtimeUserData: R
         if !pointerIsNull(hostWindow) {
             metalRemoveResizeDelegate(hostWindow, resizeDelegate)
         }
-        let cleanupGraphics = Graphics {
+        let cleanupGraphics = EMGraphics {
             userData: userData,
             backend: .Metal,
             backendContext: ctxPtr

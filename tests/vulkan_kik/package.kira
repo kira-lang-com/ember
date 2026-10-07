@@ -4,6 +4,6 @@ Package VulkanKik {
     let kind = PackageKind.App
     let defaults = Defaults { executionMode: Backend.Hybrid, buildTarget: BuildTarget.Host }
     let dependencies = [
-        Dependency { name: "KiraGraphics", path: "../.." }
+        Dependency { name: "Ember", path: "../.." }
     ]
 }

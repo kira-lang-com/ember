@@ -8,7 +8,7 @@ public struct RenderEncoderState {
     // pointer presence check is robust.) It is the Metal context and nothing
     // else.
     var backendContext: RawPtr
-    // The `GraphicsAppRuntimeState` behind a Dawn frame, which is where the open
+    // The `EMGraphicsAppRuntimeState` behind a Dawn frame, which is where the open
     // pass encoder lives. Non-null selects the WebGPU draw path; a Metal encoder
     // fills `backendContext` instead, and exactly one of the two is filled.
     var dawnRuntime: RawPtr
@@ -64,14 +64,14 @@ public class RenderEncoder {
         return
     }
 
-    function setVertexBuffer(buffer: borrow GraphicsBuffer) {
+    function setVertexBuffer(buffer: borrow EMGraphicsBuffer) {
         var state = nativeRecover<RenderEncoderState>(self.storage)
         state.vertexBufferId = buffer.id
         state.hasVertexBuffer = buffer.id != 0
         return
     }
 
-    function setIndexBuffer(buffer: borrow GraphicsBuffer, format: IndexFormat) {
+    function setIndexBuffer(buffer: borrow EMGraphicsBuffer, format: IndexFormat) {
         var state = nativeRecover<RenderEncoderState>(self.storage)
         state.indexBufferId = buffer.id
         state.indexFormat = format

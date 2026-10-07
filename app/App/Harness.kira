@@ -29,44 +29,44 @@ function kiraLiveTakeReload(): Bool
 
 // Whether a live-reload runner asked for a reload this frame.
 public @Native
-function kiraGraphicsLiveReloadPending(): Bool {
+function emberLiveReloadPending(): Bool {
     return kiraLiveTakeReload()
 }
 
 // The stages a run reports for the live-reload runner to watch. Each is a log
 // line the runner greps for; with no runner the weak C no-op drops them.
 public @Native
-function kiraGraphicsLiveUiFoundationAppStarted(): Void {
+function emberLiveUiFoundationAppStarted(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.app.started")
     return
 }
 
 public @Native
-function kiraGraphicsLiveUiFoundationTreeBuilt(): Void {
+function emberLiveUiFoundationTreeBuilt(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.tree.built")
     return
 }
 
 public @Native
-function kiraGraphicsLiveUiFoundationRetainedTreeReady(): Void {
+function emberLiveUiFoundationRetainedTreeReady(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.retained_tree.ready")
     return
 }
 
 public @Native
-function kiraGraphicsLiveUiFoundationLayoutNonEmpty(): Void {
+function emberLiveUiFoundationLayoutNonEmpty(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.layout.non_empty")
     return
 }
 
 public @Native
-function kiraGraphicsLiveUiFoundationRenderCommandsGenerated(): Void {
+function emberLiveUiFoundationRenderCommandsGenerated(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.render_commands.generated")
     return
 }
 
 public @Native
-function kiraGraphicsLiveVisibleContentSubmitted(): Void {
+function emberLiveVisibleContentSubmitted(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.visible_content.submitted")
     kiraLiveEmitLogLine("KIRA_UI_DRAW_COMMANDS_SUBMITTED")
     kiraLiveEmitLogLine("KIRA_APP_RENDERED_VISIBLE_CONTENT")
@@ -75,14 +75,14 @@ function kiraGraphicsLiveVisibleContentSubmitted(): Void {
 
 // A backend reports where a frame reached, for the live-reload runner to watch.
 public @Native
-function kiraGraphicsLiveFramePresented(): Void {
+function emberLiveFramePresented(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.frame.submitted")
     kiraLiveEmitFirstFrame()
     return
 }
 
 public @Native
-function kiraGraphicsLiveBackendInitialized(): Void {
+function emberLiveBackendInitialized(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.backend.initialized")
     return
 }
@@ -152,7 +152,7 @@ function harnessEnvInts(value: borrow String) -> [Int] {
 // A run handed a harness value takes its knobs from there; otherwise it reads
 // the environment. Both backends resolve their knobs through here.
 public @Native
-function readHarnessKnobs(state: borrow mut GraphicsAppRuntimeState) {
+function readHarnessKnobs(state: borrow mut EMGraphicsAppRuntimeState) {
     if state.app.harness.configured {
         applyHarnessConfig(state)
         return
@@ -202,7 +202,7 @@ function readHarnessKnobs(state: borrow mut GraphicsAppRuntimeState) {
 
 // A harness value, copied into the run's knobs.
 public @Native
-function applyHarnessConfig(state: borrow mut GraphicsAppRuntimeState) {
+function applyHarnessConfig(state: borrow mut EMGraphicsAppRuntimeState) {
     let h = state.app.harness
     state.quitAfterFrames = h.quitAfterFrames
     state.resizeSweep = h.resizeSweep
@@ -231,16 +231,16 @@ function applyHarnessConfig(state: borrow mut GraphicsAppRuntimeState) {
 // Replays the key and text scripts for one frame through the ordinary event
 // handler, so a driven run and a real one take the same path.
 public @Native
-function driveTypingScripts(state: borrow mut GraphicsAppRuntimeState, scriptFrame: Int) {
-    let onEvent: (borrow AppEvent) -> Void = state.app.eventHandler
+function driveTypingScripts(state: borrow mut EMGraphicsAppRuntimeState, scriptFrame: Int) {
+    let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
     var keyIndex = 0
     while keyIndex + 3 <= state.keyScript.count {
         if state.keyScript[keyIndex] == scriptFrame {
-            var kind: AppEventKind = .KeyUp
+            var kind: EMAppEventKind = .KeyUp
             if state.keyScript[keyIndex + 2] == 1 {
                 kind = .KeyDown
             }
-            onEvent(AppEvent {
+            onEvent(EMAppEvent {
                 kind: kind,
                 keyCode: state.keyScript[keyIndex + 1]
             })
@@ -250,7 +250,7 @@ function driveTypingScripts(state: borrow mut GraphicsAppRuntimeState, scriptFra
     var textIndex = 0
     while textIndex + 2 <= state.textScript.count {
         if state.textScript[textIndex] == scriptFrame {
-            onEvent(AppEvent {
+            onEvent(EMAppEvent {
                 kind: .TextInput,
                 textCodepoint: state.textScript[textIndex + 1]
             })

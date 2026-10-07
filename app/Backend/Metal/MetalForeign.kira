@@ -1,6 +1,6 @@
 // Foreign surface for the Metal backend.
 //
-// Kira Graphics' Metal backend drives Metal, QuartzCore and AppKit/UIKit DIRECTLY
+// Ember' Metal backend drives Metal, QuartzCore and AppKit/UIKit DIRECTLY
 // through the Objective-C runtime — there is no C/Objective-C shim. Every native
 // capability is reached as an `@FFI.Extern` here: the Objective-C runtime
 // (objc_getClass / sel_registerName / objc_msgSend), the one Metal C entry point

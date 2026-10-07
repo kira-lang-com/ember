@@ -1,14 +1,14 @@
 <picture>
-  <source media="(prefers-color-scheme: dark)" srcset="Images/KiraGraphicsBannerDark.png">
-  <source media="(prefers-color-scheme: light)" srcset="Images/KiraGraphicsBannerLight.png">
-  <img alt="Kira Graphics" src="Images/KiraGraphicsBannerLight.png">
+  <source media="(prefers-color-scheme: dark)" srcset="Images/EmberBannerDark.png">
+  <source media="(prefers-color-scheme: light)" srcset="Images/EmberBannerLight.png">
+  <img alt="Ember" src="Images/EmberBannerLight.png">
 </picture>
 
-# Kira Graphics
+# Ember
 
-Kira Graphics is a general-purpose graphics foundation for Kira, not a UI-only renderer. The public API is aimed at real 3D rendering, engine-style frame encoding, post-processing foundations, and future UI/effects layers that sit on top of the same explicit graphics model.
+Ember is a general-purpose graphics foundation for Kira, not a UI-only renderer. The public API is aimed at real 3D rendering, engine-style frame encoding, post-processing foundations, and future UI/effects layers that sit on top of the same explicit graphics model.
 
-Public applications import `KiraGraphics`, configure a `GraphicsApplication`, attach lifecycle callbacks with trailing blocks, store app state with `nativeState` / `nativeUserData` / `nativeRecover<T>`, create real buffers and pipelines during init, and encode work through descriptor-first render passes and `RenderEncoder`.
+Public applications import `Ember`, configure a `EMGraphicsApplication`, attach lifecycle callbacks with trailing blocks, store app state with `nativeState` / `nativeUserData` / `nativeRecover<T>`, create real buffers and pipelines during init, and encode work through descriptor-first render passes and `RenderEncoder`.
 
 The native backends are Metal on Apple and Vulkan on Windows/Linux; Dawn remains
 available for WebGPU and compatibility runs.
@@ -17,12 +17,12 @@ available for WebGPU and compatibility runs.
 
 The current public slice includes:
 
-- `GraphicsApplication` lifecycle callbacks:
+- `EMGraphicsApplication` lifecycle callbacks:
   `app.onInit { graphics in ... }`
   `app.onFrame { frame in ... }`
   `app.onCleanup { graphics in ... }`
-- real `GraphicsBuffer` creation for float vertex data and `[Int]` index data
-- real `GraphicsTexture` creation for depth attachments and future render targets
+- real `EMGraphicsBuffer` creation for float vertex data and `[Int]` index data
+- real `EMGraphicsTexture` creation for depth attachments and future render targets
 - descriptor-first `RenderPipelineDescriptor`
 - descriptor-first `RenderPassDescriptor` with color and depth attachments
 - `RenderEncoder` methods for `setPipeline`, `setVertexBuffer`, `setIndexBuffer`, `draw`, `drawIndexed`, `drawInstanced`, and `drawIndexedInstanced`

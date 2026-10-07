@@ -1,7 +1,7 @@
 import Foundation
 // Which renderer a program asks for, and the host it will run on.
 //
-// `RenderBackendKind` is the *selection* vocabulary — what a `GraphicsApplication`
+// `RenderBackendKind` is the *selection* vocabulary — what a `EMGraphicsApplication`
 // names and what `validateRenderBackend` checks against a platform, both of which
 // happen before any device context exists. `Any RenderBackend` (see
 // `app/Public/RenderBackend.kira`) is the *dispatch* vocabulary, and everything
@@ -13,7 +13,7 @@ public enum RenderBackendKind {
 }
 
 
-public enum Platform {
+public enum EMPlatform {
     Windows
     Linux
     MacOS
@@ -26,7 +26,7 @@ public enum Platform {
 
 public struct RenderBackendSelection {
     var backend: RenderBackendKind = .Dawn
-    var platform: Platform = .Unknown
+    var platform: EMPlatform = .Unknown
     var supported: Bool = true
     var loaderName: String = ""
     var requiredSymbolCount: Int = 0
@@ -34,7 +34,7 @@ public struct RenderBackendSelection {
 }
 
 
-// Platform-aware default backend for hosts that do not pick one explicitly:
+// EMPlatform-aware default backend for hosts that do not pick one explicitly:
 // Metal owns Apple hosts, Vulkan is the direct desktop path on Windows and
 // Linux, and Dawn owns the browser's WebGPU device.
 // Web/WASM lands on Dawn honestly: the browser sandbox has no host-OS probe, so
@@ -97,7 +97,7 @@ function graphicsBackendFromEnvironment(fallback: RenderBackendKind) -> RenderBa
 }
 
 
-public function effectivePlatform(requested: Platform) -> Platform {
+public function effectivePlatform(requested: EMPlatform) -> EMPlatform {
     if requested == .Unknown {
         return hostPlatform()
     }
@@ -106,7 +106,7 @@ public function effectivePlatform(requested: Platform) -> Platform {
 
 
 public @Native
-function validateRenderBackend(backend: RenderBackendKind, platform: Platform) -> RenderBackendSelection {
+function validateRenderBackend(backend: RenderBackendKind, platform: EMPlatform) -> RenderBackendSelection {
     let resolvedPlatform = effectivePlatform(move platform)
     match backend {
         Metal -> return validateMetalBackend(move resolvedPlatform)
@@ -117,7 +117,7 @@ function validateRenderBackend(backend: RenderBackendKind, platform: Platform) -
 
 
 public @Native
-function validateVulkanBackend(platform: Platform) -> RenderBackendSelection {
+function validateVulkanBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .Windows || platform == .Linux {
         return RenderBackendSelection {
             backend: .Vulkan,
@@ -128,7 +128,7 @@ function validateVulkanBackend(platform: Platform) -> RenderBackendSelection {
             reason: ""
         }
     }
-    return unsupportedBackend(.Vulkan, move platform, "Kira Graphics Vulkan backend opens a Win32 or Wayland window and is supported on Windows and Linux")
+    return unsupportedBackend(.Vulkan, move platform, "Ember Vulkan backend opens a Win32 or Wayland window and is supported on Windows and Linux")
 }
 
 
@@ -140,7 +140,7 @@ function validateVulkanBackend(platform: Platform) -> RenderBackendSelection {
 // beside `DawnWindow.kira`, and the platform list in `DawnPlatform.kira` is
 // what demands one per platform it names.
 public @Native
-function validateDawnBackend(platform: Platform) -> RenderBackendSelection {
+function validateDawnBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .Windows {
         return RenderBackendSelection {
             backend: .Dawn,
@@ -161,12 +161,12 @@ function validateDawnBackend(platform: Platform) -> RenderBackendSelection {
             reason: ""
         }
     }
-    return unsupportedBackend(.Dawn, move platform, "Kira Graphics Dawn backend opens its window through Win32 on Windows and xdg-shell on Linux, and has no window on this platform")
+    return unsupportedBackend(.Dawn, move platform, "Ember Dawn backend opens its window through Win32 on Windows and xdg-shell on Linux, and has no window on this platform")
 }
 
 
 public @Native
-function validateMetalBackend(platform: Platform) -> RenderBackendSelection {
+function validateMetalBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .MacOS {
         return RenderBackendSelection {
             backend: .Metal,
@@ -187,10 +187,10 @@ function validateMetalBackend(platform: Platform) -> RenderBackendSelection {
             reason: ""
         }
     }
-    return unsupportedBackend(.Metal, move platform, "Kira Graphics Metal backend is only supported on macOS and iOS")
+    return unsupportedBackend(.Metal, move platform, "Ember Metal backend is only supported on macOS and iOS")
 }
 
-public function unsupportedBackend(backend: RenderBackendKind, platform: Platform, reason: String) -> RenderBackendSelection {
+public function unsupportedBackend(backend: RenderBackendKind, platform: EMPlatform, reason: String) -> RenderBackendSelection {
     return RenderBackendSelection {
         backend: backend,
         platform: platform,

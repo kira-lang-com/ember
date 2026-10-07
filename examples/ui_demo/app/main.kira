@@ -1,10 +1,10 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct UiDemoState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 function uiDemoVertices() -> [F32] {
@@ -49,8 +49,8 @@ function uiDemoVertexLayout() -> VertexLayout {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics UI Demo"
+    var app = EMGraphicsApplication {
+        title: "Ember UI Demo"
         width: 640
         height: 480
         sampleCount: 1

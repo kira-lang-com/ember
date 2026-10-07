@@ -1,7 +1,7 @@
 import Foundation
 public struct RenderTarget {
     var kind: RenderTargetKind = .Swapchain
-    var texture: GraphicsTexture
+    var texture: EMGraphicsTexture
     var mipLevel: Int = 0
     var arrayLayer: Int = 0
 }
@@ -16,7 +16,7 @@ public struct ColorAttachment {
 }
 
 public struct DepthAttachment {
-    var texture: GraphicsTexture
+    var texture: EMGraphicsTexture
     var loadAction: LoadAction = .Clear
     var storeAction: StoreAction = .Store
     var clearDepth: Float = 1.0
@@ -24,7 +24,7 @@ public struct DepthAttachment {
 }
 
 public struct StencilAttachment {
-    var texture: GraphicsTexture
+    var texture: EMGraphicsTexture
     var loadAction: LoadAction = .Clear
     var storeAction: StoreAction = .Store
     var clearStencil: Int = 0
@@ -104,7 +104,7 @@ function swapchainRenderTarget() -> RenderTarget {
 // attachment names. Everything above it -- the batch, the pipelines, the
 // glyph atlas -- is unchanged, which is the property worth having: a view does
 // not know, and cannot know, whether it is being drawn for a window.
-public function clearTextureRenderPass(target: borrow GraphicsTexture, clearColor: borrow Color) -> RenderPassDescriptor {
+public function clearTextureRenderPass(target: borrow EMGraphicsTexture, clearColor: borrow Color) -> RenderPassDescriptor {
     let attachment = ColorAttachment {
         target: RenderTarget {
             kind: .Texture,

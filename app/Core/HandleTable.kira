@@ -1,4 +1,4 @@
-public struct HandleTable {
+public struct EMHandleTable {
     var nextId: Int
 }
 

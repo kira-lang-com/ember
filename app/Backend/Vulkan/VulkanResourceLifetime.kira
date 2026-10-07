@@ -82,31 +82,31 @@ function vulkanReleaseImage(state: borrow mut VulkanState, id: U32) {
 }
 
 public @Native
-function vulkanDestroyBuffer(context: RawPtr, buffer: borrow GraphicsBuffer) {
+function vulkanDestroyBuffer(context: RawPtr, buffer: borrow EMGraphicsBuffer) {
     if !vulkanHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     vulkanReleaseBuffer(state.vulkan, buffer.id)
     return
 }
 
 public @Native
-function vulkanDestroyUniform(context: RawPtr, uniform: borrow Uniform) {
+function vulkanDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
     if !vulkanHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     vulkanReleaseBuffer(state.vulkan, uniform.id)
     return
 }
 
 public @Native
-function vulkanDestroySampler(context: RawPtr, sampler: borrow GraphicsSampler) {
+function vulkanDestroySampler(context: RawPtr, sampler: borrow EMGraphicsSampler) {
     if !vulkanHasDevice(context) || sampler.id == 0 {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     vulkanReleaseSampler(state.vulkan, sampler.id)
     return
 }
@@ -124,11 +124,11 @@ function vulkanReleaseSampler(state: borrow mut VulkanState, id: U32) {
 }
 
 public @Native
-function vulkanDestroyTexture(context: RawPtr, texture: borrow GraphicsTexture) {
+function vulkanDestroyTexture(context: RawPtr, texture: borrow EMGraphicsTexture) {
     if !vulkanHasDevice(context) || texture.id == 0 {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if texture.storageViewId != 0 { vulkanReleaseImageView(state.vulkan, texture.storageViewId) }
     if texture.depthViewId != 0 { vulkanReleaseImageView(state.vulkan, texture.depthViewId) }
     if texture.colorViewId != 0 { vulkanReleaseImageView(state.vulkan, texture.colorViewId) }

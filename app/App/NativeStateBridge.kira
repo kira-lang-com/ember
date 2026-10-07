@@ -1,5 +1,5 @@
-public struct GraphicsAppRuntimeState {
-    var app: GraphicsApplication
+public struct EMGraphicsAppRuntimeState {
+    var app: EMGraphicsApplication
     var userData: RawPtr
     var frameIndex: Int = 0
     // The Dawn and Vulkan backends' window, device, resource table and pass
@@ -47,7 +47,7 @@ public struct GraphicsAppRuntimeState {
     var captureAtFrame: Int = 0
     var capturePath: String = ""
     // The UI driving scripts, parsed once at init and injected through the
-    // normal AppEvent handler before a frame draws: clicks as (frame, x, y)
+    // normal EMAppEvent handler before a frame draws: clicks as (frame, x, y)
     // triples, wheel turns as (frame, x, y, deltaYTenths) quadruples. A wheel
     // delta is in tenths because an environment script carries integers and a
     // notch is not one.

@@ -1,10 +1,10 @@
 import Foundation
-import KiraGraphics
+import Ember
 
 struct TriangleState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 function triangleVertices() -> [F32] {
@@ -38,8 +38,8 @@ function triangleVertexLayout() -> VertexLayout {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Vulkan Triangle",
+    var app = EMGraphicsApplication {
+        title: "Ember Vulkan Triangle",
         width: 640,
         height: 480,
         sampleCount: 1,

@@ -9,7 +9,7 @@ import Foundation
 // memory came from.
 //
 // That is the whole point of doing it here rather than beside the compositor: a
-// render pass, a bind group and a `TextureViewport` all take a `GraphicsTexture`,
+// render pass, a bind group and a `TextureViewport` all take a `EMGraphicsTexture`,
 // and a shared one has to be exactly that or every one of them needs a second
 // path.
 // Dawn exposes separate Linux import features for dma-buf and Vulkan opaque fd.
@@ -83,7 +83,7 @@ function dawnImportSharedTexture(context: RawPtr, surface: borrow SharedSurface)
     if !dawnHasDevice(context) || surface.isValid() == false {
         return SharedTexture {}
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     // Refused HERE rather than by Dawn, because Dawn refuses it by handing back
     // error objects that are not null and do not answer as invalid until
     // something tries to use one. A caller asking for a shared texture on a

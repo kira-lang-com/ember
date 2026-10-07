@@ -38,7 +38,7 @@ public struct DawnGpuTrace {
 }
 
 public @Native
-function dawnReadGpuTraceKnob(state: borrow mut GraphicsAppRuntimeState) {
+function dawnReadGpuTraceKnob(state: borrow mut EMGraphicsAppRuntimeState) {
     let value = environmentValue("KIRA_GRAPHICS_GPU_TRACE")
     state.dawn.trace.enabled = value.count > 0 && value != "0"
     return
@@ -48,14 +48,14 @@ public function dawnWorkDone(status: I32, message: WGPUStringViewPointer, userda
     if pointerIsNull(userdata1) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(userdata1)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(userdata1)
     state.dawn.trace.workDone = true
     return
 }
 
 // Submits whatever the frame has recorded and waits for the queue to finish it.
 public @Native
-function dawnDrainQueue(context: RawPtr, state: borrow mut GraphicsAppRuntimeState) {
+function dawnDrainQueue(context: RawPtr, state: borrow mut EMGraphicsAppRuntimeState) {
     dawnSubmitEncoder(state)
     state.dawn.trace.workDone = false
     wgpuQueueOnSubmittedWorkDone(state.dawn.queue, WGPUQueueWorkDoneCallbackInfo {
@@ -74,7 +74,7 @@ function dawnDrainQueue(context: RawPtr, state: borrow mut GraphicsAppRuntimeSta
 
 // Opens a frame's trace: nothing recorded yet, and the clock starts here.
 public @Native
-function dawnTraceBeginFrame(state: borrow mut GraphicsAppRuntimeState) {
+function dawnTraceBeginFrame(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.dawn.trace.enabled {
         return
     }
@@ -94,7 +94,7 @@ function dawnTraceBeginFrame(state: borrow mut GraphicsAppRuntimeState) {
 // reads should be the recorded work, so the mark moves to where the recording
 // starts.
 public @Native
-function dawnTraceOpenSegment(state: borrow mut GraphicsAppRuntimeState) {
+function dawnTraceOpenSegment(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.dawn.trace.enabled {
         return
     }
@@ -108,7 +108,7 @@ function dawnTraceOpenSegment(state: borrow mut GraphicsAppRuntimeState) {
 // actually shaded — from everything the effect does to prepare its backdrop, so
 // a reader can see which of the two owns the frame.
 public @Native
-function dawnTraceSegment(context: RawPtr, state: borrow mut GraphicsAppRuntimeState, name: borrow String, isComposite: Bool) {
+function dawnTraceSegment(context: RawPtr, state: borrow mut EMGraphicsAppRuntimeState, name: borrow String, isComposite: Bool) {
     if !state.dawn.trace.enabled {
         return
     }
@@ -127,12 +127,12 @@ function dawnTraceSegment(context: RawPtr, state: borrow mut GraphicsAppRuntimeS
 
 // Reports the frame and folds it into the run's totals.
 public @Native
-function dawnTraceEndFrame(state: borrow mut GraphicsAppRuntimeState) {
+function dawnTraceEndFrame(state: borrow mut EMGraphicsAppRuntimeState) {
     if !state.dawn.trace.enabled || state.dawn.trace.line.count == 0 {
         return
     }
     graphicsFail(.Frame, 
-        "KiraGraphics: gpu frame=" + String(state.dawn.stats.frameSerial)
+        "Ember: gpu frame=" + String(state.dawn.stats.frameSerial)
             + state.dawn.trace.line
             + " prep=" + graphicsHundredths(state.dawn.trace.prepMilliseconds)
             + " total=" + graphicsHundredths(state.dawn.trace.frameMilliseconds)
@@ -155,13 +155,13 @@ function dawnTraceEndFrame(state: borrow mut GraphicsAppRuntimeState) {
 }
 
 public @Native
-function dawnReportGpuTrace(state: borrow GraphicsAppRuntimeState) {
+function dawnReportGpuTrace(state: borrow EMGraphicsAppRuntimeState) {
     if !state.dawn.trace.enabled || state.dawn.trace.frames == 0 {
         return
     }
     let frames = Float(state.dawn.trace.frames)
     graphicsFail(.Frame, 
-        "KiraGraphics: gpu frames=" + String(state.dawn.trace.frames)
+        "Ember: gpu frames=" + String(state.dawn.trace.frames)
             + " prepMean=" + graphicsHundredths(state.dawn.trace.prepTotal / frames) + "ms"
             + " prepWorst=" + graphicsHundredths(state.dawn.trace.prepWorst) + "ms"
             + " totalMean=" + graphicsHundredths(state.dawn.trace.totalTotal / frames) + "ms"

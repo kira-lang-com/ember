@@ -11,7 +11,7 @@
 // fixed slots, because the C table had to reserve its shape up front. The
 // state here reserves nothing — it grows exactly as far as the entries a
 // caller adds — and a uniform entry holds a reference to the very
-// `Uniform` its caller passed in (see `Uniform.kira`), not a copy of
+// `EMUniform` its caller passed in (see `EMUniform.kira`), not a copy of
 // whatever it held when the entry was added.
 public struct StoredUniformBindEntry {
     var uniformSlot: Int = 0
@@ -97,7 +97,7 @@ public function sokolMaxViewBindSlots() -> Int { return 32 }
 public function sokolMaxUniformBlockSlots() -> Int { return 8 }
 public function sokolMaxSamplerBindSlots() -> Int { return 12 }
 
-// Sokol's half of `Graphics.beginBindGroup` / `createBindGroup` /
+// Sokol's half of `EMGraphics.beginBindGroup` / `createBindGroup` /
 // `createUniformBindGroup` / `createTextureSamplerBindGroup`: an empty group
 // ready for entries. Never a resource sokol tracks — there is no
 // `sg_bind_group` — so there is nothing to allocate beyond this value.
@@ -120,7 +120,7 @@ function sokolCreateBindGroupId(label: borrow String) -> BindGroup {
 // the same one a texture entry is checked against — and a shader that declares
 // its uniform after eight textures is not asking sokol for a ninth block.
 public @Native
-function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uniform: borrow Uniform) {
+function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uniform: borrow EMUniform) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if uniformSlot < 0 || uniformSlot >= sokolMaxViewBindSlots() {
         graphicsFail(.Binding, "bind group '" + state.label + "' uniform slot is outside the binding range a shader group numbers into")
@@ -135,7 +135,7 @@ function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uni
 }
 
 public @Native
-function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, texture: borrow GraphicsTexture) {
+function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, texture: borrow EMGraphicsTexture) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if texture.viewId == 0 {
         graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a texture with no sampled view")
@@ -153,7 +153,7 @@ function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, tex
 }
 
 public @Native
-function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sampler: borrow GraphicsSampler) {
+function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sampler: borrow EMGraphicsSampler) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if sampler.id == 0 {
         graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind sampler 0")

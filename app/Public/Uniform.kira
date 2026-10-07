@@ -2,10 +2,10 @@
 //
 // The floats live behind `storage`, recovered through `nativeState` exactly
 // as `RenderEncoder`'s and `UiBatch`'s own state is: a caller almost always
-// holds a `Uniform` through a `let`, and `nativeRecover` mutates what
+// holds a `EMUniform` through a `let`, and `nativeRecover` mutates what
 // `storage` points to regardless of whether the binding that read it was a
 // `let` or a `var`. A bind group's `UniformBindEntry` copies this same
-// `Uniform` value — same `storage` pointer — so `setUniformValues`
+// `EMUniform` value — same `storage` pointer — so `setUniformValues`
 // reaches every bind group that ever captured it, exactly as it did when a
 // C-side table held the values behind an id. There is no such table anymore:
 // sokol has no `sg_uniform` object, uniforms were never a resource it
@@ -16,7 +16,7 @@ public struct UniformState {
     var values: [F32] = []
 }
 
-public class Uniform {
+public class EMUniform {
     // Typed affine owner of the CPU-side uniform state. Copying this owner is
     // only possible through the explicit `nativeUserData(owner)` clone
     // operation, and ordinary structural drop releases it automatically.
@@ -25,19 +25,19 @@ public class Uniform {
 }
 
 public @Native
-function emptyUniform() -> Uniform {
-    return Uniform {
+function emptyUniform() -> EMUniform {
+    return EMUniform {
         storage: nativeState(UniformState {}),
         id: 0
     }
 }
 
-// Sokol's half of `Graphics.createUniform`. Validates the descriptor and
+// Sokol's half of `EMGraphics.createUniform`. Validates the descriptor and
 // hands back the live value the draw path reads from — there is no device
 // call to make: a uniform's bytes reach the GPU only at the draw that binds
 // them, through `sokolApplyUniformFloats`.
 public @Native
-function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> Uniform {
+function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> EMUniform {
     if descriptor.expectedFloatCount <= 0 {
         graphicsFail(.Resource, "uniform buffer '" + descriptor.label + "' needs a positive expected float count")
         return emptyUniform()
@@ -48,7 +48,7 @@ function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> Uniform {
     }
     // 1 rather than a counter: sokol keys nothing on this id anymore, so every
     // live uniform answers the same "not empty" sentinel `uniformResult` reads.
-    return Uniform {
+    return EMUniform {
         storage: nativeState(UniformState {
             label: descriptor.label,
             expectedFloatCount: descriptor.expectedFloatCount,
@@ -60,7 +60,7 @@ function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> Uniform {
 
 // Replaces a uniform's current values in place.
 public @Native
-function setUniformValues(uniform: borrow Uniform, data: borrow [F32]) {
+function setUniformValues(uniform: borrow EMUniform, data: borrow [F32]) {
     var state = nativeRecover<UniformState>(uniform.storage)
     state.values = data
     return
@@ -69,11 +69,11 @@ function setUniformValues(uniform: borrow Uniform, data: borrow [F32]) {
 // The uniform's current values, for the draw path (see `SokolDraw.kira`) to
 // read.
 public @Native
-function sokolUniformState(uniform: borrow Uniform) -> UniformState {
+function sokolUniformState(uniform: borrow EMUniform) -> UniformState {
     return nativeRecover<UniformState>(uniform.storage)
 }
 
-// A no-op on Sokol: a `Uniform` is an ordinary Kira value with no
+// A no-op on Sokol: a `EMUniform` is an ordinary Kira value with no
 // device resource behind it, so there is nothing to release beyond what
 // Kira's own memory management already does when the last reference goes
 // away.

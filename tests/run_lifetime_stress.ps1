@@ -59,7 +59,7 @@ function Assert-ZeroLifetimeReport {
         [string]$Context
     )
 
-    Assert-Contains -Output $Output -Needle "Kira Graphics lifetime report: buffers=0 images=0 samplers=0 views=0 shaders=0 pipelines=0" -Context $Context
+    Assert-Contains -Output $Output -Needle "Ember lifetime report: buffers=0 images=0 samplers=0 views=0 shaders=0 pipelines=0" -Context $Context
 }
 
 function Run-CubeFrames {
@@ -78,7 +78,7 @@ function Run-CubeFrames {
     $output = Run-Kira -Command "cd examples\basic_3d_cube && kira run" -Environment $env
     Assert-ZeroLifetimeReport -Output $output -Context "basic_3d_cube $Frames frames"
     if ($Detailed) {
-        Assert-Contains -Output $output -Needle "Kira Graphics lifetime detail:" -Context "basic_3d_cube $Frames frame detail"
+        Assert-Contains -Output $output -Needle "Ember lifetime detail:" -Context "basic_3d_cube $Frames frame detail"
         Assert-Contains -Output $output -Needle "buffers current=0" -Context "basic_3d_cube $Frames frame detail"
         Assert-Contains -Output $output -Needle "pipelines current=0" -Context "basic_3d_cube $Frames frame detail"
     }
@@ -94,4 +94,4 @@ if ($RunThousandFrames) {
     Run-CubeFrames -Frames 1000 -Detailed | Out-Null
 }
 
-Write-Host "Kira Graphics lifetime stress checks passed."
+Write-Host "Ember lifetime stress checks passed."

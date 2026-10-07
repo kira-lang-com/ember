@@ -20,14 +20,14 @@ function vulkanCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor
         graphicsFail(.Resource, "a vertex buffer was created with no data; Vulkan cannot make an empty buffer")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = descriptor.data.count * 4
     let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsage(descriptor.usage), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
     if id == 0 {
         return .Error(.DeviceRefused)
     }
     vulkanWriteFloats(state.vulkan, id, descriptor.data, U64(0))
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: byteCount
     })
@@ -42,7 +42,7 @@ function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBuffer
         graphicsFail(.Resource, "an index buffer was created with no data")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = descriptor.data.count * 4
     let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsage(.Index), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
     if id == 0 {
@@ -54,7 +54,7 @@ function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBuffer
         writeWord(mapped, U64(index * 4), descriptor.data[index])
         index = index + 1
     }
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: byteCount
     })
@@ -69,7 +69,7 @@ function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, d
         graphicsFail(.Resource, "storage buffer \"" + label + "\" was created with no data")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = data.count * 4
     let id = vulkanCreateBufferHandle(state.vulkan, label, vulkanBufferUsage(.Storage), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
     if id == 0 {
@@ -81,7 +81,7 @@ function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, d
         writeWord(mapped, U64(index * 4), data[index])
         index = index + 1
     }
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: byteCount
     })
@@ -96,7 +96,7 @@ function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatC
         graphicsFail(.Resource, "dynamic buffer \"" + label + "\" was created with a capacity of " + String(floatCapacity) + " floats")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let slotSize = vulkanAligned(floatCapacity * 4, 256)
     let totalSize = slotSize * 3
     let usage = vulkanBufferUsageVertex()
@@ -111,7 +111,7 @@ function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatC
     }
     vulkanSetObjectStride(state.vulkan, id, U64(slotSize))
     return .Ok(DynamicBuffer {
-        buffer: GraphicsBuffer {
+        buffer: EMGraphicsBuffer {
             id: id,
             byteSize: totalSize
         },
@@ -120,7 +120,7 @@ function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatC
 }
 
 public @Native
-function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow GraphicsBuffer) -> Int {
+function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow EMGraphicsBuffer) -> Int {
     if !vulkanRequireDevice(context, "vulkanDynamicBufferFrameStart") {
         return 0
     }
@@ -128,7 +128,7 @@ function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow GraphicsB
         graphicsFail(.Resource, "a dynamic buffer that was never created (id 0) was used")
         return 0
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let stride = vulkanObjectStride(state.vulkan, buffer.id)
     let slot = state.vulkan.dynamicFrame % 3
     let offset = stride * U64(slot)
@@ -145,7 +145,7 @@ function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescript
         graphicsFail(.Resource, "a uniform declared " + String(descriptor.expectedFloatCount) + " floats but was given " + String(descriptor.data.count))
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let slotSize = vulkanAligned(descriptor.expectedFloatCount * 4, 256)
     let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsageUniform(), slotSize * 3, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
     if id == 0 {
@@ -153,7 +153,7 @@ function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescript
     }
     vulkanSetObjectStride(state.vulkan, id, U64(slotSize))
     vulkanWriteFloats(state.vulkan, id, descriptor.data, U64(0))
-    return .Ok(Uniform {
+    return .Ok(EMUniform {
         storage: nativeState(UniformState {
             label: descriptor.label,
             expectedFloatCount: descriptor.expectedFloatCount,
@@ -164,7 +164,7 @@ function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescript
 }
 
 public @Native
-function vulkanUpdateUniform(context: RawPtr, uniform: borrow Uniform, data: borrow [F32]) {
+function vulkanUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: borrow [F32]) {
     if !vulkanRequireDevice(context, "vulkanUpdateUniform") {
         return
     }
@@ -186,7 +186,7 @@ function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescript
     if !vulkanRequireDevice(context, "vulkanCreateSampler") {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let info = VkSamplerCreateInfo {
         sType: vulkanStructureSamplerCreateInfo(),
         magFilter: vulkanSamplerFilter(descriptor.magFilter),
@@ -207,7 +207,7 @@ function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescript
         return .Error(.DeviceRefused)
     }
     let id = vulkanRegisterObject(state.vulkan, sampler, nullPointer(), nullPointer(), U64(0), I32(0), vulkanObjectKindSampler())
-    return .Ok(GraphicsSampler { id: id })
+    return .Ok(EMGraphicsSampler { id: id })
 }
 
 public @Native
@@ -318,7 +318,7 @@ function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescript
         graphicsFail(.Resource, "a texture was created " + String(descriptor.width) + "x" + String(descriptor.height) + (descriptor.format == .None ? " with no format" : "") + "; it needs a size and a format")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let imageId = vulkanCreateImageHandle(state.vulkan, descriptor)
     if imageId == 0 {
         return .Error(.DeviceRefused)
@@ -359,7 +359,7 @@ function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescript
         graphicsFail(.Resource, "texture '" + descriptor.label + "' is missing a view its usage needs; it was not created")
         return .Error(.DeviceRefused)
     }
-    return .Ok(GraphicsTexture {
+    return .Ok(EMGraphicsTexture {
         id: imageId,
         viewId: sampledId,
         colorViewId: colorId,
@@ -387,7 +387,7 @@ function vulkanCreateTextureFromPixels(context: RawPtr, descriptor: borrow Textu
 }
 
 public @Native
-function vulkanUpdateTexture(context: RawPtr, texture: borrow GraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
+function vulkanUpdateTexture(context: RawPtr, texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
     if width != texture.width || height != texture.height {
         graphicsFail(.Resource, "texture update dimensions do not match the texture")
         return
@@ -401,13 +401,13 @@ function vulkanUpdateTexture(context: RawPtr, texture: borrow GraphicsTexture, w
 }
 
 public @Native
-function vulkanUpdateTextureBytes(context: RawPtr, texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Int) {
+function vulkanUpdateTextureBytes(context: RawPtr, texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
     vulkanUploadTexture(context, texture, [], bytes, byteCount)
     return
 }
 
 public @Native
-function vulkanUploadTexture(context: RawPtr, texture: borrow GraphicsTexture, pixels: borrow [U8], bytes: RawPtr, byteCount: Int) {
+function vulkanUploadTexture(context: RawPtr, texture: borrow EMGraphicsTexture, pixels: borrow [U8], bytes: RawPtr, byteCount: Int) {
     if !vulkanRequireDevice(context, "vulkanUploadTexture") {
         return
     }
@@ -415,7 +415,7 @@ function vulkanUploadTexture(context: RawPtr, texture: borrow GraphicsTexture, p
         graphicsFail(.Resource, (texture.id == 0 ? "pixels were uploaded to a texture that was never created (id 0)" : "an upload of no pixels"))
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if state.vulkan.passActive {
         graphicsFail(.Resource, "end the Vulkan render pass before uploading a texture")
         return

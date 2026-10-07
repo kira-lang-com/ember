@@ -25,11 +25,11 @@ import Foundation
 // The frame is made and submitted by the caller because a component's pace is
 // its own: a browser draws when a page moves and an assistant draws when a token
 // arrives, and neither is a display refresh.
-public struct GraphicsHeadless {
-    // The headless device state is an ordinary typed owner. `Graphics` keeps
+public struct EMGraphicsHeadless {
+    // The headless device state is an ordinary typed owner. `EMGraphics` keeps
     // only borrowed raw callback words into it; this field is the lifetime.
-    var context: NativeState<GraphicsAppRuntimeState>
-    var graphics: Graphics = Graphics {
+    var context: NativeState<EMGraphicsAppRuntimeState>
+    var graphics: EMGraphics = EMGraphics {
         userData: nullPointer(),
         backend: .Dawn,
         backendContext: nullPointer()
@@ -57,7 +57,7 @@ public struct GraphicsHeadless {
             vulkanSubmitHeadlessFrame(context)
             return
         }
-        var state = nativeRecover<GraphicsAppRuntimeState>(context)
+        var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         dawnSubmitEncoder(state)
         return
     }
@@ -74,13 +74,13 @@ public struct GraphicsHeadless {
         }
         if self.graphics.backend == .Vulkan { return }
         let context = nativeUserDataBorrow(self.context)
-        var state = nativeRecover<GraphicsAppRuntimeState>(context)
+        var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         wgpuInstanceProcessEvents(state.dawn.instance)
         return
     }
 
     // Read one headless render target back as a binary PPM.
-    function capture(texture: borrow GraphicsTexture, path: borrow String) -> Bool {
+    function capture(texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
         if self.ready == false {
             return false
         }
@@ -94,7 +94,7 @@ public struct GraphicsHeadless {
             return
         }
         let context = nativeUserDataBorrow(self.context)
-        var state = nativeRecover<GraphicsAppRuntimeState>(context)
+        var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
         if self.graphics.backend == .Vulkan {
             vulkanShutdownState(state.vulkan)
         } else {
@@ -109,18 +109,18 @@ public struct GraphicsHeadless {
 
 // Shut a device down IN PLACE, without consuming it.
 //
-// `GraphicsHeadless.close` takes the device by value, so it cannot shut down a
+// `EMGraphicsHeadless.close` takes the device by value, so it cannot shut down a
 // device that lives inside another struct's field — a partial move of a
 // single-owner native value is not allowed. A component that keeps its device in
 // a surface set needs to close it and keep the (now not-ready) handle, so this
 // does the same teardown through a mutable borrow. After it returns the device
 // answers `ready` false and can be reopened with `openHeadlessGraphics`.
-public function closeHeadlessGraphics(device: borrow mut GraphicsHeadless) {
+public function closeHeadlessGraphics(device: borrow mut EMGraphicsHeadless) {
     if device.ready == false {
         return
     }
     let context = nativeUserDataBorrow(device.context)
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if device.graphics.backend == .Vulkan {
         vulkanShutdownState(state.vulkan)
     } else {
@@ -138,12 +138,12 @@ public function closeHeadlessGraphics(device: borrow mut GraphicsHeadless) {
 // GPU, a backend that has no headless path -- rather than trapping, because a
 // component that cannot draw should say so to the shell that started it and
 // exit, not take the desktop's compositor client down with an abort.
-public function openHeadlessGraphics() -> GraphicsHeadless {
+public function openHeadlessGraphics() -> EMGraphicsHeadless {
     return openHeadlessGraphicsWithBackend(.Dawn)
 }
 
-public function openHeadlessGraphicsWithBackend(backend: RenderBackendKind) -> GraphicsHeadless {
-    let application = GraphicsApplication {
+public function openHeadlessGraphicsWithBackend(backend: RenderBackendKind) -> EMGraphicsHeadless {
+    let application = EMGraphicsApplication {
         title: "kira-headless",
         width: 1,
         height: 1,
@@ -153,13 +153,13 @@ public function openHeadlessGraphicsWithBackend(backend: RenderBackendKind) -> G
         opacity: 1.0,
         backend: backend
     }
-    var runtimeState = nativeState(GraphicsAppRuntimeState {
+    var runtimeState = nativeState(EMGraphicsAppRuntimeState {
         app: application,
         userData: nullPointer(),
         frameIndex: 0
     })
     let context = nativeUserDataBorrow(runtimeState)
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     var created = false
     if backend == .Vulkan {
         created = vulkanCreateHeadlessDevice(state)
@@ -168,9 +168,9 @@ public function openHeadlessGraphicsWithBackend(backend: RenderBackendKind) -> G
     }
     if !created {
         graphicsFail(.Device, "no headless device could be created")
-        return GraphicsHeadless {
+        return EMGraphicsHeadless {
             context: move runtimeState,
-            graphics: Graphics {
+            graphics: EMGraphics {
                 userData: nullPointer(),
                 backend: backend,
                 backendContext: nullPointer()
@@ -178,9 +178,9 @@ public function openHeadlessGraphicsWithBackend(backend: RenderBackendKind) -> G
             ready: false
         }
     }
-    return GraphicsHeadless {
+    return EMGraphicsHeadless {
         context: move runtimeState,
-        graphics: Graphics {
+        graphics: EMGraphics {
             userData: context,
             backend: backend,
             backendContext: context

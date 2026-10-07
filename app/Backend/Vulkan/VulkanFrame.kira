@@ -7,7 +7,7 @@ import Foundation
 public @Native
 function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
     if !vulkanRequireDevice(context, "vulkanSubmitFrame") { return }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     vulkanSubmitFrameState(runtime.vulkan)
     noteFrameCost(runtime, runtime.vulkan.stats.frameSeconds, runtime.vulkan.stats.passCount, runtime.vulkan.stats.drawCount)
     let _ = frame
@@ -93,7 +93,7 @@ function vulkanSubmitFrameState(state: borrow mut VulkanState) {
         state.presentedThisFrame = true
         if !state.announcedFramePresented {
             state.announcedFramePresented = true
-            kiraGraphicsLiveFramePresented()
+            emberLiveFramePresented()
         }
     }
     freeBytes(waitSemaphoreSlot)

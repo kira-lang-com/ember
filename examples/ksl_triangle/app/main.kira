@@ -1,10 +1,10 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct TriangleState {
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var pipeline: RenderPipeline
-    var vertices: GraphicsBuffer
+    var vertices: EMGraphicsBuffer
 }
 
 function kslTriangleVertices() -> [F32] {
@@ -32,8 +32,8 @@ function kslTriangleVertexLayout() -> VertexLayout {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics KSL Triangle"
+    var app = EMGraphicsApplication {
+        title: "Ember KSL Triangle"
         width: 640
         height: 480
         sampleCount: 1

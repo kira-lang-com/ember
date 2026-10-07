@@ -1,12 +1,12 @@
-// GPU compute, as methods on `Graphics`.
+// GPU compute, as methods on `EMGraphics`.
 //
-// Written as `extend Graphics` rather than inside the class body: a class's
+// Written as `extend EMGraphics` rather than inside the class body: a class's
 // methods may be declared across files, and compute is a bounded job path with
 // its own vocabulary — a pipeline id rather than the render-graph resource
 // structs — so it reads better beside itself than buried in the middle of the
 // rendering surface.
 
-extend Graphics {
+extend EMGraphics {
     // Whether this backend can build and encode a compute pipeline at all.
     //
     // Asked instead of naming a backend: a caller with a compute shader and a
@@ -18,7 +18,7 @@ extend Graphics {
     }
 
     // Build a pipeline that runs `shader`'s compute stage.
-    function createComputePipeline(label: borrow String, shader: borrow GraphicsShader, entryName: borrow String) -> Int {
+    function createComputePipeline(label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
         return self.renderBackend().createComputePipeline(label, shader, entryName)
     }
 
@@ -80,7 +80,7 @@ extend Graphics {
     // For a headless gate that dispatches and then checks the answer. A backend
     // that cannot read a buffer back answers 0 and says so in a diagnostic, so a
     // gate that gets zeros knows to look at where it ran.
-    function readStorageU32(buffer: borrow GraphicsBuffer, index: Int) -> U32 {
+    function readStorageU32(buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
         return self.renderBackend().readBufferU32(buffer, index)
     }
 }

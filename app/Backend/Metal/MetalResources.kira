@@ -27,7 +27,7 @@ function metalCreateShader(ctx: RawPtr, source: borrow String) -> Int {
     // was reading. The next thing to fail is the pipeline, reporting only that
     // its vertex function is nil — which says nothing about why. Say why.
     if pointerIsNull(library) {
-        graphicsFail(.Resource, "kira-graphics: Metal rejected a shader library")
+        graphicsFail(.Resource, "ember: Metal rejected a shader library")
         let err = metalMemReadPtr(errSlot, 0)
         if !pointerIsNull(err) {
             let described: RawPtr = metalMsgSend(err, metalSel("localizedDescription"))
@@ -149,7 +149,7 @@ function metalCreateRenderPipelineBlended(ctx: RawPtr, shaderId: Int, colorForma
     return metalCreateRenderPipelineWithEntries(ctx, shaderId, colorFormat, depthEnabled, blend, "v_main", "f_main", 0, noFmt, noOff)
 }
 
-// Map a KiraGraphics vertex format (Constants.kira) to an MTLVertexFormat raw value.
+// Map a Ember vertex format (Constants.kira) to an MTLVertexFormat raw value.
 public function metalVertexFormat(kiraFormat: Int) -> U64 {
     if kiraFormat == 1 { return 29 }   // Float2 -> MTLVertexFormatFloat2
     if kiraFormat == 2 { return 30 }   // Float3 -> MTLVertexFormatFloat3

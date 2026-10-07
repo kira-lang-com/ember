@@ -1,7 +1,7 @@
 import Foundation
 import ArgumentParser
 
-// `kg` — the Kira Graphics command line. What a graphics run needs from the
+// `kg` — the Ember command line. What a graphics run needs from the
 // outside, as typed commands rather than the environment variables these used to
 // be: turn a captured frame into something viewable, and say which backends a
 // build can render with.
@@ -70,7 +70,7 @@ construct RootCommand() extends ParsableCommand {
     let configuration: CommandConfiguration {
         return CommandConfiguration(
             name: "kg",
-            abstract: "Kira Graphics command line",
+            abstract: "Ember command line",
             subcommands: ["png", "backends"]
         )
     }

@@ -1,4 +1,4 @@
-public function graphicsApplicationDefaultInit(graphics: Graphics) {
+public function graphicsApplicationDefaultInit(graphics: EMGraphics) {
     return
 }
 
@@ -6,11 +6,11 @@ public function graphicsApplicationDefaultFrame(frame: borrow mut RenderFrame) {
     return
 }
 
-public function graphicsApplicationDefaultEvent(event: borrow AppEvent) {
+public function graphicsApplicationDefaultEvent(event: borrow EMAppEvent) {
     return
 }
 
-public function graphicsApplicationDefaultCleanup(graphics: Graphics) {
+public function graphicsApplicationDefaultCleanup(graphics: EMGraphics) {
     return
 }
 
@@ -28,8 +28,8 @@ public function graphicsApplicationFallbackWindowDragRegion(x: Float, y: Float) 
     return x >= 0.0 && y >= 0.0 && y < 12.0
 }
 
-public struct GraphicsApplication {
-    var title: String = "Kira Graphics"
+public struct EMGraphicsApplication {
+    var title: String = "Ember"
     var width: Int = 640
     var height: Int = 480
     var sampleCount: Int = 1
@@ -42,9 +42,9 @@ public struct GraphicsApplication {
     // The mode the window OPENS in. `width`/`height` are what a windowed mode is
     // given; a fullscreen window takes the display's size instead, so a program
     // that starts there reads its viewport back off the frame.
-    var windowMode: WindowMode = .Windowed
-    // What the window's title bar is. See Public/WindowTitlebar.kira.
-    var titlebar: WindowTitlebar = .Standard
+    var windowMode: EMWindowMode = .Windowed
+    // What the window's title bar is. See Public/EMWindowTitlebar.kira.
+    var titlebar: EMWindowTitlebar = .Standard
     // The radius a decorated window's corners are rounded to, in points. Zero
     // keeps the platform's own corner; a larger one rounds the window by its
     // content -- the window shows through past the curve, and its shadow
@@ -76,22 +76,22 @@ public struct GraphicsApplication {
     // and a comparison is only worth anything when the
     // program either one drew is the same program.
     var backend: RenderBackendKind = graphicsDefaultBackend()
-    var platform: Platform = .Unknown
+    var platform: EMPlatform = .Unknown
     // Launch-time harness settings — capture, quit-after, input scripts — as a
     // value rather than the environment. Default is unconfigured: the backend
     // reads the environment as it always has. A caller that provides one drives
     // the run without any environment variable.
     var harness: HarnessConfig = HarnessConfig {}
-    var initHandler: (Graphics) -> Void = graphicsApplicationDefaultInit
+    var initHandler: (EMGraphics) -> Void = graphicsApplicationDefaultInit
     var frameHandler: (borrow mut RenderFrame) -> Void = graphicsApplicationDefaultFrame
-    var eventHandler: (borrow AppEvent) -> Void = graphicsApplicationDefaultEvent
-    var cleanupHandler: (Graphics) -> Void = graphicsApplicationDefaultCleanup
+    var eventHandler: (borrow EMAppEvent) -> Void = graphicsApplicationDefaultEvent
+    var cleanupHandler: (EMGraphics) -> Void = graphicsApplicationDefaultCleanup
     // Client-side window furniture describes the part of its CONTENT that acts
     // as a titlebar. Raw graphics apps retain a narrow invisible fallback at the
     // top so an undecorated window cannot become impossible to move.
     var windowDragRegion: (Float, Float) -> Bool = graphicsApplicationFallbackWindowDragRegion
 
-    function onInit(body: (Graphics) -> Void) {
+    function onInit(body: (EMGraphics) -> Void) {
         self.initHandler = body
         return
     }
@@ -101,12 +101,12 @@ public struct GraphicsApplication {
         return
     }
 
-    function onEvent(body: (borrow AppEvent) -> Void) {
+    function onEvent(body: (borrow EMAppEvent) -> Void) {
         self.eventHandler = body
         return
     }
 
-    function onCleanup(body: (Graphics) -> Void) {
+    function onCleanup(body: (EMGraphics) -> Void) {
         self.cleanupHandler = body
         return
     }

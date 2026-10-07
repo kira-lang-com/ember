@@ -5,7 +5,7 @@ import Foundation
 // remain ordered with the render passes around them.
 
 public @Native
-function vulkanCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow GraphicsShader, entryName: borrow String) -> Int {
+function vulkanCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
     if !vulkanRequireDevice(context, "vulkanCreateComputePipeline") {
         return 0
     }
@@ -13,7 +13,7 @@ function vulkanCreateComputePipeline(context: RawPtr, label: borrow String, shad
         graphicsFail(.Pipeline, "a compute pipeline was created with no shader (shader id 0)")
         return 0
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let shaderRecord = vulkanShaderRecord(runtime.vulkan, shader.id)
     if !shaderRecord.live || pointerIsNull(shaderRecord.computeModule) {
         graphicsFail(.Pipeline, "compute pipeline '" + label + "' names shader " + String(Int(shader.id)) + ", which " + (shaderRecord.live ? "has no compute stage" : "is not live"))
@@ -94,7 +94,7 @@ function vulkanDispatchComputeBuffers(context: RawPtr, pipelineId: Int, bufferId
         graphicsFail(.Compute, "a dispatch named compute pipeline " + String(pipelineId) + ", which does not exist")
         return
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let pipeline = vulkanPipelineRecord(runtime.vulkan, pipelineId)
     if !pipeline.live || !pipeline.compute || pointerIsNull(runtime.vulkan.commandBuffer) {
         graphicsFail(.Compute, "a dispatch named pipeline " + String(pipelineId) + ", which " + (!pipeline.live ? "is not live" : !pipeline.compute ? "is a render pipeline, not a compute one" : "has no command buffer to record into"))
@@ -113,7 +113,7 @@ function vulkanDispatchComputeBuffers(context: RawPtr, pipelineId: Int, bufferId
 }
 
 public @Native
-function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, depth: borrow GraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
+function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, depth: borrow EMGraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
     if !vulkanRequireDevice(context, "vulkanDispatchDepthComputeBuffers") {
         return
     }
@@ -121,7 +121,7 @@ function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, dep
         graphicsFail(.Compute, "a depth dispatch named compute pipeline " + String(pipelineId) + ", which does not exist")
         return
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let pipeline = vulkanPipelineRecord(runtime.vulkan, pipelineId)
     if !pipeline.live || !pipeline.compute {
         graphicsFail(.Compute, "a depth dispatch named pipeline " + String(pipelineId) + ", which " + (pipeline.live ? "is a render pipeline, not a compute one" : "is not live"))
@@ -148,19 +148,19 @@ function vulkanDispatchTextureComputePair(
     context: RawPtr,
     horizontalPipeline: Int,
     verticalPipeline: Int,
-    source: borrow GraphicsTexture,
-    secondSource: borrow GraphicsTexture,
+    source: borrow EMGraphicsTexture,
+    secondSource: borrow EMGraphicsTexture,
     blend: Float,
-    tempNear: borrow GraphicsTexture,
-    tempFar: borrow GraphicsTexture,
-    outputNear: borrow GraphicsTexture,
-    outputFar: borrow GraphicsTexture,
-    sampler: borrow GraphicsSampler,
+    tempNear: borrow EMGraphicsTexture,
+    tempFar: borrow EMGraphicsTexture,
+    outputNear: borrow EMGraphicsTexture,
+    outputFar: borrow EMGraphicsTexture,
+    sampler: borrow EMGraphicsSampler,
     width: Int,
     height: Int,
 ) {
     if !vulkanRequireDevice(context, "vulkanDispatchTextureComputePair") { return }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let horizontal = vulkanPipelineRecord(runtime.vulkan, horizontalPipeline)
     let vertical = vulkanPipelineRecord(runtime.vulkan, verticalPipeline)
     if !horizontal.live || !vertical.live || !horizontal.compute || !vertical.compute {
@@ -176,7 +176,7 @@ function vulkanDispatchTextureComputePair(
     }
     // Every recorded pair needs its own bytes until the submission completes.
     vulkanWriteFloats(runtime.vulkan, extentId, [F32(width), F32(height), blend, 0.0], U64(0))
-    let extent = Uniform {
+    let extent = EMUniform {
         storage: nativeState(UniformState {
             label: "kira-vulkan-blur-extent",
             expectedFloatCount: 4,
@@ -232,7 +232,7 @@ function vulkanRetireComputeBuffer(state: borrow mut VulkanState, id: U32) {
 }
 
 public @Native
-function vulkanReadBufferU32(context: RawPtr, buffer: borrow GraphicsBuffer, index: Int) -> U32 {
+function vulkanReadBufferU32(context: RawPtr, buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
     if !vulkanRequireDevice(context, "vulkanReadBufferU32") {
         return U32(0)
     }
@@ -240,7 +240,7 @@ function vulkanReadBufferU32(context: RawPtr, buffer: borrow GraphicsBuffer, ind
         graphicsFail(.Resource, "a read of word " + String(index) + " from " + (buffer.id == 0 ? "a buffer that was never created" : "a buffer"))
         return U32(0)
     }
-    var runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if runtime.vulkan.passActive {
         graphicsFail(.Compute, "end the Vulkan render pass before reading a buffer")
         return U32(0)
@@ -283,8 +283,8 @@ function vulkanMonotonicNanoseconds() -> U64 {
 }
 
 public @Native
-function vulkanFrameStatistics(context: RawPtr) -> FrameStatistics {
-    if pointerIsNull(context) { return FrameStatistics {} }
-    let runtime = nativeRecover<GraphicsAppRuntimeState>(context)
+function vulkanFrameStatistics(context: RawPtr) -> EMFrameStatistics {
+    if pointerIsNull(context) { return EMFrameStatistics {} }
+    let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     return runtime.vulkan.stats
 }

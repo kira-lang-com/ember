@@ -46,7 +46,7 @@ public struct PrimitiveDescriptor {
 
 public struct RenderPipelineDescriptor {
     var label: String = ""
-    var shader: GraphicsShader
+    var shader: EMGraphicsShader
     var vertexLayout: VertexLayout
     var colorTargets: [ColorTargetDescriptor]
     var depthStencil: DepthStencilDescriptor

@@ -117,7 +117,7 @@ static int kg_log_threshold(void) {
 
 static void kg_log_flush_repeats(void) {
     if (kg_log_repeats > 0 && (kg_log_repeats & (kg_log_repeats - 1)) != 0) {
-        fprintf(stderr, "[kira-graphics] last message repeated %llu times in all\n", (unsigned long long)kg_log_repeats);
+        fprintf(stderr, "[ember] last message repeated %llu times in all\n", (unsigned long long)kg_log_repeats);
     }
     kg_log_repeats = 0;
 }
@@ -133,7 +133,7 @@ void kg_diagnostic(const char* stage, int32_t stage_index, int32_t level, const 
     if (stage_index == kg_log_last_stage && strncmp(message, kg_log_last, sizeof kg_log_last - 1) == 0) {
         kg_log_repeats += 1;
         if ((kg_log_repeats & (kg_log_repeats - 1)) == 0) {
-            fprintf(stderr, "[kira-graphics:%s] %s (repeated %llu times)\n", stage, kg_log_level_names[level], (unsigned long long)kg_log_repeats);
+            fprintf(stderr, "[ember:%s] %s (repeated %llu times)\n", stage, kg_log_level_names[level], (unsigned long long)kg_log_repeats);
         }
         return;
     }
@@ -141,5 +141,5 @@ void kg_diagnostic(const char* stage, int32_t stage_index, int32_t level, const 
     kg_log_last_stage = stage_index;
     strncpy(kg_log_last, message, sizeof kg_log_last - 1);
     kg_log_last[sizeof kg_log_last - 1] = 0;
-    fprintf(stderr, "[kira-graphics:%s] %s: %s\n", stage, kg_log_level_names[level], message);
+    fprintf(stderr, "[ember:%s] %s: %s\n", stage, kg_log_level_names[level], message);
 }

@@ -176,7 +176,7 @@ function dawnBindingsContain(bindings: borrow [Int], binding: Int) -> Bool {
 
 // Remembers what a pipeline's layout declares, so a draw can filter to it.
 public @Native
-function dawnRecordPipelineBindings(state: borrow mut GraphicsAppRuntimeState, pipelineId: U32, used: borrow [DawnShaderBinding]) {
+function dawnRecordPipelineBindings(state: borrow mut EMGraphicsAppRuntimeState, pipelineId: U32, used: borrow [DawnShaderBinding]) {
     dawnForgetPipelineBindings(state, pipelineId)
     var bindings: [Int] = []
     var groups: [Int] = []
@@ -193,7 +193,7 @@ function dawnRecordPipelineBindings(state: borrow mut GraphicsAppRuntimeState, p
 }
 
 public @Native
-function dawnForgetPipelineBindings(state: borrow mut GraphicsAppRuntimeState, pipelineId: U32) {
+function dawnForgetPipelineBindings(state: borrow mut EMGraphicsAppRuntimeState, pipelineId: U32) {
     var kept: [DawnPipelineBindings] = []
     for held in state.dawn.pipelineBindings {
         if held.pipelineId != pipelineId {
@@ -207,7 +207,7 @@ function dawnForgetPipelineBindings(state: borrow mut GraphicsAppRuntimeState, p
 // Where `pipelineId`'s bindings sit in the table, or -1 when it has none — which
 // is the answer for every pipeline built from a shader with no reflection.
 public @Native
-function dawnPipelineBindingSlot(state: borrow GraphicsAppRuntimeState, pipelineId: U32) -> Int {
+function dawnPipelineBindingSlot(state: borrow EMGraphicsAppRuntimeState, pipelineId: U32) -> Int {
     for index in 0..state.dawn.pipelineBindings.count {
         if state.dawn.pipelineBindings[index].pipelineId == pipelineId {
             return index
@@ -218,7 +218,7 @@ function dawnPipelineBindingSlot(state: borrow GraphicsAppRuntimeState, pipeline
 
 // What tells one bind group apart from another, minted on first use.
 public @Native
-function dawnGroupIdentity(state: borrow mut GraphicsAppRuntimeState, group: borrow BindGroup, present: Bool) -> Int {
+function dawnGroupIdentity(state: borrow mut EMGraphicsAppRuntimeState, group: borrow BindGroup, present: Bool) -> Int {
     if !present {
         return 0
     }
@@ -240,7 +240,7 @@ function dawnGroupRevision(group: borrow BindGroup, present: Bool) -> Int {
 
 // The cached merged group for this combination, or 0 when none is held.
 public @Native
-function dawnCachedMergedGroup(state: borrow GraphicsAppRuntimeState, key: borrow DawnMergedBindGroup) -> U32 {
+function dawnCachedMergedGroup(state: borrow EMGraphicsAppRuntimeState, key: borrow DawnMergedBindGroup) -> U32 {
     for index in 0..state.dawn.mergedGroups.count {
         let held = state.dawn.mergedGroups[index]
         if held.pipelineId == key.pipelineId
@@ -259,7 +259,7 @@ function dawnCachedMergedGroup(state: borrow GraphicsAppRuntimeState, key: borro
 }
 
 public @Native
-function dawnReleaseMergedGroups(state: borrow mut GraphicsAppRuntimeState) {
+function dawnReleaseMergedGroups(state: borrow mut EMGraphicsAppRuntimeState) {
     for held in state.dawn.mergedGroups {
         let handle = dawnObject(state, held.groupId)
         if !pointerIsNull(handle) {
@@ -275,7 +275,7 @@ function dawnReleaseMergedGroups(state: borrow mut GraphicsAppRuntimeState) {
 // the result at group 0. Answers whether the draw may proceed.
 public @Native
 function dawnBindMergedGroup(
-    state: borrow mut GraphicsAppRuntimeState,
+    state: borrow mut EMGraphicsAppRuntimeState,
     pipelineHandle: RawPtr,
     pipelineId: U32,
     slot: Int,
@@ -350,7 +350,7 @@ function dawnBindMergedGroup(
 // flat list for the whole pipeline.
 public @Native
 function dawnBindPerGroup(
-    state: borrow mut GraphicsAppRuntimeState,
+    state: borrow mut EMGraphicsAppRuntimeState,
     pipelineHandle: RawPtr,
     pipelineId: U32,
     slot: Int,
@@ -380,7 +380,7 @@ function dawnBindPerGroup(
 // One group's bind group, built from the slot of the same index.
 public @Native
 function dawnBindOneGroup(
-    state: borrow mut GraphicsAppRuntimeState,
+    state: borrow mut EMGraphicsAppRuntimeState,
     pipelineHandle: RawPtr,
     pipelineId: U32,
     wanted: borrow [Int],
@@ -440,7 +440,7 @@ function dawnBindOneGroup(
 // order the slots are walked in.
 public @Native
 function dawnCollectSlot(
-    state: borrow GraphicsAppRuntimeState,
+    state: borrow EMGraphicsAppRuntimeState,
     collected: borrow mut [WGPUBindGroupEntry],
     wanted: borrow [Int],
     group: borrow BindGroup,

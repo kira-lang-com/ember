@@ -8,12 +8,12 @@ import Foundation
 // Split from MetalApplication.kira, which owns the device, the pool, and the
 // choice between this path and the window.
 public @Native
-function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: RawPtr, userData: RawPtr, pool: RawPtr) {
+function metalRunOffscreenApplication(app: borrow EMGraphicsApplication, ctxPtr: RawPtr, userData: RawPtr, pool: RawPtr) {
     metalContextAttachOffscreenFormat(ctxPtr, app.width, app.height, metalPixelFormatForTexture(textureFormatCode(app.colorFormat)))
-    kiraGraphicsLiveBackendInitialized()
+    emberLiveBackendInitialized()
 
-    let onInitOffscreen: (Graphics) -> Void = app.initHandler
-    let initGraphicsOffscreen = Graphics {
+    let onInitOffscreen: (EMGraphics) -> Void = app.initHandler
+    let initGraphicsOffscreen = EMGraphics {
         userData: userData,
         backend: .Metal,
         backendContext: ctxPtr
@@ -51,7 +51,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
         let lockedBench = app.targetFrameDurationNs > 0
         // Warm up one frame (first-touch caches, retained tree mount) before timing.
         let warmPool = metalAutoreleasePoolPush()
-        let warmGraphics = Graphics {
+        let warmGraphics = EMGraphics {
             userData: userData,
             backend: .Metal,
             backendContext: ctxPtr
@@ -73,7 +73,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
             if resizeBench {
                 metalContextAttachOffscreen(ctxPtr, app.width + (bi % 120), app.height)
             }
-            let benchGraphics = Graphics {
+            let benchGraphics = EMGraphics {
                 userData: userData,
                 backend: .Metal,
                 backendContext: ctxPtr
@@ -156,7 +156,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
     if !pointerIsNull(textEnv) {
         textScript = metalEnvInts(textEnv)
     }
-    let onEventOffscreen: (borrow AppEvent) -> Void = app.eventHandler
+    let onEventOffscreen: (borrow EMAppEvent) -> Void = app.eventHandler
     // Offscreen resize script (frame, w, h triples): re-attaches the offscreen
     // target at the new size mid-run — the headless equivalent of a live
     // window resize (drawable size change + layout + engine target follow-up).
@@ -180,13 +180,13 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
             if clicks[ci] == fi {
                 let px = Float(clicks[ci + 1])
                 let py = Float(clicks[ci + 2])
-                let down = AppEvent {
+                let down = EMAppEvent {
                     kind: .PointerDown,
                     pointerX: px,
                     pointerY: py
                 }
                 onEventOffscreen(down)
-                let up = AppEvent {
+                let up = EMAppEvent {
                     kind: .PointerUp,
                     pointerX: px,
                     pointerY: py
@@ -204,7 +204,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
                 let by = Float(drags[di + 2])
                 let button = graphicsPointerButtonFromRaw(drags[di + 5])
                 if fi == start {
-                    let down = AppEvent {
+                    let down = EMAppEvent {
                         kind: .PointerDown,
                         pointerButton: button,
                         pointerX: bx,
@@ -220,7 +220,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
                     let mx = bx + Float(drags[di + 3]) * t
                     let my = by + Float(drags[di + 4]) * t
                     if fi <= start + steps {
-                        let moved = AppEvent {
+                        let moved = EMAppEvent {
                             kind: .PointerMoved,
                             pointerButton: button,
                             pointerX: mx,
@@ -228,7 +228,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
                         }
                         onEventOffscreen(moved)
                     } else {
-                        let up = AppEvent {
+                        let up = EMAppEvent {
                             kind: .PointerUp,
                             pointerButton: button,
                             pointerX: mx,
@@ -243,11 +243,11 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
         var ki = 0
         while ki + 3 <= keyScript.count {
             if keyScript[ki] == fi {
-                var keyKind: AppEventKind = .KeyUp
+                var keyKind: EMAppEventKind = .KeyUp
                 if keyScript[ki + 2] == 1 {
                     keyKind = .KeyDown
                 }
-                let keyEvent = AppEvent {
+                let keyEvent = EMAppEvent {
                     kind: keyKind,
                     keyCode: keyScript[ki + 1]
                 }
@@ -258,7 +258,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
         var txi = 0
         while txi + 2 <= textScript.count {
             if textScript[txi] == fi {
-                let textEvent = AppEvent {
+                let textEvent = EMAppEvent {
                     kind: .TextInput,
                     textCodepoint: textScript[txi + 1]
                 }
@@ -269,7 +269,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
         var si = 0
         while si + 4 <= scrolls.count {
             if scrolls[si] == fi {
-                let scrollEvent = AppEvent {
+                let scrollEvent = EMAppEvent {
                     kind: .Scroll,
                     pointerX: Float(scrolls[si + 1]),
                     pointerY: Float(scrolls[si + 2]),
@@ -279,7 +279,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
             }
             si = si + 4
         }
-        let frameGraphicsOffscreen = Graphics {
+        let frameGraphicsOffscreen = EMGraphics {
             userData: userData,
             backend: .Metal,
             backendContext: ctxPtr
@@ -296,7 +296,7 @@ function metalRunOffscreenApplication(app: borrow GraphicsApplication, ctxPtr: R
             let offscreenW = metalContextPhysicalWidth(ctxPtr)
             let offscreenH = metalContextPhysicalHeight(ctxPtr)
             if metalCapturePpm(ctxPtr, metalMemReadPtr(ctxPtr, metalOffsetColorTexture()), offscreenW, offscreenH, offscreenHarness.capturePath) {
-                graphicsFail(.Device, "Kira Graphics wrote the rendered frame to " + offscreenHarness.capturePath)
+                graphicsFail(.Device, "Ember wrote the rendered frame to " + offscreenHarness.capturePath)
             }
         }
         metalAutoreleasePoolPop(framePool)

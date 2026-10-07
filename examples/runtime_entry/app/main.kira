@@ -1,4 +1,4 @@
-import KiraGraphics
+import Ember
 import Foundation
 
 struct RuntimeState {
@@ -10,8 +10,8 @@ struct RuntimeState {
 @Main
 @Native
 function main() {
-    var app = GraphicsApplication {
-        title: "Kira Graphics Runtime Entry"
+    var app = EMGraphicsApplication {
+        title: "Ember Runtime Entry"
         width: 320
         height: 240
         sampleCount: 1

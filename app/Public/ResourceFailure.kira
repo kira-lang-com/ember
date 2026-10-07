@@ -27,7 +27,7 @@
 // run time. A reason here is something the *device* or the *asset* did.
 import Foundation
 
-public enum ResourceFailure {
+public enum EMResourceFailure {
     // The backend was asked correctly and said no: an allocation it would not
     // make, a view it would not mint. Out of memory, past a device limit, or a
     // descriptor the driver rejected.
@@ -45,7 +45,7 @@ public enum ResourceFailure {
 // routes its failure through here rather than naming the reasons itself, so a
 // fourth reason is one arm added in one function.
 public @Native
-function resourceFailureReason(failure: ResourceFailure) -> String {
+function resourceFailureReason(failure: EMResourceFailure) -> String {
     match failure {
         DeviceRefused -> return "the device refused it"
         AssetUnreadable -> return "the bytes could not be read"
@@ -56,14 +56,14 @@ function resourceFailureReason(failure: ResourceFailure) -> String {
 // The outcomes the surface answers with. Named rather than written out at every
 // signature, so a reader sees one vocabulary instead of a generic instantiation
 // spelled six ways.
-public type TextureResult = Result<GraphicsTexture, ResourceFailure>
-public type BufferResult = Result<GraphicsBuffer, ResourceFailure>
-public type DynamicBufferResult = Result<DynamicBuffer, ResourceFailure>
-public type ShaderResult = Result<GraphicsShader, ResourceFailure>
-public type PipelineResult = Result<RenderPipeline, ResourceFailure>
-public type SamplerResult = Result<GraphicsSampler, ResourceFailure>
-public type BindGroupResult = Result<BindGroup, ResourceFailure>
-public type UniformResult = Result<Uniform, ResourceFailure>
+public type TextureResult = Result<EMGraphicsTexture, EMResourceFailure>
+public type BufferResult = Result<EMGraphicsBuffer, EMResourceFailure>
+public type DynamicBufferResult = Result<DynamicBuffer, EMResourceFailure>
+public type ShaderResult = Result<EMGraphicsShader, EMResourceFailure>
+public type PipelineResult = Result<RenderPipeline, EMResourceFailure>
+public type SamplerResult = Result<EMGraphicsSampler, EMResourceFailure>
+public type BindGroupResult = Result<BindGroup, EMResourceFailure>
+public type UniformResult = Result<EMUniform, EMResourceFailure>
 
 // Lifting a backend's id into an outcome.
 //
@@ -71,7 +71,7 @@ public type UniformResult = Result<Uniform, ResourceFailure>
 // that is the protocol they already speak, and it stays theirs. These are the
 // one place it becomes a reason.
 public @Native
-function shaderResult(shader: GraphicsShader) -> ShaderResult {
+function shaderResult(shader: EMGraphicsShader) -> ShaderResult {
     if shader.id == 0 {
         return .Error(.DeviceRefused)
     }
@@ -87,7 +87,7 @@ function pipelineResult(pipeline: RenderPipeline) -> PipelineResult {
 }
 
 public @Native
-function bufferResult(buffer: GraphicsBuffer) -> BufferResult {
+function bufferResult(buffer: EMGraphicsBuffer) -> BufferResult {
     if buffer.id == 0 {
         return .Error(.DeviceRefused)
     }
@@ -95,7 +95,7 @@ function bufferResult(buffer: GraphicsBuffer) -> BufferResult {
 }
 
 public @Native
-function uniformResult(uniform: Uniform) -> UniformResult {
+function uniformResult(uniform: EMUniform) -> UniformResult {
     if uniform.id == 0 {
         return .Error(.DeviceRefused)
     }
@@ -111,7 +111,7 @@ function bindGroupResult(group: BindGroup) -> BindGroupResult {
 }
 
 public @Native
-function samplerResult(sampler: GraphicsSampler) -> SamplerResult {
+function samplerResult(sampler: EMGraphicsSampler) -> SamplerResult {
     if sampler.id == 0 {
         return .Error(.DeviceRefused)
     }
@@ -134,7 +134,7 @@ function samplerResult(sampler: GraphicsSampler) -> SamplerResult {
 // content was which reason to hand to `resourceFailureReason`. `Error(failure)`
 // binds the reason instead, so the eight sites carry none of them.
 public @Native
-function textureOrReport(outcome: TextureResult, what: borrow String) -> GraphicsTexture {
+function textureOrReport(outcome: TextureResult, what: borrow String) -> EMGraphicsTexture {
     match outcome {
         Ok(texture) -> return texture
         Error(failure) -> {
@@ -145,7 +145,7 @@ function textureOrReport(outcome: TextureResult, what: borrow String) -> Graphic
 }
 
 public @Native
-function shaderOrReport(outcome: ShaderResult, what: borrow String) -> GraphicsShader {
+function shaderOrReport(outcome: ShaderResult, what: borrow String) -> EMGraphicsShader {
     match outcome {
         Ok(shader) -> return shader
         Error(failure) -> {
@@ -167,7 +167,7 @@ function pipelineOrReport(outcome: PipelineResult, what: borrow String) -> Rende
 }
 
 public @Native
-function bufferOrReport(outcome: BufferResult, what: borrow String) -> GraphicsBuffer {
+function bufferOrReport(outcome: BufferResult, what: borrow String) -> EMGraphicsBuffer {
     match outcome {
         Ok(buffer) -> return buffer
         Error(failure) -> {
@@ -192,7 +192,7 @@ function dynamicBufferOrReport(outcome: DynamicBufferResult, what: borrow String
 }
 
 public @Native
-function uniformOrReport(outcome: UniformResult, what: borrow String) -> Uniform {
+function uniformOrReport(outcome: UniformResult, what: borrow String) -> EMUniform {
     match outcome {
         Ok(uniform) -> return uniform
         Error(failure) -> {
@@ -214,7 +214,7 @@ function bindGroupOrReport(outcome: BindGroupResult, what: borrow String) -> Bin
 }
 
 public @Native
-function samplerOrReport(outcome: SamplerResult, what: borrow String) -> GraphicsSampler {
+function samplerOrReport(outcome: SamplerResult, what: borrow String) -> EMGraphicsSampler {
     match outcome {
         Ok(sampler) -> return sampler
         Error(failure) -> {
@@ -225,7 +225,7 @@ function samplerOrReport(outcome: SamplerResult, what: borrow String) -> Graphic
 }
 
 public @Native
-function reportMissingResource(what: borrow String, failure: ResourceFailure) {
+function reportMissingResource(what: borrow String, failure: EMResourceFailure) {
     graphicsFail(.Resource, "no " + what + " — " + resourceFailureReason(move failure))
     return
 }

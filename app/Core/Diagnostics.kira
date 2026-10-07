@@ -7,7 +7,7 @@
 // frame's lifecycle. Printing, the level and the folding of repeats live in the
 // support library, so they hold process-wide on every backend.
 
-public enum GraphicsStage {
+public enum EMGraphicsStage {
     Device
     Window
     Swapchain
@@ -23,7 +23,7 @@ public enum GraphicsStage {
     Capture
 }
 
-public function graphicsStageName(stage: borrow GraphicsStage) -> String {
+public function graphicsStageName(stage: borrow EMGraphicsStage) -> String {
     match stage {
         Device -> return "device"
         Window -> return "window"
@@ -41,7 +41,7 @@ public function graphicsStageName(stage: borrow GraphicsStage) -> String {
     }
 }
 
-public function graphicsStageIndex(stage: borrow GraphicsStage) -> I32 {
+public function graphicsStageIndex(stage: borrow EMGraphicsStage) -> I32 {
     match stage {
         Device -> return I32(0)
         Window -> return I32(1)
@@ -66,19 +66,19 @@ public @FFI.Extern { library: graphics_support, symbol: kg_diagnostics_enabled, 
 function kgDiagnosticsEnabled(level: I32) -> I32
 
 // Something failed: the operation did not happen.
-public function graphicsFail(stage: GraphicsStage, message: String) {
+public function graphicsFail(stage: EMGraphicsStage, message: String) {
     kgDiagnostic(graphicsStageName(stage), graphicsStageIndex(stage), I32(0), message)
     return
 }
 
 // Something happened that is allowed but almost never meant.
-public function graphicsWarn(stage: GraphicsStage, message: String) {
+public function graphicsWarn(stage: EMGraphicsStage, message: String) {
     kgDiagnostic(graphicsStageName(stage), graphicsStageIndex(stage), I32(1), message)
     return
 }
 
 // The narration `KIRA_GRAPHICS_LOG=trace` asks for.
-public function graphicsTrace(stage: GraphicsStage, message: String) {
+public function graphicsTrace(stage: EMGraphicsStage, message: String) {
     kgDiagnostic(graphicsStageName(stage), graphicsStageIndex(stage), I32(2), message)
     return
 }

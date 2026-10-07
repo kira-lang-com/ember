@@ -1,6 +1,6 @@
 import Foundation
 
-// Turn a Kira Graphics frame capture (binary PPM, `P6`) into a PNG so it can be
+// Turn a Ember frame capture (binary PPM, `P6`) into a PNG so it can be
 // looked at. Stored deflate blocks only: this exists to view a capture, not to
 // compress it. Lives here rather than in a throwaway script so every tool that
 // captures a frame shares one encoder.

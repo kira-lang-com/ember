@@ -1,5 +1,5 @@
 import Foundation
-import KiraGraphics
+import Ember
 
 function vulkanSelfTestCapturePath() -> String {
     return ".kira-build/vulkan-clear-test.ppm"
@@ -13,7 +13,7 @@ function vulkanSelfTestClear() -> Bool {
     }
     let path = vulkanSelfTestCapturePath()
     removePath(path)
-    var app = GraphicsApplication {
+    var app = EMGraphicsApplication {
         title: "Kira Vulkan test",
         width: 8,
         height: 8,

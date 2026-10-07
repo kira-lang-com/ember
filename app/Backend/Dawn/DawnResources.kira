@@ -27,7 +27,7 @@ public function dawnAlignedSize(byteCount: Int) -> Int {
 // Creates a device buffer of `byteCount` bytes with `usage`, and answers the id
 // it was recorded under.
 public @Native
-function dawnMakeBuffer(state: borrow mut GraphicsAppRuntimeState, label: borrow String, usage: U64, byteCount: Int) -> U32 {
+function dawnMakeBuffer(state: borrow mut EMGraphicsAppRuntimeState, label: borrow String, usage: U64, byteCount: Int) -> U32 {
     let size = dawnAlignedSize(byteCount)
     let buffer = wgpuDeviceCreateBuffer(state.dawn.device, WGPUBufferDescriptor {
         label: dawnText(label),
@@ -46,7 +46,7 @@ function dawnCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor) 
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = descriptor.data.count * 4
     let id = dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(descriptor.usage), byteCount)
     if id == 0 {
@@ -55,7 +55,7 @@ function dawnCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor) 
     if descriptor.data.count > 0 {
         wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), descriptor.data, U64(byteCount))
     }
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: dawnAlignedSize(byteCount)
     })
@@ -66,7 +66,7 @@ function dawnCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBufferDe
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = descriptor.data.count * 4
     let id = dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Index), byteCount)
     if id == 0 {
@@ -75,7 +75,7 @@ function dawnCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBufferDe
     if descriptor.data.count > 0 {
         wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), descriptor.data, U64(byteCount))
     }
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: dawnAlignedSize(byteCount)
     })
@@ -89,7 +89,7 @@ function dawnCreateStorageBufferWords(context: RawPtr, label: borrow String, dat
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = data.count * 4
     let id = dawnMakeBuffer(state, label, dawnBufferUsage(.Storage), byteCount)
     if id == 0 {
@@ -98,7 +98,7 @@ function dawnCreateStorageBufferWords(context: RawPtr, label: borrow String, dat
     if data.count > 0 {
         wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), data, U64(byteCount))
     }
-    return .Ok(GraphicsBuffer {
+    return .Ok(EMGraphicsBuffer {
         id: id,
         byteSize: dawnAlignedSize(byteCount)
     })
@@ -115,7 +115,7 @@ function dawnCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCap
     if !dawnHasDevice(context) || floatCapacity <= 0 {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let byteCount = dawnAlignedSize(floatCapacity * 4)
     let usage = dawnBufferUsageCopyDestination()
         | dawnBufferUsageCopySource()
@@ -134,7 +134,7 @@ function dawnCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCap
     }
     dawnAttachExtra(state, id, contents)
     return .Ok(DynamicBuffer {
-        buffer: GraphicsBuffer {
+        buffer: EMGraphicsBuffer {
             id: id,
             byteSize: byteCount
         },
@@ -143,11 +143,11 @@ function dawnCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCap
 }
 
 public @Native
-function dawnCommitDynamicBuffer(context: RawPtr, buffer: borrow GraphicsBuffer, contents: RawPtr, floatCount: Int) {
+function dawnCommitDynamicBuffer(context: RawPtr, buffer: borrow EMGraphicsBuffer, contents: RawPtr, floatCount: Int) {
     if !dawnHasDevice(context) || buffer.id == 0 || pointerIsNull(contents) || floatCount <= 0 {
         return
     }
-    let state = nativeRecover<GraphicsAppRuntimeState>(context)
+    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let target = dawnObject(state, buffer.id)
     if pointerIsNull(target) {
         return
@@ -157,7 +157,7 @@ function dawnCommitDynamicBuffer(context: RawPtr, buffer: borrow GraphicsBuffer,
 }
 
 public @Native
-function dawnDestroyBufferId(state: borrow mut GraphicsAppRuntimeState, id: U32) {
+function dawnDestroyBufferId(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
     let buffer = dawnObject(state, id)
     if pointerIsNull(buffer) {
         return
@@ -177,11 +177,11 @@ function dawnDestroyBufferId(state: borrow mut GraphicsAppRuntimeState, id: U32)
 // a map that never completes is a device that has stopped, and spinning on it
 // forever would hang a gate whose whole job is to report.
 public @Native
-function dawnReadBufferWord(context: RawPtr, buffer: borrow GraphicsBuffer, index: Int) -> U32 {
+function dawnReadBufferWord(context: RawPtr, buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
     if !dawnHasDevice(context) || buffer.id == 0 || index < 0 {
         return U32(0)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let source = dawnObject(state, buffer.id)
     if pointerIsNull(source) {
         return U32(0)
@@ -238,7 +238,7 @@ function dawnReadBufferWord(context: RawPtr, buffer: borrow GraphicsBuffer, inde
 // The answer to `wgpuBufferMapAsync`, recorded on the runtime state the readback
 // spin is watching.
 public function dawnBufferMapped(status: I32, message: WGPUStringViewPointer, userdata1: RawPtr, userdata2: RawPtr) -> Void {
-    var state = nativeRecover<GraphicsAppRuntimeState>(userdata1)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(userdata1)
     state.dawn.mapResolved = true
     state.dawn.mapSucceeded = status == dawnMapSucceeded()
     if !state.dawn.mapSucceeded {
@@ -253,7 +253,7 @@ public function dawnBufferMapped(status: I32, message: WGPUStringViewPointer, us
 // against the surface this run configured. A pipeline drawing into such a
 // texture bakes the same answer in, so pass and pipeline agree.
 public @Native
-function dawnResolvedFormat(state: borrow GraphicsAppRuntimeState, format: borrow TextureFormat) -> I32 {
+function dawnResolvedFormat(state: borrow EMGraphicsAppRuntimeState, format: borrow TextureFormat) -> I32 {
     if format == .Swapchain {
         return state.dawn.surfaceFormat
     }
@@ -263,7 +263,7 @@ function dawnResolvedFormat(state: borrow GraphicsAppRuntimeState, format: borro
 // A texture and the views a bind group, a pass attachment and a compute write
 // each reach it through.
 //
-// WebGPU separates the two the way sokol does, so the views a `GraphicsTexture`
+// WebGPU separates the two the way sokol does, so the views a `EMGraphicsTexture`
 // carries are real objects here rather than the texture id repeated. Which views
 // are minted follows the usage: an attachment view for anything a pass writes,
 // a sampled view for anything a shader reads, a storage view for anything a
@@ -273,7 +273,7 @@ function dawnCreateTexture(context: RawPtr, descriptor: borrow TextureDescriptor
     if !dawnHasDevice(context) || descriptor.width <= 0 || descriptor.height <= 0 {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let format = dawnResolvedFormat(state, descriptor.format)
     if format == dawnFormatUndefined() {
         graphicsFail(.Resource, "texture '" + descriptor.label + "' names no format WebGPU has")
@@ -302,9 +302,9 @@ function dawnCreateTexture(context: RawPtr, descriptor: borrow TextureDescriptor
     return .Ok(dawnTextureWithViews(state, id, texture, format, descriptor.width, descriptor.height, samples, descriptor.usage))
 }
 
-// Mints the views `usage` calls for and assembles the `GraphicsTexture`.
+// Mints the views `usage` calls for and assembles the `EMGraphicsTexture`.
 public @Native
-function dawnTextureWithViews(state: borrow mut GraphicsAppRuntimeState, id: U32, texture: RawPtr, format: I32, width: Int, height: Int, samples: Int, usage: borrow TextureUsage) -> GraphicsTexture {
+function dawnTextureWithViews(state: borrow mut EMGraphicsAppRuntimeState, id: U32, texture: RawPtr, format: I32, width: Int, height: Int, samples: Int, usage: borrow TextureUsage) -> EMGraphicsTexture {
     var sampledId = U32(0)
     var colorId = U32(0)
     var depthId = U32(0)
@@ -321,7 +321,7 @@ function dawnTextureWithViews(state: borrow mut GraphicsAppRuntimeState, id: U32
     if usage == .SampledStorage {
         storageId = dawnRegisterObject(state, dawnMakeView(texture, format, "storage"), format)
     }
-    return GraphicsTexture {
+    return EMGraphicsTexture {
         id: id,
         viewId: sampledId,
         colorViewId: colorId,
@@ -382,11 +382,11 @@ function dawnCreateTextureFromPixels(context: RawPtr, descriptor: borrow Texture
 
 // Whole-image upload, which is the shape the portable surface has.
 public @Native
-function dawnWriteTexturePixels(context: RawPtr, texture: borrow GraphicsTexture, pixels: borrow [U8]) {
+function dawnWriteTexturePixels(context: RawPtr, texture: borrow EMGraphicsTexture, pixels: borrow [U8]) {
     if !dawnHasDevice(context) || texture.id == 0 || pixels.count <= 0 {
         return
     }
-    let state = nativeRecover<GraphicsAppRuntimeState>(context)
+    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let handle = dawnObject(state, texture.id)
     if pointerIsNull(handle) {
         return
@@ -417,11 +417,11 @@ function dawnWriteTexturePixels(context: RawPtr, texture: borrow GraphicsTexture
 // The same upload from raw memory the caller already owns — a glyph atlas, whose
 // CPU side has to exist anyway so a new glyph can be packed beside the old ones.
 public @Native
-function dawnWriteTextureBytes(context: RawPtr, texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Int) {
+function dawnWriteTextureBytes(context: RawPtr, texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
     if !dawnHasDevice(context) || texture.id == 0 || pointerIsNull(bytes) || byteCount <= 0 {
         return
     }
-    let state = nativeRecover<GraphicsAppRuntimeState>(context)
+    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let handle = dawnObject(state, texture.id)
     if pointerIsNull(handle) {
         return
@@ -450,11 +450,11 @@ function dawnWriteTextureBytes(context: RawPtr, texture: borrow GraphicsTexture,
 }
 
 public @Native
-function dawnDestroyTexture(context: RawPtr, texture: borrow GraphicsTexture) {
+function dawnDestroyTexture(context: RawPtr, texture: borrow EMGraphicsTexture) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     dawnReleaseView(state, texture.viewId)
     dawnReleaseView(state, texture.colorViewId)
     dawnReleaseView(state, texture.depthViewId)
@@ -472,7 +472,7 @@ function dawnDestroyTexture(context: RawPtr, texture: borrow GraphicsTexture) {
 }
 
 public @Native
-function dawnReleaseView(state: borrow mut GraphicsAppRuntimeState, id: U32) {
+function dawnReleaseView(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
     let view = dawnObject(state, id)
     if pointerIsNull(view) {
         return
@@ -489,7 +489,7 @@ function dawnCreateSampler(context: RawPtr, descriptor: borrow SamplerDescriptor
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let sampler = wgpuDeviceCreateSampler(state.dawn.device, WGPUSamplerDescriptor {
         label: dawnText(descriptor.label),
         addressModeU: dawnAddressMode(descriptor.addressModeU),
@@ -505,17 +505,17 @@ function dawnCreateSampler(context: RawPtr, descriptor: borrow SamplerDescriptor
     if pointerIsNull(sampler) {
         return .Error(.DeviceRefused)
     }
-    return .Ok(GraphicsSampler {
+    return .Ok(EMGraphicsSampler {
         id: dawnRegisterObject(state, sampler, dawnFormatUndefined())
     })
 }
 
 public @Native
-function dawnDestroySampler(context: RawPtr, sampler: borrow GraphicsSampler) {
+function dawnDestroySampler(context: RawPtr, sampler: borrow EMGraphicsSampler) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let handle = dawnObject(state, sampler.id)
     if pointerIsNull(handle) {
         return

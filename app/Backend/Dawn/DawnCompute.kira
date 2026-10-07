@@ -17,11 +17,11 @@ public @FFI.Array { element: WGPUBindGroupEntry, count: 12 }
 struct WGPUBindGroupEntryArray12 {}
 
 public @Native
-function dawnCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow GraphicsShader, entryName: borrow String) -> Int {
+function dawnCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
     if !dawnHasDevice(context) {
         return 0
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let record = dawnShaderRecord(state, shader.id)
     if !record.live || pointerIsNull(record.computeModule) {
         graphicsFail(.Compute, "compute pipeline '" + label + "' names no compiled compute shader")
@@ -49,7 +49,7 @@ function dawnCreateComputePipeline(context: RawPtr, label: borrow String, shader
 // group stays alive as long as the command buffer needs it, and the entries
 // differ per call by construction so there is nothing to cache.
 public @Native
-function dawnDispatch(state: borrow mut GraphicsAppRuntimeState, pipelineId: Int, entries: borrow [WGPUBindGroupEntry], groupsX: Int, groupsY: Int) {
+function dawnDispatch(state: borrow mut EMGraphicsAppRuntimeState, pipelineId: Int, entries: borrow [WGPUBindGroupEntry], groupsX: Int, groupsY: Int) {
     dawnTraceOpenSegment(state)
     let pipeline = dawnObject(state, U32(pipelineId))
     if pointerIsNull(pipeline) || entries.count == 0 {
@@ -119,21 +119,21 @@ function dawnDispatchTextureComputePair(
     context: RawPtr,
     horizontalPipeline: Int,
     verticalPipeline: Int,
-    source: borrow GraphicsTexture,
-    secondSource: borrow GraphicsTexture,
+    source: borrow EMGraphicsTexture,
+    secondSource: borrow EMGraphicsTexture,
     blend: Float,
-    tempNear: borrow GraphicsTexture,
-    tempFar: borrow GraphicsTexture,
-    outputNear: borrow GraphicsTexture,
-    outputFar: borrow GraphicsTexture,
-    sampler: borrow GraphicsSampler,
+    tempNear: borrow EMGraphicsTexture,
+    tempFar: borrow EMGraphicsTexture,
+    outputNear: borrow EMGraphicsTexture,
+    outputFar: borrow EMGraphicsTexture,
+    sampler: borrow EMGraphicsSampler,
     width: Int,
     height: Int,
 ) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     let extent = dawnBlurExtentBuffer(state, width, height, blend)
     if pointerIsNull(extent) {
         return
@@ -159,7 +159,7 @@ function dawnDispatchTextureComputePair(
 // tail-thread bounds test and the texel step it divides out of it, both exact in
 // a float at any extent a texture can have.
 public @Native
-function dawnBlurExtentBuffer(state: borrow mut GraphicsAppRuntimeState, width: Int, height: Int, blend: Float) -> RawPtr {
+function dawnBlurExtentBuffer(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int, blend: Float) -> RawPtr {
     if state.dawn.blurExtentBufferId == 0 {
         state.dawn.blurExtentBufferId = dawnMakeBuffer(state, "kira-blur-extent", dawnBufferUsage(.Uniform), 16)
     }
@@ -175,8 +175,8 @@ function dawnBlurExtentBuffer(state: borrow mut GraphicsAppRuntimeState, width: 
 // One half's bindings: the target extent, the sampler the filter reads through,
 // the two textures it reads, and the two levels it writes.
 public @Native
-function dawnBlurEntries(state: borrow GraphicsAppRuntimeState, extent: RawPtr, sampler: borrow GraphicsSampler, firstSource: borrow GraphicsTexture, secondSource: borrow GraphicsTexture, near: borrow GraphicsTexture, far: borrow GraphicsTexture) -> [WGPUBindGroupEntry] {
-    let sources: [GraphicsTexture] = [firstSource, secondSource]
+function dawnBlurEntries(state: borrow EMGraphicsAppRuntimeState, extent: RawPtr, sampler: borrow EMGraphicsSampler, firstSource: borrow EMGraphicsTexture, secondSource: borrow EMGraphicsTexture, near: borrow EMGraphicsTexture, far: borrow EMGraphicsTexture) -> [WGPUBindGroupEntry] {
+    let sources: [EMGraphicsTexture] = [firstSource, secondSource]
     var entries: [WGPUBindGroupEntry] = []
     entries.append(WGPUBindGroupEntry {
         binding: U32(0),
@@ -214,7 +214,7 @@ function dawnDispatchComputeBuffers(context: RawPtr, pipeline: Int, bufferIds: b
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     dawnDispatch(state, pipeline, dawnBufferEntries(state, bufferIds, 0), dawnWorkgroupCount(threadCount, threadsPerGroup), 1)
     return
 }
@@ -222,11 +222,11 @@ function dawnDispatchComputeBuffers(context: RawPtr, pipeline: Int, bufferIds: b
 // The same dispatch with a depth texture bound ahead of the buffers, for a
 // kernel that reads the depth a pass just rasterized.
 public @Native
-function dawnDispatchDepthComputeBuffers(context: RawPtr, pipeline: Int, depth: borrow GraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
+function dawnDispatchDepthComputeBuffers(context: RawPtr, pipeline: Int, depth: borrow EMGraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
     if !dawnHasDevice(context) {
         return
     }
-    var state = nativeRecover<GraphicsAppRuntimeState>(context)
+    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
     var entries = dawnBufferEntries(state, bufferIds, 1)
     let view = dawnObject(state, depth.depthViewId != 0 ? depth.depthViewId : depth.viewId)
     if pointerIsNull(view) {
@@ -246,7 +246,7 @@ function dawnDispatchDepthComputeBuffers(context: RawPtr, pipeline: Int, depth: 
 }
 
 public @Native
-function dawnBufferEntries(state: borrow GraphicsAppRuntimeState, bufferIds: borrow [U32], firstBinding: Int) -> [WGPUBindGroupEntry] {
+function dawnBufferEntries(state: borrow EMGraphicsAppRuntimeState, bufferIds: borrow [U32], firstBinding: Int) -> [WGPUBindGroupEntry] {
     var entries: [WGPUBindGroupEntry] = []
     var index = 0
     while index < bufferIds.count {
