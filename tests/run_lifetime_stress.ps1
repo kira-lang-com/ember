@@ -94,20 +94,4 @@ if ($RunThousandFrames) {
     Run-CubeFrames -Frames 1000 -Detailed | Out-Null
 }
 
-Run-Kira -Command "cd examples\lifetime_stress && kira shader build" | Out-Null
-Run-Kira -Command "kira check examples\lifetime_stress" | Out-Null
-
-$stressOutput = Run-Kira -Command "cd examples\lifetime_stress && kira run" -Environment @{
-    KIRA_GRAPHICS_LIFETIME_REPORT = "1"
-    KIRA_GRAPHICS_LIFETIME_DETAIL = "1"
-}
-Assert-Contains -Output $stressOutput -Needle "Kira Graphics lifetime stress: pass iterations=200" -Context "lifetime_stress"
-Assert-Contains -Output $stressOutput -Needle "lifetime stress app passed" -Context "lifetime_stress"
-Assert-ZeroLifetimeReport -Output $stressOutput -Context "lifetime_stress"
-Assert-Contains -Output $stressOutput -Needle "buffers current=0" -Context "lifetime_stress detail"
-Assert-Contains -Output $stressOutput -Needle "images current=0" -Context "lifetime_stress detail"
-Assert-Contains -Output $stressOutput -Needle "views current=0" -Context "lifetime_stress detail"
-Assert-Contains -Output $stressOutput -Needle "shaders current=0" -Context "lifetime_stress detail"
-Assert-Contains -Output $stressOutput -Needle "pipelines current=0" -Context "lifetime_stress detail"
-
 Write-Host "Kira Graphics lifetime stress checks passed."

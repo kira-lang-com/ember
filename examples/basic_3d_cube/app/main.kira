@@ -139,9 +139,9 @@ function cubeVertexLayout() -> VertexLayout {
 function cubeCamera(width: Float, height: Float) -> PerspectiveCamera {
     let aspect = width / height
     return PerspectiveCamera {
-        position: Float3 { x: 0.0 y: 0.0 z: 5.0 }
-        target: Float3 { x: 0.0 y: 0.0 z: 0.0 }
-        up: Float3 { x: 0.0 y: 1.0 z: 0.0 }
+        position: Vec3 { x: 0.0 y: 0.0 z: 5.0 }
+        target: Vec3 { x: 0.0 y: 0.0 z: 0.0 }
+        up: Vec3 { x: 0.0 y: 1.0 z: 0.0 }
         fovYRadians: 0.7853982
         aspect: aspect
         nearPlane: 0.1
@@ -151,19 +151,15 @@ function cubeCamera(width: Float, height: Float) -> PerspectiveCamera {
 
 function cubeLight() -> DirectionalLight {
     return DirectionalLight {
-        direction: Float3 { x: -0.35 y: -0.70 z: -0.55 }
-        color: Float3 { x: 1.0 y: 0.96 z: 0.88 }
+        direction: Vec3 { x: -0.35 y: -0.70 z: -0.55 }
+        color: Vec3 { x: 1.0 y: 0.96 z: 0.88 }
         intensity: 0.85
     }
 }
 
-function cubeModelMatrix() -> Float4x4 {
-    return matrixMultiply(
-        matrixRotationY(0.72),
-        matrixMultiply(
-            matrixRotationX(0.52),
-            matrixScale(Float3 { x: 0.86 y: 0.86 z: 0.86 })
-        )
+function cubeModelMatrix() -> Mat4 {
+    return mat4RotateY(0.72).multiply(
+        mat4RotateX(0.52).multiply(mat4Scale(Vec3 { x: 0.86 y: 0.86 z: 0.86 }))
     )
 }
 
@@ -174,14 +170,14 @@ function cubeSceneUniformData(width: Float, height: Float) -> [F32] {
 function cubeObjectUniformData() -> [F32] {
     return objectUniformData(objectUniforms(
         cubeModelMatrix(),
-        Float4 { x: 0.42 y: 0.62 z: 0.95 w: 1.0 }
+        Vec4 { x: 0.42 y: 0.62 z: 0.95 w: 1.0 }
     ))
 }
 
 function cubeEdgeUniformData() -> [F32] {
     return objectUniformData(objectUniforms(
         cubeModelMatrix(),
-        Float4 { x: 1.0 y: 1.0 z: 1.0 w: 1.0 }
+        Vec4 { x: 1.0 y: 1.0 z: 1.0 w: 1.0 }
     ))
 }
 
@@ -388,7 +384,7 @@ function main() {
 
         let pass = cubeRenderPass()
         let encoder = frame.beginRenderPass(pass)
-        setUniformValues(cubeState.sceneUniform, cubeSceneUniformData(sapp_widthf(), sapp_heightf()))
+        setUniformValues(cubeState.sceneUniform, cubeSceneUniformData(Float(frame.drawableWidth()), Float(frame.drawableHeight())))
         setUniformValues(cubeState.objectUniform, cubeObjectUniformData())
         encoder.setPipeline(cubeState.pipeline)
         encoder.setVertexBuffer(cubeState.vertices)

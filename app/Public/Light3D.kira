@@ -1,18 +1,18 @@
 public struct DirectionalLight {
-    var direction: Float3 = Float3 { x: -0.35, y: -0.70, z: -0.55 }
-    var color: Float3 = Float3 { x: 1.0, y: 0.96, z: 0.88 }
+    var direction: Vec3 = Vec3 { x: -0.35, y: -0.70, z: -0.55 }
+    var color: Vec3 = Vec3 { x: 1.0, y: 0.96, z: 0.88 }
     var intensity: Float = 0.85
 }
 
 public struct SceneUniforms {
-    var viewProjection: Float4x4
-    var lightDirection: Float4
-    var lightColor: Float4
+    var viewProjection: Mat4
+    var lightDirection: Vec4
+    var lightColor: Vec4
 }
 
 public struct ObjectUniforms {
-    var model: Float4x4
-    var baseColor: Float4
+    var model: Mat4
+    var baseColor: Vec4
 }
 
 public function sceneUniformFloatCount() -> Int {
@@ -26,13 +26,13 @@ public function objectUniformFloatCount() -> Int {
 public function sceneUniforms(camera: borrow PerspectiveCamera, light: borrow DirectionalLight, ambient: Float) -> SceneUniforms {
     return SceneUniforms {
         viewProjection: cameraViewProjectionMatrix(camera),
-        lightDirection: Float4 {
+        lightDirection: Vec4 {
             x: light.direction.x,
             y: light.direction.y,
             z: light.direction.z,
             w: light.intensity
         },
-        lightColor: Float4 {
+        lightColor: Vec4 {
             x: light.color.x,
             y: light.color.y,
             z: light.color.z,
@@ -41,7 +41,7 @@ public function sceneUniforms(camera: borrow PerspectiveCamera, light: borrow Di
     }
 }
 
-public function objectUniforms(model: borrow Float4x4, baseColor: borrow Float4) -> ObjectUniforms {
+public function objectUniforms(model: borrow Mat4, baseColor: borrow Vec4) -> ObjectUniforms {
     return ObjectUniforms {
         model: model,
         baseColor: baseColor
