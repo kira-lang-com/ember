@@ -18,6 +18,7 @@ public enum Platform {
     Linux
     MacOS
     IOS
+    Android
     Web
     Unknown
 }

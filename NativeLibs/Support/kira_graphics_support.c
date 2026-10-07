@@ -3,7 +3,7 @@
 // Until now this lived in the sokol native library, because sokol was the
 // library's only C. The monotonic clock a frame is timed with is a platform
 // call — Kira has no clock of its own, and a graphics library cannot assume the
-// syscall table a Tessera program has — so it is here, alone, with no backend
+// syscall table of the system it runs on — so it is here, alone, with no backend
 // and no window system attached. A build that selects Metal or Dawn links this
 // and nothing of sokol's.
 
@@ -68,7 +68,7 @@ void kg_sleep_seconds(double seconds) {
 //
 // A live-reload runner defines these strongly and the app calls them to report
 // where a frame reached; a build with no runner — every build that is not the
-// dev live loop, Tessera included — needs them to exist and do nothing rather
+// dev live loop — needs them to exist and do nothing rather
 // than be an undefined symbol at a call site that is compiled in but never
 // meaningfully driven. `weak` is what lets the runner's strong definition win
 // when there is one. They lived in the sokol C shim before, for no reason but

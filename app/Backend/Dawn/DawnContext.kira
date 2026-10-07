@@ -362,8 +362,8 @@ function dawnCreateDeviceAndQueue(state: borrow mut GraphicsAppRuntimeState, run
         features.append(dawnFeatureTimestampQuery())
     }
     if sharesTextures {
-        // Prefer the Vulkan opaque-fd path when the adapter exposes it. Tessera's
-        // venus stack proves this exact feature pair end to end; requesting the
+        // Prefer the Vulkan opaque-fd path when the adapter exposes it. Venus
+        // supports this exact feature pair end to end; requesting the
         // dma-buf import feature alongside it makes Dawn reject the imported
         // SharedTextureMemory before a texture can be created.
         if wgpuAdapterHasFeature(state.dawn.adapter, dawnFeatureSharedTextureMemoryOpaqueFD()) != U32(0) {

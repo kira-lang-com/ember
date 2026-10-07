@@ -56,8 +56,8 @@ public function dawnAdapterFenceFeature(adapter: RawPtr) -> I32 {
     if pointerIsNull(adapter) {
         return I32(0)
     }
-    // SyncFD first: this is the Linux primitive venus emulates and the exact
-    // feature paired with OpaqueFD by Tessera's proven Dawn scanout path.
+    // SyncFD first: this is the Linux primitive venus emulates and the
+    // feature Dawn pairs with OpaqueFD for a surface scanned out through DRM.
     if wgpuAdapterHasFeature(adapter, dawnFeatureSharedFenceSyncFD()) != U32(0) {
         return dawnFeatureSharedFenceSyncFD()
     }
@@ -117,10 +117,10 @@ function dawnImportSharedTexture(context: RawPtr, surface: borrow SharedSurface)
             surface.width,
             surface.height,
             1,
-            // The Tessera producer renders directly into the exported image.
-            // Venus's proven external-memory path is render-attachment-only;
-            // MosaicDisplay scans the dma-buf out through DRM rather than sampling
-            // it through Dawn in this process.
+            // The producer renders directly into the exported image. Venus's
+            // external-memory path is render-attachment-only; the display
+            // server scans the dma-buf out through DRM rather than sampling it
+            // through Dawn in this process.
             .RenderTarget
         ),
         memory: memory,

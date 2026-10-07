@@ -102,9 +102,9 @@ void *kira_shared_texture_import_memory(void *device, kira_shared_surface surfac
     WGPUSharedTextureMemoryDmaBufDescriptor dmabuf;
     memset(&dmabuf, 0, sizeof(dmabuf));
 
-    /* Tessera's Vulkan allocator exports two descriptors for the same memory.
-     * DRM gets the dma-buf; Dawn gets the opaque fd, which is the path proven by
-     * dawn_scanout_smoke on venus. GBM/adopted surfaces do not have that second
+    /* A surface allocated through Vulkan exports two descriptors for the same
+     * memory. DRM gets the dma-buf; Dawn gets the opaque fd, the path venus
+     * supports end to end. GBM/adopted surfaces do not have that second
      * descriptor and stay on Dawn's generic dma-buf import path. */
     if (dawn_handle >= 0 && kira_shared_surface_allocation_size(surface) != 0) {
         opaque.chain.sType = WGPUSType_SharedTextureMemoryOpaqueFDDescriptor;

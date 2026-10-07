@@ -28,9 +28,9 @@ public function metalNsScroll() -> Int { return 22 }
 
 // macOS virtual keycodes -> the neutral key codes the UI layer expects for the
 // special keys it acts on (GLFW-style, matching the offscreen input scripts):
-// Return / keypad-Enter -> 257 (submit), Delete/Backspace -> 259. Character keys
-// keep their raw code (foundationKeyBit maps those to held-key bits) and ALSO
-// emit a TextInput event carrying the typed codepoint (see metalPumpEvents).
+// Return / keypad-Enter -> 257 (submit), Delete/Backspace -> 259. A letter or a
+// digit is its character, uppercase, as on every other backend, and ALSO emits
+// a TextInput event carrying the typed codepoint (see metalPumpEvents).
 public function metalMapKeyCode(raw: Int) -> Int {
     if raw == 36 { return 257 }    // Return -> Enter (submit)
     if raw == 76 { return 257 }    // keypad Enter
@@ -43,6 +43,17 @@ public function metalMapKeyCode(raw: Int) -> Int {
     if raw == 119 { return 269 }   // End
     if raw == 117 { return 261 }   // Forward Delete
     if raw == 53 { return 256 }    // Escape
+    // A letter or a digit is its character, uppercase, as on every other
+    // backend: the ANSI layout's codes, in order from 0.
+    let layout = "ASDFHGZXCV?BQWERYT123465=97-80]OU[IP?LJ'K;\\,/NM."
+    if raw >= 0 && raw < layout.count {
+        let character = Int(layout.charAt(raw))
+        let letter = character >= 65 && character <= 90
+        let digit = character >= 48 && character <= 57
+        if letter || digit {
+            return character
+        }
+    }
     return raw
 }
 public function metalNsOtherDown() -> Int { return 25 }

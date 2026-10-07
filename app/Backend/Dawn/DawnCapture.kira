@@ -126,7 +126,7 @@ public function dawnCaptureTextureHandle(context: RawPtr, texture: RawPtr, width
     wgpuBufferDestroy(readback)
     wgpuBufferRelease(readback)
     if wrote {
-        graphicsFail(.Capture, "Kira Graphics wrote the captured texture to " + path)
+        graphicsTrace(.Capture, "Kira Graphics wrote the captured texture to " + path)
     } else {
         graphicsFail(.Capture, "Kira Graphics could not write the captured texture to " + path)
     }

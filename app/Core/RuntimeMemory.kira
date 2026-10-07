@@ -103,5 +103,8 @@ public function hostPlatform() -> Platform {
     if name == "ios" {
         return .IOS
     }
+    if name == "android" {
+        return .Android
+    }
     return .Unknown
 }
