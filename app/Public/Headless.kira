@@ -84,8 +84,10 @@ public struct EMGraphicsHeadless {
         if self.ready == false {
             return false
         }
-        if self.graphics.backend == .Vulkan { return false }
         let context = nativeUserDataBorrow(self.context)
+        if self.graphics.backend == .Vulkan {
+            return vulkanCaptureTexture(context, texture, path)
+        }
         return dawnCaptureTexture(context, texture, path)
     }
 

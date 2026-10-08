@@ -183,13 +183,24 @@ function vulkanPointerSlotArray(values: borrow [RawPtr]) -> RawPtr {
 
 public function vulkanPipelineColorFormat(descriptor: borrow RenderPipelineDescriptor, state: borrow VulkanState) -> I32 {
     if descriptor.colorTargets.count == 0 {
-        return state.swapchainFormat
+        return vulkanSwapchainFormatOrDefault(state)
     }
     let format = descriptor.colorTargets[0].format
     if format == .Swapchain {
-        return state.swapchainFormat
+        return vulkanSwapchainFormatOrDefault(state)
     }
     return vulkanTextureFormat(format)
+}
+
+// The format `.Swapchain` stands for: the swapchain's, and on a device with no
+// swapchain (headless) the format one would have had, which is also what a
+// shared texture is made in. A pipeline built for VK_FORMAT_UNDEFINED matches
+// no attachment, so every draw through it is dropped without an error.
+public function vulkanSwapchainFormatOrDefault(state: borrow VulkanState) -> I32 {
+    if state.swapchainFormat != I32(0) {
+        return state.swapchainFormat
+    }
+    return vulkanTextureFormat(.Swapchain)
 }
 
 public function vulkanBuildBlend(preset: borrow BlendPreset) -> VkPipelineColorBlendAttachmentState {

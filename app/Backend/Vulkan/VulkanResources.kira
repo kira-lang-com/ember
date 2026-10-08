@@ -217,10 +217,17 @@ function vulkanCreateImageHandle(state: borrow mut VulkanState, descriptor: borr
         graphicsFail(.Resource, "texture sampleCount must be one of 1, 2, 4, 8, 16, 32 or 64")
         return U32(0)
     }
+    // Never VK_FORMAT_UNDEFINED for a swapchain-format texture on a headless
+    // device: the image is invalid, and ANV divides by its zero block size the
+    // first time it is copied.
+    var format = vulkanTextureFormat(descriptor.format)
+    if descriptor.format == .Swapchain {
+        format = vulkanSwapchainFormatOrDefault(state)
+    }
     let info = VkImageCreateInfo {
         sType: vulkanStructureImageCreateInfo(),
         imageType: vulkanImageType2d(),
-        format: descriptor.format == .Swapchain ? state.swapchainFormat : vulkanTextureFormat(descriptor.format),
+        format: format,
         extent: VkExtent3D {
             width: U32(descriptor.width),
             height: U32(descriptor.height),

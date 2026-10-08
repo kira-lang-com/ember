@@ -82,3 +82,48 @@ function vulkanPortablePixmap(mapped: RawPtr, width: Int, height: Int, format: I
     }
     return bytes
 }
+
+// Reads a render target back and writes it as a PPM, for a headless device
+// that has no swapchain to capture. Ends the frame in flight: the copy is
+// recorded after everything drawn so far, and the submission is waited for
+// before the pixels are read.
+public @Native
+function vulkanCaptureTexture(context: RawPtr, texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
+    if !vulkanRequireDevice(context, "vulkanCaptureTexture") { return false }
+    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
+        graphicsFail(.Capture, "there is no texture to capture")
+        return false
+    }
+    if !vulkanBeginHeadlessFrame(runtime.vulkan) { return false }
+    if runtime.vulkan.passActive { vulkanEndPassAndCommitState(runtime.vulkan) }
+    let byteCount = texture.width * texture.height * 4
+    let staging = vulkanCreateBufferHandle(runtime.vulkan, "kira-vulkan-texture-capture", vulkanBufferUsageTransferDestination(), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
+    if staging == 0 { return false }
+    vulkanTransitionImage(runtime.vulkan, texture.id, vulkanImageLayoutTransferSource(), vulkanStageColorAttachmentOutput(), vulkanStageTransfer(), vulkanAccessColorAttachmentWrite(), vulkanAccessTransferRead(), vulkanAspectColor())
+    vkCmdCopyImageToBuffer(runtime.vulkan.commandBuffer, vulkanObject(runtime.vulkan, texture.id), vulkanImageLayoutTransferSource(), vulkanObject(runtime.vulkan, staging), U32(1), VkBufferImageCopy {
+        imageSubresource: VkImageSubresourceLayers {
+            aspectMask: vulkanAspectColor(),
+            layerCount: U32(1)
+        },
+        imageExtent: VkExtent3D {
+            width: U32(texture.width),
+            height: U32(texture.height),
+            depth: U32(1)
+        }
+    })
+    vulkanSubmitHeadlessFrame(context)
+    let mapped = vulkanObjectExtra(runtime.vulkan, staging)
+    var written = false
+    if !pointerIsNull(mapped) {
+        let pixels = vulkanPortablePixmap(mapped, texture.width, texture.height, vulkanObjectFormat(runtime.vulkan, texture.id))
+        written = writeBytesFile(path, pixels)
+        if written {
+            graphicsTrace(.Capture, "wrote the texture to " + path)
+        } else {
+            graphicsFail(.Capture, "could not write the texture to " + path)
+        }
+    }
+    vulkanReleaseBuffer(runtime.vulkan, staging)
+    return written
+}

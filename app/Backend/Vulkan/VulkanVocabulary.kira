@@ -268,8 +268,10 @@ public function vulkanImageUsage(usage: borrow TextureUsage) -> U32 {
     match usage {
         Sampled -> return vulkanImageUsageTransferDestination() | vulkanImageUsageSampled()
         SampledStreaming -> return vulkanImageUsageTransferDestination() | vulkanImageUsageSampled()
-        RenderTarget -> return vulkanImageUsageColorAttachment() | vulkanImageUsageTransferDestination() | vulkanImageUsageSampled()
-        RenderTargetSampled -> return vulkanImageUsageColorAttachment() | vulkanImageUsageSampled() | vulkanImageUsageTransferDestination()
+        // A render target is also a transfer source, so a headless device can
+        // read back what was drawn into it (`vulkanCaptureTexture`).
+        RenderTarget -> return vulkanImageUsageColorAttachment() | vulkanImageUsageTransferDestination() | vulkanImageUsageSampled() | vulkanImageUsageTransferSource()
+        RenderTargetSampled -> return vulkanImageUsageColorAttachment() | vulkanImageUsageSampled() | vulkanImageUsageTransferDestination() | vulkanImageUsageTransferSource()
         DepthStencil -> return vulkanImageUsageDepthAttachment() | vulkanImageUsageSampled()
         SampledStorage -> return vulkanImageUsageSampled() | vulkanImageUsageStorage() | vulkanImageUsageTransferDestination()
     }
