@@ -74,3 +74,7 @@ backend other Kira packages render through.
   across the surface.
 - The Kira frontend may fail with `KICE001` internal errors; report that clearly
   if build validation is blocked.
+
+# Specs
+
+Any spec is the rule. Read it before changing what it covers and do exactly what it says. If the spec does not say it, it does not exist: never invent a layout, encoding, convention or meaning to make a case work, and never route around a limit the spec sets. A case the spec does not cover is a question for the user, not a decision.
