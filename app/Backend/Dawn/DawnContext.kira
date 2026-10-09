@@ -133,8 +133,7 @@ public struct DawnState {
 // Written out rather than defaulted because a `RawPtr` field has no zero a Kira
 // struct declaration can name: the null pointer is a call, and a field default
 // is a value.
-public @Native
-function dawnEmptyState() -> DawnState {
+public function dawnEmptyState() -> DawnState {
     return DawnState {
         moduleInstance: nullPointer(),
         window: nullPointer(),
@@ -167,8 +166,7 @@ function dawnEmptyState() -> DawnState {
 // Whether a backend member was reached before the run loop built a context.
 // Every member that touches the device asks this first, so a call made outside
 // a run answers with a diagnostic rather than a null dereference.
-public @Native
-function dawnHasDevice(context: RawPtr) -> Bool {
+public function dawnHasDevice(context: RawPtr) -> Bool {
     if pointerIsNull(context) {
         return false
     }
@@ -180,8 +178,7 @@ function dawnHasDevice(context: RawPtr) -> Bool {
 // Records a WebGPU handle and answers the id Kira will carry it as. A null
 // handle is id 0, which is what every `*Result` lifter in this repo reads as
 // "the device refused it".
-public @Native
-function dawnRegisterObject(state: borrow mut EMGraphicsAppRuntimeState, object: RawPtr, format: I32) -> U32 {
+public function dawnRegisterObject(state: borrow mut EMGraphicsAppRuntimeState, object: RawPtr, format: I32) -> U32 {
     if pointerIsNull(object) {
         return U32(0)
     }
@@ -201,8 +198,7 @@ function dawnRegisterObject(state: borrow mut EMGraphicsAppRuntimeState, object:
 }
 
 // Gives a slot the CPU block that belongs to it, and takes it back.
-public @Native
-function dawnAttachExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32, extra: RawPtr) {
+public function dawnAttachExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32, extra: RawPtr) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.objectExtra.count {
         return
@@ -211,8 +207,7 @@ function dawnAttachExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32, e
     return
 }
 
-public @Native
-function dawnFreeExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
+public function dawnFreeExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.objectExtra.count {
         return
@@ -225,8 +220,7 @@ function dawnFreeExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
     return
 }
 
-public @Native
-function dawnObject(state: borrow EMGraphicsAppRuntimeState, id: U32) -> RawPtr {
+public function dawnObject(state: borrow EMGraphicsAppRuntimeState, id: U32) -> RawPtr {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.objects.count {
         return nullPointer()
@@ -234,8 +228,7 @@ function dawnObject(state: borrow EMGraphicsAppRuntimeState, id: U32) -> RawPtr 
     return state.dawn.objects[slot]
 }
 
-public @Native
-function dawnObjectFormat(state: borrow EMGraphicsAppRuntimeState, id: U32) -> I32 {
+public function dawnObjectFormat(state: borrow EMGraphicsAppRuntimeState, id: U32) -> I32 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.objectFormats.count {
         return dawnFormatUndefined()
@@ -246,8 +239,7 @@ function dawnObjectFormat(state: borrow EMGraphicsAppRuntimeState, id: U32) -> I
 // Forgets a slot, so the id stops naming anything and the slot is reused. The
 // WebGPU handle itself is released by the caller, which is the side that knows
 // which `wgpu*Release` the object answers to.
-public @Native
-function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
+public function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.dawn.objects.count {
         return
@@ -276,8 +268,7 @@ function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id: U32) 
 // first field and the bytes behind it are walked. Dawn's messages are the only
 // account of why a shader, a pipeline or a bind group was refused, so reading
 // them is not optional.
-public @Native
-function dawnViewText(view: WGPUStringViewPointer) -> String {
+public function dawnViewText(view: WGPUStringViewPointer) -> String {
     return textFromBytes(pointerAt(view, U64(0)), Int(view.length))
 }
 
@@ -319,8 +310,7 @@ public function dawnUncapturedError(device: RawPtr, kind: I32, message: WGPUStri
 
 // Creates the instance, drives the adapter request to completion, and creates
 // the device synchronously. Answers whether a device exists afterwards.
-public @Native
-function dawnCreateDeviceAndQueue(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) -> Bool {
+public function dawnCreateDeviceAndQueue(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) -> Bool {
     state.dawn.instance = wgpuCreateInstance(WGPUInstanceDescriptor {})
     if pointerIsNull(state.dawn.instance) {
         graphicsFail(.Device, "could not create a WebGPU instance")
@@ -412,8 +402,7 @@ function dawnCreateDeviceAndQueue(state: borrow mut EMGraphicsAppRuntimeState, r
 
 // Creates the surface for the window this run opened, chaining the HWND source
 // onto the descriptor.
-public @Native
-function dawnCreateSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
+public function dawnCreateSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
     let window = dawnWindowFor(dawnPlatformForHost())
     state.dawn.surface = window.createSurface(state.dawn.instance, state.dawn.window)
     if pointerIsNull(state.dawn.surface) {
@@ -438,8 +427,7 @@ function dawnCreateSurface(state: borrow mut EMGraphicsAppRuntimeState, width: I
 // Sizes the surface to the window's client area. Called at startup and again
 // whenever the client area changes, because a surface configured for one size
 // answers `Outdated` for every texture after it.
-public @Native
-function dawnConfigureSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
+public function dawnConfigureSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
     // A window that does not measure itself reports nothing, which means
     // "unchanged" rather than "failed". Win32 answers a client rectangle
     // whenever it is asked; a Wayland surface is told its size by a configure
@@ -472,8 +460,7 @@ function dawnConfigureSurface(state: borrow mut EMGraphicsAppRuntimeState, width
 // Releases everything the run created, in the order WebGPU's ownership implies:
 // the resources a device made, then the surface, the device, the adapter and the
 // instance.
-public @Native
-function dawnShutdown(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnShutdown(state: borrow mut EMGraphicsAppRuntimeState) {
     for slot in 0..state.dawn.objects.count {
         state.dawn.objects[slot] = nullPointer()
     }

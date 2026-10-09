@@ -4,8 +4,7 @@ import Foundation
 // materializes a descriptor set only when a pipeline layout is known, during a
 // draw; the list itself therefore needs no device handle here.
 
-public @Native
-function vulkanNewBindGroup(label: borrow String) -> BindGroup {
+public function vulkanNewBindGroup(label: borrow String) -> BindGroup {
     return BindGroup {
         storage: nativeState(BindGroupState {
             label: label
@@ -14,8 +13,7 @@ function vulkanNewBindGroup(label: borrow String) -> BindGroup {
     }
 }
 
-public @Native
-function vulkanCreateBindGroup(context: RawPtr, descriptor: borrow BindGroupDescriptor) -> BindGroupResult {
+public function vulkanCreateBindGroup(context: RawPtr, descriptor: borrow BindGroupDescriptor) -> BindGroupResult {
     if !vulkanRequireDevice(context, "vulkanCreateBindGroup") {
         return .Error(.DeviceRefused)
     }
@@ -38,15 +36,13 @@ function vulkanCreateBindGroup(context: RawPtr, descriptor: borrow BindGroupDesc
     return .Ok(group)
 }
 
-public @Native
-function vulkanCreateUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
+public function vulkanCreateUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
     let group = vulkanNewBindGroup(label)
     vulkanBindGroupAddUniform(group, uniformSlot, uniform)
     return .Ok(group)
 }
 
-public @Native
-function vulkanCreateStorageBufferBindGroup(label: borrow String, slot: Int, bufferId: U32) -> BindGroupResult {
+public function vulkanCreateStorageBufferBindGroup(label: borrow String, slot: Int, bufferId: U32) -> BindGroupResult {
     if slot < 0 || bufferId == 0 {
         return .Error(.DeviceRefused)
     }
@@ -60,13 +56,11 @@ function vulkanCreateStorageBufferBindGroup(label: borrow String, slot: Int, buf
     return .Ok(group)
 }
 
-public @Native
-function vulkanBeginBindGroup(label: borrow String) -> BindGroupResult {
+public function vulkanBeginBindGroup(label: borrow String) -> BindGroupResult {
     return .Ok(vulkanNewBindGroup(label))
 }
 
-public @Native
-function vulkanBindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) {
+public function vulkanBindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) {
     if group.id == 0 || slot < 0 || uniform.id == 0 {
         return
     }
@@ -80,8 +74,7 @@ function vulkanBindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: 
     return
 }
 
-public @Native
-function vulkanBindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) {
+public function vulkanBindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) {
     if slot < 0 || texture.viewId == 0 {
         return
     }
@@ -94,8 +87,7 @@ function vulkanBindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: 
     return
 }
 
-public @Native
-function vulkanBindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) {
+public function vulkanBindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) {
     if slot < 0 || sampler.id == 0 {
         return
     }
@@ -108,8 +100,7 @@ function vulkanBindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: 
     return
 }
 
-public @Native
-function vulkanCreateTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
+public function vulkanCreateTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
     let group = vulkanNewBindGroup(label)
     vulkanBindGroupAddTexture(group, textureSlot, texture)
     vulkanBindGroupAddSampler(group, samplerSlot, sampler)
@@ -118,7 +109,6 @@ function vulkanCreateTextureSamplerBindGroup(label: borrow String, textureSlot: 
 
 // Descriptor sets belong to the pipeline's descriptor pool, not to the public
 // group value. EMGraphics releases the CPU state box after this member returns.
-public @Native
-function vulkanDestroyBindGroup(group: borrow BindGroup) {
+public function vulkanDestroyBindGroup(group: borrow BindGroup) {
     return
 }

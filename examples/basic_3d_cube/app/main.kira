@@ -226,7 +226,6 @@ function cubeRenderPass() -> RenderPassDescriptor {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Basic 3D Cube"

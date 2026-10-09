@@ -2,8 +2,7 @@ import Foundation
 
 // Resource retirement and public destruction entry points.
 
-public @Native
-function vulkanDeferObjectRelease(state: borrow mut VulkanState, id: U32) -> Bool {
+public function vulkanDeferObjectRelease(state: borrow mut VulkanState, id: U32) -> Bool {
     if !state.frameActive { return false }
     for pending in state.pendingRetireObjects {
         if pending == id { return true }
@@ -12,8 +11,7 @@ function vulkanDeferObjectRelease(state: borrow mut VulkanState, id: U32) -> Boo
     return true
 }
 
-public @Native
-function vulkanReleaseRetiredObjects(state: borrow mut VulkanState) {
+public function vulkanReleaseRetiredObjects(state: borrow mut VulkanState) {
     for id in state.pendingRetireObjects {
         let kind = state.objectKinds[Int(id) - 1]
         if kind == vulkanObjectKindImageView() { vulkanReleaseImageView(state, id) }
@@ -29,8 +27,7 @@ function vulkanReleaseRetiredObjects(state: borrow mut VulkanState) {
     state.pendingRetirePipelines = []
 }
 
-public @Native
-function vulkanReleaseBuffer(state: borrow mut VulkanState, id: U32) {
+public function vulkanReleaseBuffer(state: borrow mut VulkanState, id: U32) {
     let buffer = vulkanObject(state, id)
     if pointerIsNull(buffer) {
         return
@@ -51,8 +48,7 @@ function vulkanReleaseBuffer(state: borrow mut VulkanState, id: U32) {
     return
 }
 
-public @Native
-function vulkanReleaseImageView(state: borrow mut VulkanState, id: U32) {
+public function vulkanReleaseImageView(state: borrow mut VulkanState, id: U32) {
     let view = vulkanObject(state, id)
     if pointerIsNull(view) {
         return
@@ -64,8 +60,7 @@ function vulkanReleaseImageView(state: borrow mut VulkanState, id: U32) {
     return
 }
 
-public @Native
-function vulkanReleaseImage(state: borrow mut VulkanState, id: U32) {
+public function vulkanReleaseImage(state: borrow mut VulkanState, id: U32) {
     let image = vulkanObject(state, id)
     if pointerIsNull(image) {
         return
@@ -81,8 +76,7 @@ function vulkanReleaseImage(state: borrow mut VulkanState, id: U32) {
     return
 }
 
-public @Native
-function vulkanDestroyBuffer(context: RawPtr, buffer: borrow EMGraphicsBuffer) {
+public function vulkanDestroyBuffer(context: RawPtr, buffer: borrow EMGraphicsBuffer) {
     if !vulkanHasDevice(context) {
         return
     }
@@ -91,8 +85,7 @@ function vulkanDestroyBuffer(context: RawPtr, buffer: borrow EMGraphicsBuffer) {
     return
 }
 
-public @Native
-function vulkanDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
+public function vulkanDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
     if !vulkanHasDevice(context) {
         return
     }
@@ -101,8 +94,7 @@ function vulkanDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
     return
 }
 
-public @Native
-function vulkanDestroySampler(context: RawPtr, sampler: borrow EMGraphicsSampler) {
+public function vulkanDestroySampler(context: RawPtr, sampler: borrow EMGraphicsSampler) {
     if !vulkanHasDevice(context) || sampler.id == 0 {
         return
     }
@@ -111,8 +103,7 @@ function vulkanDestroySampler(context: RawPtr, sampler: borrow EMGraphicsSampler
     return
 }
 
-public @Native
-function vulkanReleaseSampler(state: borrow mut VulkanState, id: U32) {
+public function vulkanReleaseSampler(state: borrow mut VulkanState, id: U32) {
     let handle = vulkanObject(state, id)
     if !pointerIsNull(handle) {
         if vulkanDeferObjectRelease(state, id) { return }
@@ -123,8 +114,7 @@ function vulkanReleaseSampler(state: borrow mut VulkanState, id: U32) {
     return
 }
 
-public @Native
-function vulkanDestroyTexture(context: RawPtr, texture: borrow EMGraphicsTexture) {
+public function vulkanDestroyTexture(context: RawPtr, texture: borrow EMGraphicsTexture) {
     if !vulkanHasDevice(context) || texture.id == 0 {
         return
     }

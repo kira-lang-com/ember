@@ -12,8 +12,7 @@
 // verification (the kik Test harness asserts pixels through the same paths via the
 // MetalSelfTest entry points).
 
-public @Native
-function metalRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr): Void {
+public function metalRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr): Void {
     // Become a foreground GUI app BEFORE creating the Metal device. The device
     // (MTLCreateSystemDefaultDevice) and the window both need a WindowServer
     // connection; establishing the app up front keeps the ordering explicit.

@@ -47,7 +47,6 @@ function uiDemoVertexLayout() -> VertexLayout {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember UI Demo"

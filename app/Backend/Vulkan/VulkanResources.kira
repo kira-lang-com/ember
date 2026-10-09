@@ -11,8 +11,7 @@ public function vulkanAligned(value: Int, alignment: Int) -> Int {
     return (value + alignment - 1) / alignment * alignment
 }
 
-public @Native
-function vulkanCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor) -> BufferResult {
+public function vulkanCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateBuffer") {
         return .Error(.DeviceRefused)
     }
@@ -33,8 +32,7 @@ function vulkanCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor
     })
 }
 
-public @Native
-function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBufferDescriptor) -> BufferResult {
+public function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBufferDescriptor) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateIndexBuffer") {
         return .Error(.DeviceRefused)
     }
@@ -60,8 +58,7 @@ function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBuffer
     })
 }
 
-public @Native
-function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, data: borrow [U32]) -> BufferResult {
+public function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, data: borrow [U32]) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateStorageBufferWords") {
         return .Error(.DeviceRefused)
     }
@@ -87,8 +84,7 @@ function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, d
     })
 }
 
-public @Native
-function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCapacity: Int) -> DynamicBufferResult {
+public function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCapacity: Int) -> DynamicBufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateDynamicBuffer") {
         return .Error(.DeviceRefused)
     }
@@ -119,8 +115,7 @@ function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatC
     })
 }
 
-public @Native
-function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow EMGraphicsBuffer) -> Int {
+public function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow EMGraphicsBuffer) -> Int {
     if !vulkanRequireDevice(context, "vulkanDynamicBufferFrameStart") {
         return 0
     }
@@ -136,8 +131,7 @@ function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow EMGraphic
     return Int(offset)
 }
 
-public @Native
-function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescriptor) -> UniformResult {
+public function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescriptor) -> UniformResult {
     if !vulkanRequireDevice(context, "vulkanCreateUniform") {
         return .Error(.DeviceRefused)
     }
@@ -163,8 +157,7 @@ function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescript
     })
 }
 
-public @Native
-function vulkanUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: borrow [F32]) {
+public function vulkanUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: borrow [F32]) {
     if !vulkanRequireDevice(context, "vulkanUpdateUniform") {
         return
     }
@@ -181,8 +174,7 @@ function vulkanUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: b
     return
 }
 
-public @Native
-function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescriptor) -> SamplerResult {
+public function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescriptor) -> SamplerResult {
     if !vulkanRequireDevice(context, "vulkanCreateSampler") {
         return .Error(.DeviceRefused)
     }
@@ -210,8 +202,7 @@ function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescript
     return .Ok(EMGraphicsSampler { id: id })
 }
 
-public @Native
-function vulkanCreateImageHandle(state: borrow mut VulkanState, descriptor: borrow TextureDescriptor) -> U32 {
+public function vulkanCreateImageHandle(state: borrow mut VulkanState, descriptor: borrow TextureDescriptor) -> U32 {
     let samples = vulkanSampleCount(descriptor.sampleCount <= 0 ? 1 : descriptor.sampleCount)
     if samples == I32(0) {
         graphicsFail(.Resource, "texture sampleCount must be one of 1, 2, 4, 8, 16, 32 or 64")
@@ -286,8 +277,7 @@ function vulkanCreateImageHandle(state: borrow mut VulkanState, descriptor: borr
     return id
 }
 
-public @Native
-function vulkanCreateImageView(state: borrow mut VulkanState, imageId: U32, format: I32, aspect: U32) -> U32 {
+public function vulkanCreateImageView(state: borrow mut VulkanState, imageId: U32, format: I32, aspect: U32) -> U32 {
     let image = vulkanObject(state, imageId)
     if pointerIsNull(image) {
         graphicsFail(.Resource, "a view was asked for image " + String(Int(imageId)) + ", which is not live")
@@ -316,8 +306,7 @@ function vulkanCreateImageView(state: borrow mut VulkanState, imageId: U32, form
     return vulkanRegisterObject(state, view, nullPointer(), nullPointer(), U64(0), format, vulkanObjectKindImageView())
 }
 
-public @Native
-function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescriptor) -> TextureResult {
+public function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescriptor) -> TextureResult {
     if !vulkanRequireDevice(context, "vulkanCreateTexture") {
         return .Error(.DeviceRefused)
     }
@@ -378,8 +367,7 @@ function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescript
     })
 }
 
-public @Native
-function vulkanCreateTextureFromPixels(context: RawPtr, descriptor: borrow TextureDescriptor, pixels: borrow [U8]) -> TextureResult {
+public function vulkanCreateTextureFromPixels(context: RawPtr, descriptor: borrow TextureDescriptor, pixels: borrow [U8]) -> TextureResult {
     if pixels.count != descriptor.width * descriptor.height * 4 {
         graphicsFail(.Resource, "texture '" + descriptor.label + "' is " + String(descriptor.width) + "x" + String(descriptor.height) + " RGBA, which is " + String(descriptor.width * descriptor.height * 4) + " bytes, and was given " + String(pixels.count))
         return .Error(.DeviceRefused)
@@ -393,8 +381,7 @@ function vulkanCreateTextureFromPixels(context: RawPtr, descriptor: borrow Textu
     }
 }
 
-public @Native
-function vulkanUpdateTexture(context: RawPtr, texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
+public function vulkanUpdateTexture(context: RawPtr, texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
     if width != texture.width || height != texture.height {
         graphicsFail(.Resource, "texture update dimensions do not match the texture")
         return
@@ -407,14 +394,12 @@ function vulkanUpdateTexture(context: RawPtr, texture: borrow EMGraphicsTexture,
     return
 }
 
-public @Native
-function vulkanUpdateTextureBytes(context: RawPtr, texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
+public function vulkanUpdateTextureBytes(context: RawPtr, texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
     vulkanUploadTexture(context, texture, [], bytes, byteCount)
     return
 }
 
-public @Native
-function vulkanUploadTexture(context: RawPtr, texture: borrow EMGraphicsTexture, pixels: borrow [U8], bytes: RawPtr, byteCount: Int) {
+public function vulkanUploadTexture(context: RawPtr, texture: borrow EMGraphicsTexture, pixels: borrow [U8], bytes: RawPtr, byteCount: Int) {
     if !vulkanRequireDevice(context, "vulkanUploadTexture") {
         return
     }
@@ -457,8 +442,7 @@ function vulkanUploadTexture(context: RawPtr, texture: borrow EMGraphicsTexture,
 }
 
 
-public @Native
-function vulkanTransitionImage(state: borrow mut VulkanState, imageId: U32, newLayout: I32, srcStage: U32, dstStage: U32, srcAccess: U32, dstAccess: U32, aspect: U32) {
+public function vulkanTransitionImage(state: borrow mut VulkanState, imageId: U32, newLayout: I32, srcStage: U32, dstStage: U32, srcAccess: U32, dstAccess: U32, aspect: U32) {
     let image = vulkanObject(state, imageId)
     if pointerIsNull(image) || pointerIsNull(state.commandBuffer) {
         return
@@ -517,8 +501,7 @@ function vulkanTransitionImage(state: borrow mut VulkanState, imageId: U32, newL
     return
 }
 
-public @Native
-function vulkanRecordBufferToImage(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
+public function vulkanRecordBufferToImage(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
     let source = vulkanObject(state, stagingId)
     let target = vulkanObject(state, imageId)
     if pointerIsNull(source) || pointerIsNull(target) {
@@ -541,8 +524,7 @@ function vulkanRecordBufferToImage(state: borrow mut VulkanState, stagingId: U32
     return
 }
 
-public @Native
-function vulkanCopyBufferToImageImmediate(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
+public function vulkanCopyBufferToImageImmediate(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
     vkQueueWaitIdle(state.queue)
     vkResetCommandBuffer(state.commandBuffer, U32(0))
     vkBeginCommandBuffer(state.commandBuffer, VkCommandBufferBeginInfo {

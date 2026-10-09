@@ -5,8 +5,7 @@
 // the separable texture blur behind Liquid Glass.
 
 // Build an MTLComputePipelineState from a compiled shader library + kernel entry name.
-public @Native
-function metalCreateComputePipeline(ctx: RawPtr, shaderId: Int, entryName: borrow String) -> Int {
+public function metalCreateComputePipeline(ctx: RawPtr, shaderId: Int, entryName: borrow String) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let library = metalLookup(ctx, shaderId)
     let fnName: RawPtr = metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), entryName)
@@ -27,8 +26,7 @@ function metalCreateComputePipeline(ctx: RawPtr, shaderId: Int, entryName: borro
 // corresponding final textures. Keeping both stages on the frame command buffer
 // preserves render -> compute -> render order without a commit or CPU wait.
 // Non-Metal callers never enter this helper.
-public @Native
-function metalDispatchTextureComputePair(
+public function metalDispatchTextureComputePair(
     ctx: RawPtr,
     horizontalPipelineId: Int,
     verticalPipelineId: Int,
@@ -112,8 +110,7 @@ function metalDispatchTextureComputePair(
 // Metal's storage is shared, so what a dispatch wrote is readable as soon as the
 // command buffer it rode on has completed — which is what a headless gate waits
 // on before it asks. There is no staging copy to make and no fence to take.
-public @Native
-function metalReadBufferU32(ctx: RawPtr, bufferId: Int, index: Int) -> U32 {
+public function metalReadBufferU32(ctx: RawPtr, bufferId: Int, index: Int) -> U32 {
     if bufferId == 0 || index < 0 {
         return U32(0)
     }
@@ -134,8 +131,7 @@ function metalReadBufferU32(ctx: RawPtr, bufferId: Int, index: Int) -> U32 {
 // its buffers, so the texture takes the texture table's slot 0 and the buffers
 // keep buffer slots 0, 1, … — two tables, each numbered from zero, which is how
 // MSL binds them.
-public @Native
-function metalDispatchTextureBufferCompute(
+public function metalDispatchTextureBufferCompute(
     ctx: RawPtr,
     pipelineId: Int,
     textureId: Int,
@@ -179,8 +175,7 @@ function metalDispatchTextureBufferCompute(
 //
 // Encoded on the frame's command buffer like the pair above, so a step that
 // runs before a draw is ordered before it without a commit or a CPU wait.
-public @Native
-function metalDispatchComputeBuffers(
+public function metalDispatchComputeBuffers(
     ctx: RawPtr,
     pipelineId: Int,
     bufferIds: borrow [U32],

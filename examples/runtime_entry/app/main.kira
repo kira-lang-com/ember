@@ -8,7 +8,6 @@ struct RuntimeState {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Runtime Entry"

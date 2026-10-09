@@ -17,7 +17,6 @@ struct MetalUIKitApplication {
     })
 }
 
-@Native
 function metalUIKitApplicationPointer() -> RawPtr {
     let cls = metalObjcGetClass("KiraMetalApplicationDelegate")
     if pointerIsNull(cls) { return RawPtr(0) }
@@ -25,7 +24,6 @@ function metalUIKitApplicationPointer() -> RawPtr {
     return metalMsgSend(value, metalSel("pointerValue"))
 }
 
-@Native
 function metalUIKitLaunchApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Bool {
     if !pointerIsNull(metalUIKitApplicationPointer()) {
         return false
@@ -50,7 +48,6 @@ function metalUIKitLaunchApplication(app: borrow EMGraphicsApplication, runtimeU
     return true
 }
 
-@Native
 function metalUIKitDidFinishLaunching(delegate: RawPtr, selector: RawPtr, application: RawPtr, options: RawPtr) -> Bool {
     let _ = selector
     let _ = application
@@ -58,7 +55,6 @@ function metalUIKitDidFinishLaunching(delegate: RawPtr, selector: RawPtr, applic
     return true
 }
 
-@Native
 function metalUIKitConnectScene(delegate: RawPtr, selector: RawPtr, scene: RawPtr, session: RawPtr, options: RawPtr) {
     let _ = selector
     let _ = session
@@ -86,7 +82,6 @@ function metalUIKitConnectScene(delegate: RawPtr, selector: RawPtr, scene: RawPt
     return
 }
 
-@Native
 function metalUIKitRunApplication(delegate: RawPtr, selector: RawPtr, timer: RawPtr) {
     let _ = delegate
     let _ = selector
@@ -96,13 +91,11 @@ function metalUIKitRunApplication(delegate: RawPtr, selector: RawPtr, timer: Raw
     return
 }
 
-@Native
 function metalUIKitContentView() -> RawPtr {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     return state.view
 }
 
-@Native
 function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: EMAppEventKind) {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     if kind == .TouchesBegan {
@@ -124,7 +117,6 @@ function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: EMAppEventKi
     return
 }
 
-@Native
 function metalUIKitTouchesBegan(view: RawPtr, selector: RawPtr, touches: RawPtr, event: RawPtr) {
     let _ = selector
     let _ = event
@@ -132,7 +124,6 @@ function metalUIKitTouchesBegan(view: RawPtr, selector: RawPtr, touches: RawPtr,
     return
 }
 
-@Native
 function metalUIKitTouchesMoved(view: RawPtr, selector: RawPtr, touches: RawPtr, event: RawPtr) {
     let _ = selector
     let _ = event
@@ -140,7 +131,6 @@ function metalUIKitTouchesMoved(view: RawPtr, selector: RawPtr, touches: RawPtr,
     return
 }
 
-@Native
 function metalUIKitTouchesEnded(view: RawPtr, selector: RawPtr, touches: RawPtr, event: RawPtr) {
     let _ = selector
     let _ = event
@@ -148,7 +138,6 @@ function metalUIKitTouchesEnded(view: RawPtr, selector: RawPtr, touches: RawPtr,
     return
 }
 
-@Native
 function metalUIKitTakeEvents() -> [EMAppEvent] {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     let events = move state.events
@@ -156,15 +145,13 @@ function metalUIKitTakeEvents() -> [EMAppEvent] {
     return move events
 }
 
-public @Native
-function metalUIKitSafeAreaInsets() -> EMViewportInsets {
+public function metalUIKitSafeAreaInsets() -> EMViewportInsets {
     if !metalUsesUIKit!() { return EMViewportInsets {} }
     let view = metalUIKitContentView()
     let insets: MetalUIKitInsets = metalMsgSend(view, metalSel("safeAreaInsets"))
     return EMViewportInsets { top: insets.top, leading: insets.left, bottom: insets.bottom, trailing: insets.right }
 }
 
-@Native
 function metalUIKitTouchesCancelled(view: RawPtr, selector: RawPtr, touches: RawPtr, event: RawPtr) {
     let _ = selector
     let _ = event
@@ -174,8 +161,7 @@ function metalUIKitTouchesCancelled(view: RawPtr, selector: RawPtr, touches: Raw
 
 // UIKit's event loop owns the thread between display ticks. Rendering never
 // pumps a nested run loop, so touch delivery and presentation share its cadence.
-public @Native
-function metalUIKitStartFrames(renderFrame: () -> Bool, cleanup: () -> Void, liveState: NativeState<MetalLiveState>) {
+public function metalUIKitStartFrames(renderFrame: () -> Bool, cleanup: () -> Void, liveState: NativeState<MetalLiveState>) {
     var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
     state.liveState = move liveState
     state.renderFrame = move renderFrame
@@ -198,7 +184,6 @@ function metalUIKitStartFrames(renderFrame: () -> Bool, cleanup: () -> Void, liv
     return
 }
 
-@Native
 function metalUIKitRenderFrame(delegate: RawPtr, selector: RawPtr, link: RawPtr) {
     let _ = delegate
     let _ = selector

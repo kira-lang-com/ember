@@ -16,8 +16,7 @@ public function metalActivationPolicyRegular() -> U64 { return 0 }
 // yet become a foreground app can hang in MTLCreateSystemDefaultDevice (its
 // GPU/WindowServer XPC never gets serviced under App Nap / background status).
 // Idempotent — sharedApplication is a singleton.
-public @Native
-function metalActivateApp(): Void {
+public function metalActivateApp(): Void {
     if metalUsesUIKit!() { return }
     let app: RawPtr = metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication"))
     metalMsgSend(app, metalSel("setActivationPolicy:"), metalActivationPolicyRegular())
@@ -27,8 +26,7 @@ function metalActivateApp(): Void {
 }
 
 // Create the application + window and return the content view to render into.
-public @Native
-function metalCreateWindow(width: Int, height: Int, title: borrow String, mode: borrow EMWindowMode, titlebar: borrow EMWindowTitlebar) -> RawPtr {
+public function metalCreateWindow(width: Int, height: Int, title: borrow String, mode: borrow EMWindowMode, titlebar: borrow EMWindowTitlebar) -> RawPtr {
     if metalUsesUIKit!() { return metalUIKitContentView() }
     let app: RawPtr = metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication"))
     metalMsgSend(app, metalSel("setActivationPolicy:"), metalActivationPolicyRegular())
@@ -57,8 +55,7 @@ function metalCreateWindow(width: Int, height: Int, title: borrow String, mode: 
 // has the same signature. A press on a control drawn on the bar is then the
 // control's, and the part the application draws as bare title bar still moves
 // the window, through the drag region the event pump hands the window.
-public @Native
-function metalViewKeepPresses(view: RawPtr): Void {
+public function metalViewKeepPresses(view: RawPtr): Void {
     var cls = metalObjcGetClass("KiraMetalContentView")
     if pointerIsNull(cls) {
         cls = metalObjcAllocateClassPair(metalObjectGetClass(view), "KiraMetalContentView", 0)
@@ -73,8 +70,7 @@ function metalViewKeepPresses(view: RawPtr): Void {
 }
 
 // Pump the main run loop for `seconds` so Core Animation / timers run between frames.
-public @Native
-function metalSpinRunLoop(seconds: Float) {
+public function metalSpinRunLoop(seconds: Float) {
     let runloop: RawPtr = metalMsgSend(metalObjcGetClass("NSRunLoop"), metalSel("currentRunLoop"))
     let until: RawPtr = metalMsgSend(metalObjcGetClass("NSDate"), metalSel("dateWithTimeIntervalSinceNow:"), seconds)
     metalMsgSend(runloop, metalSel("runUntilDate:"), until)
@@ -82,8 +78,7 @@ function metalSpinRunLoop(seconds: Float) {
 }
 
 // The shared NSApplication (singleton), used to dispatch the event queue each frame.
-public @Native
-function metalSharedApp() -> RawPtr {
+public function metalSharedApp() -> RawPtr {
     if metalUsesUIKit!() { return metalMsgSend(metalObjcGetClass("UIApplication"), metalSel("sharedApplication")) }
     return metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication"))
 }
@@ -91,8 +86,7 @@ function metalSharedApp() -> RawPtr {
 // Cursor visibility on the native Metal window path (Sokol's sapp_show_mouse is a
 // no-op here). `[NSCursor hide]`/`[NSCursor unhide]` are counted, so calls must be
 // balanced — one hide per one unhide.
-public @Native
-function metalSetCursorHidden(hidden: Bool) {
+public function metalSetCursorHidden(hidden: Bool) {
     let cls = metalObjcGetClass("NSCursor")
     if hidden {
         metalMsgSend(cls, metalSel("hide"))
@@ -139,8 +133,7 @@ public function metalLockCoordLoad(raw: U64) -> Float {
 // Idempotent at the OS level (unlike `[NSCursor hide]`, this is a flag rather
 // than a count), but callers should still pair lock with unlock so the pointer
 // never stays frozen after a drag ends.
-public @Native
-function metalSetMouseLocked(locked: Bool) {
+public function metalSetMouseLocked(locked: Bool) {
     let _ = metalPlatformAssociateMouseAndCursor!(locked == false)
     return
 }
@@ -157,8 +150,7 @@ public struct MetalLiveState {
 // Keep frame construction and the application's frame-handler call behind a
 // native-to-native RawPtr-only seam. In a hybrid build the Objective-C callback
 // must not make RenderFrame cross through the bytecode half.
-public @Native
-function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: RawPtr) {
+public function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: RawPtr) {
     let pool = metalAutoreleasePoolPush()
     metalContextBeginFrameTiming(ctx)
     metalContextSyncViewportFromView(ctx)
@@ -181,8 +173,7 @@ function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: Ra
 // Kira frame loop is blocked. Submit a complete app frame here so layout and
 // rendering follow every intermediate window size instead of stretching the
 // last texture until mouse-up.
-public @Native
-function metalResizeImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
+public function metalResizeImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
     let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
     if pointerIsNull(value) {
         return
@@ -198,8 +189,7 @@ function metalResizeImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Voi
 
 // Closing is distinct from hiding or minimizing: hidden windows deliberately keep
 // rendering at half display cadence, while a real close terminates the app loop.
-public @Native
-function metalWindowCloseImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
+public function metalWindowCloseImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
     let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
     if pointerIsNull(value) {
         return
@@ -213,8 +203,7 @@ function metalWindowCloseImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr)
     return
 }
 
-public @Native
-function metalLiveStateClosed(statePtr: RawPtr) -> Bool {
+public function metalLiveStateClosed(statePtr: RawPtr) -> Bool {
     let state = nativeRecover<MetalLiveState>(statePtr)
     return state.closed
 }
@@ -223,8 +212,7 @@ function metalLiveStateClosed(statePtr: RawPtr) -> Bool {
 // above, instantiate it, associate the live state with it, and set it as the window's
 // delegate. OBJC_ASSOCIATION_RETAIN_NONATOMIC = 1 keeps the NSValue carrying the
 // state pointer alive until `metalRemoveResizeDelegate` tears the callback down.
-public @Native
-function metalInstallResizeDelegate(window: RawPtr, statePtr: RawPtr) -> RawPtr {
+public function metalInstallResizeDelegate(window: RawPtr, statePtr: RawPtr) -> RawPtr {
     if metalUsesUIKit!() { return RawPtr(0) }
     var cls = metalObjcGetClass("KiraMetalResizeDelegate")
     if pointerIsNull(cls) {
@@ -245,8 +233,7 @@ function metalInstallResizeDelegate(window: RawPtr, statePtr: RawPtr) -> RawPtr 
 // Detach the callback before its native state is destroyed. The delegate was
 // created with `alloc`, so clearing the association and releasing it here also
 // balances the Objective-C ownership established by installation.
-public @Native
-function metalRemoveResizeDelegate(window: RawPtr, delegate: RawPtr) {
+public function metalRemoveResizeDelegate(window: RawPtr, delegate: RawPtr) {
     if metalUsesUIKit!() { return }
     if pointerIsNull(delegate) {
         return
@@ -258,8 +245,7 @@ function metalRemoveResizeDelegate(window: RawPtr, delegate: RawPtr) {
 }
 
 // Whether the content view's window is still on screen (false once closed).
-public @Native
-function metalViewWindowVisible(view: RawPtr) -> Bool {
+public function metalViewWindowVisible(view: RawPtr) -> Bool {
     if metalUsesUIKit!() { return metalViewWindowState(view) != 3 }
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {
@@ -271,8 +257,7 @@ function metalViewWindowVisible(view: RawPtr) -> Bool {
 // 1 = focused and visible, 2 = unfocused but still visible/unoccluded,
 // 3 = hidden, minimized, or occluded. Both visible states run at full display
 // cadence; only state 3 is throttled.
-public @Native
-function metalViewWindowState(view: RawPtr) -> Int {
+public function metalViewWindowState(view: RawPtr) -> Int {
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {
         return 3
@@ -295,8 +280,7 @@ function metalViewWindowState(view: RawPtr) -> Int {
     return 2
 }
 
-public @Native
-function metalViewMaximumFramesPerSecond(view: RawPtr) -> Int {
+public function metalViewMaximumFramesPerSecond(view: RawPtr) -> Int {
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {
         return 60
@@ -321,8 +305,7 @@ public function metalWindowTargetInterval(state: Int, maximumFramesPerSecond: In
 
 // Return only the unspent part of the hidden-window frame budget. Sleeping for a
 // full 1/30 s after 14 ms of GPU work would produce ~21 FPS, not half-vsync.
-public @Native
-function metalWindowRemainingInterval(frameStartNs: U64, state: Int, maximumFramesPerSecond: Int) -> Float {
+public function metalWindowRemainingInterval(frameStartNs: U64, state: Int, maximumFramesPerSecond: Int) -> Float {
     let target = metalWindowTargetInterval(state, maximumFramesPerSecond)
     if state != 3 { return 0.0 }
     let now = metalClockNs(metalClockUptimeRaw())

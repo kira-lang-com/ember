@@ -124,8 +124,7 @@ public function metalOffsetMachTimeDenom() -> U64 { return 384 }
 
 
 // Allocate the context block and create the device + command queue.
-public @Native
-function metalContextAlloc() -> RawPtr {
+public function metalContextAlloc() -> RawPtr {
     let ctx = metalMemAlloc(metalContextSize())
     let device = metalCreateSystemDefaultDevice()
     let queue: RawPtr = metalMsgSend(device, metalSel("newCommandQueue"))
@@ -196,8 +195,7 @@ function metalContextAlloc() -> RawPtr {
 // in the on-screen integration. Switching a context to layer mode makes each pass
 // acquire and present a CAMetalLayer drawable instead of rendering to a fixed
 // offscreen texture.
-public @Native
-function metalContextAttachLayer(ctx: RawPtr, width: Int, height: Int) {
+public function metalContextAttachLayer(ctx: RawPtr, width: Int, height: Int) {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let layerClass = metalObjcGetClass("CAMetalLayer")
     let layerAlloc: RawPtr = metalMsgSend(layerClass, metalSel("alloc"))
@@ -219,8 +217,7 @@ function metalContextAttachLayer(ctx: RawPtr, width: Int, height: Int) {
 // shutdown (metalRunApplication) so these process-lifetime objects — the render/
 // compute pipelines, shader libraries, buffers, textures, samplers, the command
 // queue and its dispatch sources, and the device — do not survive to `leaks --atExit`.
-public @Native
-function metalContextFree(ctx: RawPtr) {
+public function metalContextFree(ctx: RawPtr) {
     // First: wait out every frame still in flight and drop the pacing state. Nothing
     // below may release a buffer or texture a running frame is reading.
     metalPacingFree(ctx)
@@ -304,8 +301,7 @@ public function metalPixelFormatForTexture(kiraFormat: Int) -> U64 {
 }
 
 // Allocate an offscreen BGRA8 render target and make it the context's color target.
-public @Native
-function metalContextAttachOffscreen(ctx: RawPtr, width: Int, height: Int) {
+public function metalContextAttachOffscreen(ctx: RawPtr, width: Int, height: Int) {
     metalContextAttachOffscreenFormat(ctx, width, height, metalPixelFormatBGRA8Unorm())
     return
 }
@@ -318,8 +314,7 @@ function metalContextAttachOffscreen(ctx: RawPtr, width: Int, height: Int) {
 // width/height stay in points, the color target is points x scale physical
 // pixels, and physicalWidth records the factor — the same shape the on-screen
 // layer path produces, so scale-dependent rendering bugs reproduce offscreen.
-public @Native
-function metalContextAttachOffscreenFormat(ctx: RawPtr, width: Int, height: Int, pixelFormat: U64) {
+public function metalContextAttachOffscreenFormat(ctx: RawPtr, width: Int, height: Int, pixelFormat: U64) {
     var scaleFactor = 1
     let scaleEnv = metalGetEnv("KIRA_METAL_OFFSCREEN_SCALE")
     if !pointerIsNull(scaleEnv) {
@@ -351,8 +346,7 @@ function metalContextAttachOffscreenFormat(ctx: RawPtr, width: Int, height: Int,
 // (usage = RenderTarget | ShaderRead), registered so it can be targeted by a pass
 // and bound to a later pass. Enables multi-pass rendering (e.g. deferred resolve:
 // pass 1 -> visibility texture, pass 2 samples it -> final color).
-public @Native
-function metalCreateColorTargetTexture(ctx: RawPtr, width: Int, height: Int, pixelFormat: U64, storage: Int) -> Int {
+public function metalCreateColorTargetTexture(ctx: RawPtr, width: Int, height: Int, pixelFormat: U64, storage: Int) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let descClass = metalObjcGetClass("MTLTextureDescriptor")
     let desc: RawPtr = metalMsgSend(descClass, metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"), pixelFormat, width, height, false)
@@ -373,8 +367,7 @@ function metalCreateColorTargetTexture(ctx: RawPtr, width: Int, height: Int, pix
 // offscreen color texture). Used for intermediate passes in multi-pass rendering. Does
 // not touch the context colorTexture slot, so a later swapchain pass + readback still
 // see the final image.
-public @Native
-function metalContextBeginClearTarget(ctx: RawPtr, textureId: Int, loadAction: U64, r: Float, g: Float, b: Float, a: Float, depthEnabled: Bool) {
+public function metalContextBeginClearTarget(ctx: RawPtr, textureId: Int, loadAction: U64, r: Float, g: Float, b: Float, a: Float, depthEnabled: Bool) {
     metalContextCountPass(ctx)
     let texture = metalLookup(ctx, textureId)
     let rpClass = metalObjcGetClass("MTLRenderPassDescriptor")
@@ -411,8 +404,7 @@ function metalContextBeginClearTarget(ctx: RawPtr, textureId: Int, loadAction: U
 // context (sized to the current color target, in physical pixels, like the
 // offscreen target it pairs with — sizing it in points left Retina depth at
 // half resolution under a full-resolution color buffer).
-public @Native
-function metalContextAttachDepth(ctx: RawPtr) {
+public function metalContextAttachDepth(ctx: RawPtr) {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     var width = metalContextPhysicalWidth(ctx)
     var height = metalContextPhysicalHeight(ctx)
@@ -445,8 +437,7 @@ function metalContextAttachDepth(ctx: RawPtr) {
 // each pass acquires and presents a drawable from the on-screen layer. macOS sets
 // the view layer-backed via setWantsLayer:/setLayer:; on iOS a UIView is already
 // layer-backed and the layer is added as a sublayer by the runner.
-public @Native
-function metalContextAttachLayerToView(ctx: RawPtr, viewPtr: RawPtr, width: Int, height: Int, readable: Bool) {
+public function metalContextAttachLayerToView(ctx: RawPtr, viewPtr: RawPtr, width: Int, height: Int, readable: Bool) {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let layerClass = metalObjcGetClass("CAMetalLayer")
     let layer: RawPtr = metalMsgSend(metalMsgSend(layerClass, metalSel("alloc")), metalSel("init"))
@@ -514,8 +505,7 @@ function metalContextAttachLayerToView(ctx: RawPtr, viewPtr: RawPtr, width: Int,
 // An occluded/hidden window may stop vending CAMetalLayer drawables. Keep ticking
 // the application against one private render target instead; when the window is
 // visible again the next frame returns to the layer and this fallback is released.
-public @Native
-function metalContextHiddenTarget(ctx: RawPtr) -> RawPtr {
+public function metalContextHiddenTarget(ctx: RawPtr) -> RawPtr {
     var width = metalMemReadU64(ctx, metalOffsetPhysicalWidth())
     if width == 0 {
         width = metalMemReadU64(ctx, metalOffsetWidth())
@@ -546,8 +536,7 @@ function metalContextHiddenTarget(ctx: RawPtr) -> RawPtr {
     return texture
 }
 
-public @Native
-function metalContextReleaseHiddenTarget(ctx: RawPtr) {
+public function metalContextReleaseHiddenTarget(ctx: RawPtr) {
     let texture = metalMemReadPtr(ctx, metalOffsetHiddenTexture())
     if !pointerIsNull(texture) {
         metalMsgSend(texture, metalSel("release"))

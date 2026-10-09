@@ -24,8 +24,7 @@ public class EMUniform {
     var id: U32 = 0
 }
 
-public @Native
-function emptyUniform() -> EMUniform {
+public function emptyUniform() -> EMUniform {
     return EMUniform {
         storage: nativeState(UniformState {}),
         id: 0
@@ -36,8 +35,7 @@ function emptyUniform() -> EMUniform {
 // hands back the live value the draw path reads from — there is no device
 // call to make: a uniform's bytes reach the GPU only at the draw that binds
 // them, through `sokolApplyUniformFloats`.
-public @Native
-function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> EMUniform {
+public function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> EMUniform {
     if descriptor.expectedFloatCount <= 0 {
         graphicsFail(.Resource, "uniform buffer '" + descriptor.label + "' needs a positive expected float count")
         return emptyUniform()
@@ -59,8 +57,7 @@ function sokolCreateUniform(descriptor: borrow UniformDescriptor) -> EMUniform {
 }
 
 // Replaces a uniform's current values in place.
-public @Native
-function setUniformValues(uniform: borrow EMUniform, data: borrow [F32]) {
+public function setUniformValues(uniform: borrow EMUniform, data: borrow [F32]) {
     var state = nativeRecover<UniformState>(uniform.storage)
     state.values = data
     return
@@ -68,8 +65,7 @@ function setUniformValues(uniform: borrow EMUniform, data: borrow [F32]) {
 
 // The uniform's current values, for the draw path (see `SokolDraw.kira`) to
 // read.
-public @Native
-function sokolUniformState(uniform: borrow EMUniform) -> UniformState {
+public function sokolUniformState(uniform: borrow EMUniform) -> UniformState {
     return nativeRecover<UniformState>(uniform.storage)
 }
 
@@ -77,7 +73,6 @@ function sokolUniformState(uniform: borrow EMUniform) -> UniformState {
 // device resource behind it, so there is nothing to release beyond what
 // Kira's own memory management already does when the last reference goes
 // away.
-public @Native
-function sokolDestroyUniformId(uniformId: U32) {
+public function sokolDestroyUniformId(uniformId: U32) {
     return
 }

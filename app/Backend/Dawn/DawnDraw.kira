@@ -13,8 +13,7 @@ import Foundation
 // state until the pipeline, the slot or its entries change.
 
 // Whether a draw issued through this runtime may proceed.
-public @Native
-function dawnPassIsActive(runtime: RawPtr) -> Bool {
+public function dawnPassIsActive(runtime: RawPtr) -> Bool {
     if pointerIsNull(runtime) {
         return false
     }
@@ -27,8 +26,7 @@ function dawnPassIsActive(runtime: RawPtr) -> Bool {
 // a partition of it, so they are merged and bound at index 0. A pipeline built
 // from WGSL a caller wrote has whatever groups that caller declared, so each
 // slot is bound at its own index. Answers whether the draw may proceed.
-public @Native
-function dawnApplyBindings(
+public function dawnApplyBindings(
     state: borrow mut EMGraphicsAppRuntimeState,
     pipelineHandle: RawPtr,
     pipelineId: U32,
@@ -60,8 +58,7 @@ function dawnApplyBindings(
 }
 
 // Binds one group at `slot`, if the encoder has one there.
-public @Native
-function dawnApplyBindGroup(state: borrow mut EMGraphicsAppRuntimeState, pipelineHandle: RawPtr, pipelineId: U32, slot: Int, group: borrow BindGroup, present: Bool) {
+public function dawnApplyBindGroup(state: borrow mut EMGraphicsAppRuntimeState, pipelineHandle: RawPtr, pipelineId: U32, slot: Int, group: borrow BindGroup, present: Bool) {
     if !present {
         return
     }
@@ -78,8 +75,7 @@ function dawnApplyBindGroup(state: borrow mut EMGraphicsAppRuntimeState, pipelin
     return
 }
 
-public @Native
-function dawnDrawWithBindings(
+public function dawnDrawWithBindings(
     runtime: RawPtr,
     hasScissor: Bool,
     scissorX: Int,
@@ -171,8 +167,7 @@ function dawnDrawWithBindings(
 
 // A GPU-driven draw: the vertex and instance counts come out of a buffer a
 // compute pass wrote rather than from the CPU.
-public @Native
-function dawnEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBufferId: Int) {
+public function dawnEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBufferId: Int) {
     if !dawnPassIsActive(encoder.dawnRuntime) {
         return
     }
@@ -209,8 +204,7 @@ function dawnEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBuf
 }
 
 // Counts one draw and the primitives it rasterized, for `frame.statistics()`.
-public @Native
-function dawnNoteDraw(state: borrow mut EMGraphicsAppRuntimeState, elementCount: Int) {
+public function dawnNoteDraw(state: borrow mut EMGraphicsAppRuntimeState, elementCount: Int) {
     state.dawn.stats.drawCount = state.dawn.stats.drawCount + 1
     state.dawn.stats.triangleCount = state.dawn.stats.triangleCount + elementCount / 3
     return

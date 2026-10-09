@@ -42,8 +42,7 @@ public struct RenderPassDescriptor {
     var hasStencilAttachment: Bool = false
 }
 
-public @Native
-function emptyRenderTarget() -> RenderTarget {
+public function emptyRenderTarget() -> RenderTarget {
     return RenderTarget {
         kind: .Swapchain,
         texture: emptyGraphicsTexture(),
@@ -52,8 +51,7 @@ function emptyRenderTarget() -> RenderTarget {
     }
 }
 
-public @Native
-function emptyDepthAttachment() -> DepthAttachment {
+public function emptyDepthAttachment() -> DepthAttachment {
     return DepthAttachment {
         texture: emptyGraphicsTexture(),
         loadAction: .Clear,
@@ -63,8 +61,7 @@ function emptyDepthAttachment() -> DepthAttachment {
     }
 }
 
-public @Native
-function swapchainDepthAttachment() -> DepthAttachment {
+public function swapchainDepthAttachment() -> DepthAttachment {
     return DepthAttachment {
         texture: emptyGraphicsTexture(),
         loadAction: .Clear,
@@ -74,8 +71,7 @@ function swapchainDepthAttachment() -> DepthAttachment {
     }
 }
 
-public @Native
-function emptyStencilAttachment() -> StencilAttachment {
+public function emptyStencilAttachment() -> StencilAttachment {
     return StencilAttachment {
         texture: emptyGraphicsTexture(),
         loadAction: .Clear,
@@ -85,8 +81,7 @@ function emptyStencilAttachment() -> StencilAttachment {
     }
 }
 
-public @Native
-function swapchainRenderTarget() -> RenderTarget {
+public function swapchainRenderTarget() -> RenderTarget {
     return RenderTarget {
         kind: .Swapchain,
         texture: emptyGraphicsTexture(),
@@ -95,7 +90,6 @@ function swapchainRenderTarget() -> RenderTarget {
     }
 }
 
-@Native
 // The same pass, drawn into a TEXTURE instead of into the window.
 //
 // This is what a program with no window of its own presents through: a component

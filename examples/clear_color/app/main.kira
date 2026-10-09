@@ -2,7 +2,6 @@ import Ember
 import Foundation
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Clear Color"

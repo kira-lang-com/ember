@@ -97,8 +97,7 @@ public function vulkanDescriptorBindings(reflection: borrow KslResourceReflectio
     return bindings
 }
 
-public @Native
-function vulkanCreateDescriptorSetLayouts(state: borrow mut VulkanState, reflection: borrow KslResourceReflection) -> [RawPtr] {
+public function vulkanCreateDescriptorSetLayouts(state: borrow mut VulkanState, reflection: borrow KslResourceReflection) -> [RawPtr] {
     let groupCount = vulkanReflectionGroupCount(reflection)
     var layouts: [RawPtr] = []
     var group = 0
@@ -125,8 +124,7 @@ function vulkanCreateDescriptorSetLayouts(state: borrow mut VulkanState, reflect
     return layouts
 }
 
-public @Native
-function vulkanRecordPipeline(state: borrow mut VulkanState, record: VulkanPipelineRecord) -> Int {
+public function vulkanRecordPipeline(state: borrow mut VulkanState, record: VulkanPipelineRecord) -> Int {
     for index in 0..state.pipelines.count {
         if !state.pipelines[index].live {
             state.pipelines[index] = record
@@ -139,8 +137,7 @@ function vulkanRecordPipeline(state: borrow mut VulkanState, record: VulkanPipel
     return state.pipelines.count
 }
 
-public @Native
-function vulkanPipelineRecord(state: borrow VulkanState, id: Int) -> VulkanPipelineRecord {
+public function vulkanPipelineRecord(state: borrow VulkanState, id: Int) -> VulkanPipelineRecord {
     let index = id - 1
     if index < 0 || index >= state.pipelines.count {
         return VulkanPipelineRecord {
@@ -152,8 +149,7 @@ function vulkanPipelineRecord(state: borrow VulkanState, id: Int) -> VulkanPipel
     return state.pipelines[index]
 }
 
-public @Native
-function vulkanCreatePipelineLayout(state: borrow mut VulkanState, layouts: borrow [RawPtr]) -> RawPtr {
+public function vulkanCreatePipelineLayout(state: borrow mut VulkanState, layouts: borrow [RawPtr]) -> RawPtr {
     let layoutPointers = vulkanPointerSlotArray(layouts)
     let info = VkPipelineLayoutCreateInfo {
         sType: vulkanStructurePipelineLayoutCreateInfo(),
@@ -172,8 +168,7 @@ function vulkanCreatePipelineLayout(state: borrow mut VulkanState, layouts: borr
     return layout
 }
 
-public @Native
-function vulkanPointerSlotArray(values: borrow [RawPtr]) -> RawPtr {
+public function vulkanPointerSlotArray(values: borrow [RawPtr]) -> RawPtr {
     let storage = allocateBytes(U64(values.count * 8))
     for index in 0..values.count {
         writePointer(storage, U64(index * 8), values[index])
@@ -267,8 +262,7 @@ public function vulkanBuildBlend(preset: borrow BlendPreset) -> VkPipelineColorB
     }
 }
 
-public @Native
-function vulkanCreateRenderPipeline(context: RawPtr, descriptor: borrow RenderPipelineDescriptor) -> PipelineResult {
+public function vulkanCreateRenderPipeline(context: RawPtr, descriptor: borrow RenderPipelineDescriptor) -> PipelineResult {
     if !vulkanRequireDevice(context, "vulkanCreateRenderPipeline") {
         return .Error(.DeviceRefused)
     }
@@ -436,8 +430,7 @@ function vulkanCreateRenderPipeline(context: RawPtr, descriptor: borrow RenderPi
     })
 }
 
-public @Native
-function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline) {
+public function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline) {
     if !vulkanHasDevice(context) || pipeline.id == 0 {
         return
     }
@@ -456,8 +449,7 @@ function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline)
     vulkanReleasePipeline(state.vulkan, index)
 }
 
-public @Native
-function vulkanReleasePipeline(state: borrow mut VulkanState, index: Int) {
+public function vulkanReleasePipeline(state: borrow mut VulkanState, index: Int) {
     if index < 0 || index >= state.pipelines.count || !state.pipelines[index].live { return }
     vkQueueWaitIdle(state.queue)
     let record = state.pipelines[index]

@@ -4,8 +4,7 @@ import Foundation
 // window or swapchain. Offscreen passes use the same texture, pipeline and
 // encoder implementation as the windowed backend; only acquire/present differ.
 
-public @Native
-function vulkanCreateHeadlessDevice(runtime: borrow mut EMGraphicsAppRuntimeState) -> Bool {
+public function vulkanCreateHeadlessDevice(runtime: borrow mut EMGraphicsAppRuntimeState) -> Bool {
     runtime.vulkan = VulkanState()
     if !vulkanCreateInstance(runtime.vulkan, false) { return false }
     if !vulkanChooseHeadlessPhysicalDevice(runtime.vulkan) {
@@ -20,8 +19,7 @@ function vulkanCreateHeadlessDevice(runtime: borrow mut EMGraphicsAppRuntimeStat
     return true
 }
 
-public @Native
-function vulkanBeginHeadlessFrame(state: borrow mut VulkanState) -> Bool {
+public function vulkanBeginHeadlessFrame(state: borrow mut VulkanState) -> Bool {
     if state.frameActive { return true }
     if !vulkanWaitForFrame(state) { return false }
     vulkanReleasePendingUploads(state)
@@ -52,8 +50,7 @@ function vulkanBeginHeadlessFrame(state: borrow mut VulkanState) -> Bool {
     return true
 }
 
-public @Native
-function vulkanSubmitHeadlessFrame(context: RawPtr) {
+public function vulkanSubmitHeadlessFrame(context: RawPtr) {
     if !vulkanRequireDevice(context, "vulkanSubmitHeadlessFrame") { return }
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if !runtime.vulkan.frameActive { return }
@@ -104,8 +101,7 @@ function vulkanSubmitHeadlessFrame(context: RawPtr) {
     return
 }
 
-public @Native
-function vulkanPrepareHeadlessFrame(context: RawPtr) -> Bool {
+public function vulkanPrepareHeadlessFrame(context: RawPtr) -> Bool {
     if !vulkanRequireDevice(context, "vulkanPrepareHeadlessFrame") { return false }
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     return vulkanBeginHeadlessFrame(runtime.vulkan)

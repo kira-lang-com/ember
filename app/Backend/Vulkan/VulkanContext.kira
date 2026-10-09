@@ -107,8 +107,7 @@ public struct VulkanPipelineRecord {
     var live: Bool = false
 }
 
-public @Native
-function vulkanHasDevice(context: RawPtr) -> Bool {
+public function vulkanHasDevice(context: RawPtr) -> Bool {
     if pointerIsNull(context) {
         return false
     }
@@ -117,15 +116,13 @@ function vulkanHasDevice(context: RawPtr) -> Bool {
 
 // `vulkanHasDevice` for an operation that cannot proceed without one: a missing
 // device is reported against the operation that needed it.
-public @Native
-function vulkanRequireDevice(context: RawPtr, operation: String) -> Bool {
+public function vulkanRequireDevice(context: RawPtr, operation: String) -> Bool {
     if vulkanHasDevice(context) { return true }
     graphicsFail(.Device, operation + " needs a Vulkan device, and " + (pointerIsNull(context) ? "there is no graphics context" : "the device was never created or is already shut down"))
     return false
 }
 
-public @Native
-function vulkanShaderRecord(state: borrow VulkanState, id: U32) -> VulkanShaderRecord {
+public function vulkanShaderRecord(state: borrow VulkanState, id: U32) -> VulkanShaderRecord {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.shaders.count {
         return VulkanShaderRecord()
@@ -133,8 +130,7 @@ function vulkanShaderRecord(state: borrow VulkanState, id: U32) -> VulkanShaderR
     return state.shaders[slot]
 }
 
-public @Native
-function vulkanObject(state: borrow VulkanState, id: U32) -> RawPtr {
+public function vulkanObject(state: borrow VulkanState, id: U32) -> RawPtr {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objects.count {
         return nullPointer()
@@ -142,8 +138,7 @@ function vulkanObject(state: borrow VulkanState, id: U32) -> RawPtr {
     return state.objects[slot]
 }
 
-public @Native
-function vulkanObjectMemory(state: borrow VulkanState, id: U32) -> RawPtr {
+public function vulkanObjectMemory(state: borrow VulkanState, id: U32) -> RawPtr {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectMemory.count {
         return nullPointer()
@@ -151,8 +146,7 @@ function vulkanObjectMemory(state: borrow VulkanState, id: U32) -> RawPtr {
     return state.objectMemory[slot]
 }
 
-public @Native
-function vulkanObjectExtra(state: borrow VulkanState, id: U32) -> RawPtr {
+public function vulkanObjectExtra(state: borrow VulkanState, id: U32) -> RawPtr {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectExtra.count {
         return nullPointer()
@@ -160,8 +154,7 @@ function vulkanObjectExtra(state: borrow VulkanState, id: U32) -> RawPtr {
     return state.objectExtra[slot]
 }
 
-public @Native
-function vulkanObjectOffset(state: borrow VulkanState, id: U32) -> U64 {
+public function vulkanObjectOffset(state: borrow VulkanState, id: U32) -> U64 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectOffsets.count {
         return U64(0)
@@ -169,8 +162,7 @@ function vulkanObjectOffset(state: borrow VulkanState, id: U32) -> U64 {
     return state.objectOffsets[slot]
 }
 
-public @Native
-function vulkanObjectFormat(state: borrow VulkanState, id: U32) -> I32 {
+public function vulkanObjectFormat(state: borrow VulkanState, id: U32) -> I32 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectFormats.count {
         return I32(0)
@@ -178,8 +170,7 @@ function vulkanObjectFormat(state: borrow VulkanState, id: U32) -> I32 {
     return state.objectFormats[slot]
 }
 
-public @Native
-function vulkanObjectSize(state: borrow VulkanState, id: U32) -> U64 {
+public function vulkanObjectSize(state: borrow VulkanState, id: U32) -> U64 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectSizes.count {
         return U64(0)
@@ -187,8 +178,7 @@ function vulkanObjectSize(state: borrow VulkanState, id: U32) -> U64 {
     return state.objectSizes[slot]
 }
 
-public @Native
-function vulkanObjectStride(state: borrow VulkanState, id: U32) -> U64 {
+public function vulkanObjectStride(state: borrow VulkanState, id: U32) -> U64 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectStrides.count {
         return U64(0)
@@ -196,8 +186,7 @@ function vulkanObjectStride(state: borrow VulkanState, id: U32) -> U64 {
     return state.objectStrides[slot]
 }
 
-public @Native
-function vulkanRegisterObject(state: borrow mut VulkanState, object: RawPtr, memory: RawPtr, extra: RawPtr, size: U64, format: I32, kind: I32) -> U32 {
+public function vulkanRegisterObject(state: borrow mut VulkanState, object: RawPtr, memory: RawPtr, extra: RawPtr, size: U64, format: I32, kind: I32) -> U32 {
     if pointerIsNull(object) {
         return U32(0)
     }
@@ -233,8 +222,7 @@ function vulkanRegisterObject(state: borrow mut VulkanState, object: RawPtr, mem
     return U32(slot + 1)
 }
 
-public @Native
-function vulkanSetObjectOffset(state: borrow mut VulkanState, id: U32, offset: U64) {
+public function vulkanSetObjectOffset(state: borrow mut VulkanState, id: U32, offset: U64) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectOffsets.count {
         return
@@ -243,8 +231,7 @@ function vulkanSetObjectOffset(state: borrow mut VulkanState, id: U32, offset: U
     return
 }
 
-public @Native
-function vulkanSetObjectStride(state: borrow mut VulkanState, id: U32, stride: U64) {
+public function vulkanSetObjectStride(state: borrow mut VulkanState, id: U32, stride: U64) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectStrides.count {
         return
@@ -253,8 +240,7 @@ function vulkanSetObjectStride(state: borrow mut VulkanState, id: U32, stride: U
     return
 }
 
-public @Native
-function vulkanObjectLayout(state: borrow VulkanState, id: U32) -> I32 {
+public function vulkanObjectLayout(state: borrow VulkanState, id: U32) -> I32 {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectLayouts.count {
         return vulkanImageLayoutUndefined()
@@ -262,8 +248,7 @@ function vulkanObjectLayout(state: borrow VulkanState, id: U32) -> I32 {
     return state.objectLayouts[slot]
 }
 
-public @Native
-function vulkanSetObjectLayout(state: borrow mut VulkanState, id: U32, layout: I32) {
+public function vulkanSetObjectLayout(state: borrow mut VulkanState, id: U32, layout: I32) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objectLayouts.count {
         return
@@ -272,8 +257,7 @@ function vulkanSetObjectLayout(state: borrow mut VulkanState, id: U32, layout: I
     return
 }
 
-public @Native
-function vulkanForgetObject(state: borrow mut VulkanState, id: U32) {
+public function vulkanForgetObject(state: borrow mut VulkanState, id: U32) {
     let slot = Int(id) - 1
     if slot < 0 || slot >= state.objects.count || pointerIsNull(state.objects[slot]) {
         return
@@ -302,22 +286,19 @@ function vulkanForgetObject(state: borrow mut VulkanState, id: U32) {
 // The loader writes handles and scalar counts through ordinary out pointers.
 // Keeping these tiny slots in runtime-owned memory avoids embedding host pointer
 // widths in the Kira state layout.
-public @Native
-function vulkanPointerSlot() -> RawPtr {
+public function vulkanPointerSlot() -> RawPtr {
     let slot = allocateBytes(U64(8))
     writePointer(slot, U64(0), nullPointer())
     return slot
 }
 
-public @Native
-function vulkanWordSlot() -> RawPtr {
+public function vulkanWordSlot() -> RawPtr {
     let slot = allocateBytes(U64(4))
     writeWord(slot, U64(0), U32(0))
     return slot
 }
 
-public @Native
-function vulkanCreateInstance(state: borrow mut VulkanState, needsSurface: Bool) -> Bool {
+public function vulkanCreateInstance(state: borrow mut VulkanState, needsSurface: Bool) -> Bool {
     let application = VkApplicationInfo {
         sType: vulkanStructureApplicationInfo(),
         pApplicationName: "Ember Vulkan",
@@ -361,8 +342,7 @@ public function vulkanResultName(result: I32) -> String {
     return "error " + String(result)
 }
 
-public @Native
-function vulkanChooseHeadlessPhysicalDevice(state: borrow mut VulkanState) -> Bool {
+public function vulkanChooseHeadlessPhysicalDevice(state: borrow mut VulkanState) -> Bool {
     let countSlot = vulkanWordSlot()
     vkEnumeratePhysicalDevices(state.instance, countSlot, nullPointer())
     let count = Int(wordAt(countSlot, U64(0)))
@@ -396,8 +376,7 @@ function vulkanChooseHeadlessPhysicalDevice(state: borrow mut VulkanState) -> Bo
     return false
 }
 
-public @Native
-function vulkanChoosePhysicalDevice(state: borrow mut VulkanState) -> Bool {
+public function vulkanChoosePhysicalDevice(state: borrow mut VulkanState) -> Bool {
     let countSlot = vulkanWordSlot()
     vkEnumeratePhysicalDevices(state.instance, countSlot, nullPointer())
     let count = Int(wordAt(countSlot, U64(0)))
@@ -431,18 +410,15 @@ function vulkanChoosePhysicalDevice(state: borrow mut VulkanState) -> Bool {
     return false
 }
 
-public @Native
-function vulkanFindQueueFamily(state: borrow mut VulkanState, physicalDevice: RawPtr) -> Bool {
+public function vulkanFindQueueFamily(state: borrow mut VulkanState, physicalDevice: RawPtr) -> Bool {
     return vulkanFindQueueFamilyForMode(state, physicalDevice, true)
 }
 
-public @Native
-function vulkanFindHeadlessQueueFamily(state: borrow mut VulkanState, physicalDevice: RawPtr) -> Bool {
+public function vulkanFindHeadlessQueueFamily(state: borrow mut VulkanState, physicalDevice: RawPtr) -> Bool {
     return vulkanFindQueueFamilyForMode(state, physicalDevice, false)
 }
 
-public @Native
-function vulkanFindQueueFamilyForMode(state: borrow mut VulkanState, physicalDevice: RawPtr, requirePresentation: Bool) -> Bool {
+public function vulkanFindQueueFamilyForMode(state: borrow mut VulkanState, physicalDevice: RawPtr, requirePresentation: Bool) -> Bool {
     let countSlot = vulkanWordSlot()
     vkGetPhysicalDeviceQueueFamilyProperties(physicalDevice, countSlot, nullPointer())
     let count = Int(wordAt(countSlot, U64(0)))
@@ -478,8 +454,7 @@ function vulkanFindQueueFamilyForMode(state: borrow mut VulkanState, physicalDev
     return false
 }
 
-public @Native
-function vulkanCreateDevice(state: borrow mut VulkanState, needsSurface: Bool) -> Bool {
+public function vulkanCreateDevice(state: borrow mut VulkanState, needsSurface: Bool) -> Bool {
     let queueInfo = VkDeviceQueueCreateInfo {
         sType: vulkanStructureDeviceQueueCreateInfo(),
         queueFamilyIndex: state.queueFamilyIndex,
@@ -519,8 +494,7 @@ function vulkanCreateDevice(state: borrow mut VulkanState, needsSurface: Bool) -
     return true
 }
 
-public @Native
-function vulkanCreateCommandState(state: borrow mut VulkanState) -> Bool {
+public function vulkanCreateCommandState(state: borrow mut VulkanState) -> Bool {
     let poolInfo = VkCommandPoolCreateInfo {
         sType: vulkanStructureCommandPoolCreateInfo(),
         flags: vulkanCommandPoolResettable(),
@@ -554,8 +528,7 @@ function vulkanCreateCommandState(state: borrow mut VulkanState) -> Bool {
     return vulkanCreateSyncObjects(state)
 }
 
-public @Native
-function vulkanCreateDescriptorPool(state: borrow mut VulkanState) -> Bool {
+public function vulkanCreateDescriptorPool(state: borrow mut VulkanState) -> Bool {
     let sizes = VulkanDescriptorPoolSizeArray5 {
         elements: [
             VkDescriptorPoolSize { type_value: vulkanDescriptorUniformBuffer(), descriptorCount: U32(4096) },
@@ -583,8 +556,7 @@ function vulkanCreateDescriptorPool(state: borrow mut VulkanState) -> Bool {
     return true
 }
 
-public @Native
-function vulkanCreateSyncObjects(state: borrow mut VulkanState) -> Bool {
+public function vulkanCreateSyncObjects(state: borrow mut VulkanState) -> Bool {
     let semaphoreInfo = VkSemaphoreCreateInfo { sType: vulkanStructureSemaphoreCreateInfo() }
     let imageSlot = vulkanPointerSlot()
     let imageResult = vkCreateSemaphore(state.device, semaphoreInfo, nullPointer(), imageSlot)

@@ -311,8 +311,7 @@ public function vulkanEncoderIssue(state: borrow RenderEncoderState, firstIndex:
     return
 }
 
-public @Native
-function makeRenderEncoder() -> RenderEncoder {
+public function makeRenderEncoder() -> RenderEncoder {
     return makeRenderEncoderForBackend(false, nullPointer(), nullPointer(), nullPointer())
 }
 

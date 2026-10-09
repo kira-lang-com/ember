@@ -30,7 +30,6 @@ function kslTriangleVertexLayout() -> VertexLayout {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember KSL Triangle"

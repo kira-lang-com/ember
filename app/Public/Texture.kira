@@ -37,16 +37,14 @@ public struct EMGraphicsTexture {
 // Binding is all it is for. Uploading to a texture needs the image id, and
 // attaching a pass to one needs the attachment views; neither can be recovered
 // from a sampled view.
-public @Native
-function sampledTextureFromViewId(viewId: U32) -> EMGraphicsTexture {
+public function sampledTextureFromViewId(viewId: U32) -> EMGraphicsTexture {
     return EMGraphicsTexture {
         id: viewId,
         viewId: viewId
     }
 }
 
-public @Native
-function emptyGraphicsTexture() -> EMGraphicsTexture {
+public function emptyGraphicsTexture() -> EMGraphicsTexture {
     return EMGraphicsTexture {
         id: 0
     }

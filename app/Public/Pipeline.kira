@@ -20,8 +20,7 @@ public struct RenderPipeline {
     var uniformBlocks: [UniformBlockDescriptor] = []
 }
 
-public @Native
-function emptyRenderPipeline() -> RenderPipeline {
+public function emptyRenderPipeline() -> RenderPipeline {
     return RenderPipeline {
         id: 0
     }

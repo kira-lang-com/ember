@@ -24,7 +24,6 @@ function frameTriangleVertices() -> [F32] {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Frame API Triangle"

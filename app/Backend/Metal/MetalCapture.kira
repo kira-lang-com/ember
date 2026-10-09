@@ -54,8 +54,7 @@ public function metalHarnessKnobs(app: borrow EMGraphicsApplication) -> MetalHar
 
 // The texture of the drawable this frame is being rendered into, while the
 // context still holds it: submitting the frame presents it and lets it go.
-public @Native
-function metalContextDrawableTexture(ctx: RawPtr) -> RawPtr {
+public function metalContextDrawableTexture(ctx: RawPtr) -> RawPtr {
     let drawable = metalMemReadPtr(ctx, metalOffsetDrawable())
     if pointerIsNull(drawable) {
         return nullPointer()
@@ -117,8 +116,7 @@ public function metalCaptureReadableTexture(ctx: RawPtr, texture: RawPtr) -> Raw
 }
 
 // The frame at `texture`, as a binary PPM at `path`.
-public @Native
-function metalCapturePpm(ctx: RawPtr, texture: RawPtr, width: Int, height: Int, path: borrow String) -> Bool {
+public function metalCapturePpm(ctx: RawPtr, texture: RawPtr, width: Int, height: Int, path: borrow String) -> Bool {
     if width <= 0 || height <= 0 {
         return false
     }

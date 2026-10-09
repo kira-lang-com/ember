@@ -232,23 +232,19 @@ public function graphicsEventUsesPointerPosition(kind: borrow EMAppEventKind) ->
 }
 
 
-public @Native
-function graphicsStringFromCodepoint(codepoint: Int) -> String {
+public function graphicsStringFromCodepoint(codepoint: Int) -> String {
     return scalarText(codepoint)
 }
 
-public @Native
-function graphicsAppendCodepoint(base: borrow String, codepoint: Int) -> String {
+public function graphicsAppendCodepoint(base: borrow String, codepoint: Int) -> String {
     return base + scalarText(codepoint)
 }
 
-public @Native
-function graphicsDropLastScalar(base: borrow String) -> String {
+public function graphicsDropLastScalar(base: borrow String) -> String {
     return base.dropLastScalar()
 }
 
-public @Native
-function graphicsStringConcat(a: borrow String, b: borrow String) -> String {
+public function graphicsStringConcat(a: borrow String, b: borrow String) -> String {
     return a + b
 }
 
@@ -261,24 +257,20 @@ function graphicsStringConcat(a: borrow String, b: borrow String) -> String {
 // cursor, the pointer lock — is the window server's and not a per-run object.
 // `graphicsDefaultBackend` is what a run without an explicit choice selects,
 // which is the same backend its window was opened by.
-public @Native
-function graphicsInputBackend() -> Any RenderBackend {
+public function graphicsInputBackend() -> Any RenderBackend {
     return renderBackendFor(graphicsDefaultBackend(), nullPointer())
 }
 
-public @Native
-function graphicsShowKeyboard(show: Bool) {
+public function graphicsShowKeyboard(show: Bool) {
     graphicsInputBackend().showKeyboard(show)
     return
 }
 
-public @Native
-function graphicsKeyboardShown() -> Bool {
+public function graphicsKeyboardShown() -> Bool {
     return graphicsInputBackend().keyboardShown()
 }
 
-public @Native
-function graphicsShowMouse(show: Bool) {
+public function graphicsShowMouse(show: Bool) {
     graphicsInputBackend().showMouse(show)
     return
 }
@@ -289,18 +281,15 @@ function graphicsShowMouse(show: Bool) {
 // Separate from `graphicsShowMouse` because they are separate things — a hidden
 // cursor that still roams is what makes a camera drag run off the window and
 // jam at the screen edge — and paired the same way: one lock per one unlock.
-public @Native
-function graphicsLockMouse(lock: Bool) {
+public function graphicsLockMouse(lock: Bool) {
     graphicsInputBackend().lockMouse(lock)
     return
 }
 
-public @Native
-function graphicsMouseLocked() -> Bool {
+public function graphicsMouseLocked() -> Bool {
     return graphicsInputBackend().mouseLocked()
 }
 
-public @Native
-function graphicsMouseShown() -> Bool {
+public function graphicsMouseShown() -> Bool {
     return graphicsInputBackend().mouseShown()
 }

@@ -78,8 +78,7 @@ public function dawnDeviceSharesTextures(device: RawPtr) -> Bool {
         wgpuDeviceHasFeature(device, dawnFeatureSharedTextureMemoryDmaBuf()) != U32(0)
 }
 
-public @Native
-function dawnImportSharedTexture(context: RawPtr, surface: borrow SharedSurface) -> SharedTexture {
+public function dawnImportSharedTexture(context: RawPtr, surface: borrow SharedSurface) -> SharedTexture {
     if !dawnHasDevice(context) || surface.isValid() == false {
         return SharedTexture {}
     }

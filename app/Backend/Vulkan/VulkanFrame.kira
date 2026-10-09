@@ -4,8 +4,7 @@ import Foundation
 // sole in-flight slot, so the next acquire waits for all commands that can read
 // the CPU-visible ring buffers before those buffers are reused.
 
-public @Native
-function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
+public function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
     if !vulkanRequireDevice(context, "vulkanSubmitFrame") { return }
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     vulkanSubmitFrameState(runtime.vulkan)
@@ -14,8 +13,7 @@ function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
     return
 }
 
-public @Native
-function vulkanSubmitFrameState(state: borrow mut VulkanState) {
+public function vulkanSubmitFrameState(state: borrow mut VulkanState) {
     state.presentedThisFrame = false
     if !state.frameActive { return }
     if state.passActive {
@@ -122,8 +120,7 @@ function vulkanSubmitFrameState(state: borrow mut VulkanState) {
 // A frame that drew nothing to the window still ends its command buffer and
 // signals the frame fence, so its offscreen work runs and the next frame's wait
 // holds; nothing is presented.
-public @Native
-function vulkanSubmitUnpresentedFrame(state: borrow mut VulkanState) {
+public function vulkanSubmitUnpresentedFrame(state: borrow mut VulkanState) {
     state.frameActive = false
     let endResult = vkEndCommandBuffer(state.commandBuffer)
     if endResult != vulkanSuccess() {

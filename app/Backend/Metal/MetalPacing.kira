@@ -60,8 +60,7 @@ public function metalRingBytes(byteCount: U64) -> U64 {
 // first write advances onto slot 0. Called for every ringed buffer at creation,
 // which is also what keeps a REUSED id honest: the free list hands ids back out, and
 // the entry a released resource left behind would otherwise describe a wrong stride.
-public @Native
-function metalRingInit(ctx: RawPtr, id: U64, stride: U64) {
+public function metalRingInit(ctx: RawPtr, id: U64, stride: U64) {
     let table = metalMemReadPtr(ctx, metalOffsetSlotRing())
     let lastSlot = stride * (metalRingSlots() - U64(1))
     metalMemWriteU64(table, id * 8, stride * metalRingPackScale() + lastSlot)
@@ -71,8 +70,7 @@ function metalRingInit(ctx: RawPtr, id: U64, stride: U64) {
 // Move a buffer to its next slot and return the byte offset to write at. A buffer
 // written more than once in a frame simply consumes more of its ring; every write is
 // still a slot no in-flight frame bound.
-public @Native
-function metalRingAdvance(ctx: RawPtr, id: U64) -> U64 {
+public function metalRingAdvance(ctx: RawPtr, id: U64) -> U64 {
     let table = metalMemReadPtr(ctx, metalOffsetSlotRing())
     let packed = metalMemReadU64(table, id * 8)
     let stride = packed / metalRingPackScale()
@@ -93,16 +91,14 @@ function metalRingAdvance(ctx: RawPtr, id: U64) -> U64 {
 // The offset a bind should use: the slot the most recent write went to. A buffer not
 // written this frame keeps pointing at the slot it last wrote, which is exactly right
 // — nothing is overwriting it. An unringed resource answers 0, its whole allocation.
-public @Native
-function metalRingOffset(ctx: RawPtr, id: U64) -> U64 {
+public function metalRingOffset(ctx: RawPtr, id: U64) -> U64 {
     let table = metalMemReadPtr(ctx, metalOffsetSlotRing())
     return metalMemReadU64(table, id * 8) % metalRingPackScale()
 }
 
 // Allocate the pacing state: the per-id ring table (parallel to the registry, grown
 // with it) and the ring of in-flight command buffers.
-public @Native
-function metalPacingInit(ctx: RawPtr) {
+public function metalPacingInit(ctx: RawPtr) {
     let table = metalMemAlloc(metalRegistryInitialCapacity() * 8)
     metalMemWritePtr(ctx, metalOffsetSlotRing(), table)
     // Two words per slot: retained command-buffer pointer, then the logical app
@@ -117,8 +113,7 @@ function metalPacingInit(ctx: RawPtr) {
 // Fold one completed command buffer into its logical frame's GPU busy time.
 // MTLCommandBuffer exposes seconds as scalar doubles; metalMsgSendPoint's `.x`
 // reads the shared v0 return register used by that scalar on arm64.
-public @Native
-function metalPacingCollectGpuTime(ctx: RawPtr, commandBuffer: RawPtr, serial: U64) {
+public function metalPacingCollectGpuTime(ctx: RawPtr, commandBuffer: RawPtr, serial: U64) {
     if serial == 0 {
         return
     }
@@ -149,8 +144,7 @@ function metalPacingCollectGpuTime(ctx: RawPtr, commandBuffer: RawPtr, serial: U
 // `metalFramesInFlight()` commits ago, so no more than that many are ever running
 // and the uniform ring can never be lapped. Nothing to wait for until the ring has
 // filled once, so the first frames pay nothing.
-public @Native
-function metalPacingBeginPass(ctx: RawPtr) {
+public function metalPacingBeginPass(ctx: RawPtr) {
     let ring = metalMemReadPtr(ctx, metalOffsetFrameRing())
     if pointerIsNull(ring) {
         return
@@ -171,8 +165,7 @@ function metalPacingBeginPass(ctx: RawPtr) {
 // After committing: take the slot the wait above just cleared. Retained, because a
 // command buffer comes back autoreleased and the per-frame pool would free it long
 // before the frame that has to wait for it runs.
-public @Native
-function metalPacingEndPass(ctx: RawPtr, commandBuffer: RawPtr) {
+public function metalPacingEndPass(ctx: RawPtr, commandBuffer: RawPtr) {
     let ring = metalMemReadPtr(ctx, metalOffsetFrameRing())
     if pointerIsNull(ring) {
         return
@@ -189,8 +182,7 @@ function metalPacingEndPass(ctx: RawPtr, commandBuffer: RawPtr) {
 // Teardown: every buffer still in the ring is waited out before release, so nothing
 // the GPU is reading is freed underneath it, and freed after the registry's own
 // resources for the same reason.
-public @Native
-function metalPacingFree(ctx: RawPtr) {
+public function metalPacingFree(ctx: RawPtr) {
     let ring = metalMemReadPtr(ctx, metalOffsetFrameRing())
     if !pointerIsNull(ring) {
         var slot: U64 = 0
@@ -221,8 +213,7 @@ function metalPacingFree(ctx: RawPtr) {
 // overlap is expected and healthy, because the write lands in a slot no running
 // frame bound, and a count that drops to zero means the CPU and GPU have stopped
 // overlapping at all.
-public @Native
-function metalRaceProbeUniformWrite(ctx: RawPtr) {
+public function metalRaceProbeUniformWrite(ctx: RawPtr) {
     if metalMemReadU64(ctx, metalOffsetRaceProbe()) == U64(0) {
         return
     }

@@ -4,8 +4,7 @@ import Foundation
 // pipelines. Dispatches are recorded into the frame command buffer and therefore
 // remain ordered with the render passes around them.
 
-public @Native
-function vulkanCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
+public function vulkanCreateComputePipeline(context: RawPtr, label: borrow String, shader: borrow EMGraphicsShader, entryName: borrow String) -> Int {
     if !vulkanRequireDevice(context, "vulkanCreateComputePipeline") {
         return 0
     }
@@ -69,8 +68,7 @@ public function vulkanDispatchGroups(threadCount: Int, threadsPerGroup: Int) -> 
     return U32(count)
 }
 
-public @Native
-function vulkanComputeBufferGroup(state: borrow VulkanState, bufferIds: borrow [U32], firstSlot: Int) -> BindGroup {
+public function vulkanComputeBufferGroup(state: borrow VulkanState, bufferIds: borrow [U32], firstSlot: Int) -> BindGroup {
     let group = vulkanNewBindGroup("kira-vulkan-compute")
     var index = 0
     while index < bufferIds.count {
@@ -85,8 +83,7 @@ function vulkanComputeBufferGroup(state: borrow VulkanState, bufferIds: borrow [
     return group
 }
 
-public @Native
-function vulkanDispatchComputeBuffers(context: RawPtr, pipelineId: Int, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
+public function vulkanDispatchComputeBuffers(context: RawPtr, pipelineId: Int, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
     if !vulkanRequireDevice(context, "vulkanDispatchComputeBuffers") {
         return
     }
@@ -112,8 +109,7 @@ function vulkanDispatchComputeBuffers(context: RawPtr, pipelineId: Int, bufferId
     return
 }
 
-public @Native
-function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, depth: borrow EMGraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
+public function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, depth: borrow EMGraphicsTexture, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
     if !vulkanRequireDevice(context, "vulkanDispatchDepthComputeBuffers") {
         return
     }
@@ -143,8 +139,7 @@ function vulkanDispatchDepthComputeBuffers(context: RawPtr, pipelineId: Int, dep
     return
 }
 
-public @Native
-function vulkanDispatchTextureComputePair(
+public function vulkanDispatchTextureComputePair(
     context: RawPtr,
     horizontalPipeline: Int,
     verticalPipeline: Int,
@@ -222,8 +217,7 @@ function vulkanDispatchTextureComputePair(
     return
 }
 
-public @Native
-function vulkanRetireComputeBuffer(state: borrow mut VulkanState, id: U32) {
+public function vulkanRetireComputeBuffer(state: borrow mut VulkanState, id: U32) {
     if state.frameActive {
         state.pendingUploadBuffers.append(id)
     } else {
@@ -231,8 +225,7 @@ function vulkanRetireComputeBuffer(state: borrow mut VulkanState, id: U32) {
     }
 }
 
-public @Native
-function vulkanReadBufferU32(context: RawPtr, buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
+public function vulkanReadBufferU32(context: RawPtr, buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
     if !vulkanRequireDevice(context, "vulkanReadBufferU32") {
         return U32(0)
     }
@@ -267,8 +260,7 @@ function vulkanReadBufferU32(context: RawPtr, buffer: borrow EMGraphicsBuffer, i
     return wordAt(mapped, vulkanObjectOffset(runtime.vulkan, buffer.id) + U64(index * 4))
 }
 
-public @Native
-function vulkanOptimizeTexture(context: RawPtr, textureId: Int) {
+public function vulkanOptimizeTexture(context: RawPtr, textureId: Int) {
     // Vulkan textures are allocated in device-local memory from creation and
     // never need Metal's explicit post-upload private-storage blit. Keeping this
     // backend hook intentionally empty is the optimized path, not a missing one.
@@ -277,13 +269,11 @@ function vulkanOptimizeTexture(context: RawPtr, textureId: Int) {
     return
 }
 
-public @Native
-function vulkanMonotonicNanoseconds() -> U64 {
+public function vulkanMonotonicNanoseconds() -> U64 {
     return U64(kgMonotonicSeconds() * 1000000000.0)
 }
 
-public @Native
-function vulkanFrameStatistics(context: RawPtr) -> EMFrameStatistics {
+public function vulkanFrameStatistics(context: RawPtr) -> EMFrameStatistics {
     if pointerIsNull(context) { return EMFrameStatistics {} }
     let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     return runtime.vulkan.stats

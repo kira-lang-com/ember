@@ -10,8 +10,7 @@
 
 // Byte at `index` of a NUL-terminated env value, via aligned U64 reads (the
 // U8-returning FFI extern is a lowering gap today; U64 reads lower fine).
-public @Native
-function metalEnvByte(value: RawPtr, index: Int) -> Int {
+public function metalEnvByte(value: RawPtr, index: Int) -> Int {
     let chunk = (index / 8) * 8
     let v = metalMemReadU64(value, U64(chunk))
     var rem = index - chunk
@@ -27,8 +26,7 @@ function metalEnvByte(value: RawPtr, index: Int) -> Int {
 
 // Non-negative integer at the start of a NUL-terminated env value (0 when the
 // value does not start with digits).
-public @Native
-function metalEnvInt(value: RawPtr) -> Int {
+public function metalEnvInt(value: RawPtr) -> Int {
     var out = 0
     var i = 0
     var scanning = true
@@ -54,8 +52,7 @@ function metalEnvInt(value: RawPtr) -> Int {
 // Every integer (optionally '-'-signed) in a NUL-terminated env value, in
 // order; any other byte separates. KIRA_UI_CLICK_SCRIPT carries (frame, x, y)
 // triples, e.g. "2@303,47;4@361,47".
-public @Native
-function metalEnvInts(value: RawPtr) -> [Int] {
+public function metalEnvInts(value: RawPtr) -> [Int] {
     var out: [Int] = []
     var i = 0
     var going = true

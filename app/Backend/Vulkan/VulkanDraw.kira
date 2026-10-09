@@ -54,8 +54,7 @@ public function vulkanHasStorage(group: borrow BindGroupState, binding: Int) -> 
     return false
 }
 
-public @Native
-function vulkanWriteDescriptor(state: borrow mut VulkanState, set: RawPtr, binding: Int, descriptorType: I32, group: borrow BindGroupState) -> Bool {
+public function vulkanWriteDescriptor(state: borrow mut VulkanState, set: RawPtr, binding: Int, descriptorType: I32, group: borrow BindGroupState) -> Bool {
     if descriptorType == vulkanDescriptorUniformBuffer() {
         var index = 0
         while index < group.uniformEntries.count {
@@ -167,8 +166,7 @@ function vulkanWriteDescriptor(state: borrow mut VulkanState, set: RawPtr, bindi
     return false
 }
 
-public @Native
-function vulkanDynamicOffsetWords(state: borrow VulkanState, reflection: borrow KslResourceReflection, groupIndex: Int, group: borrow BindGroupState) -> [U32] {
+public function vulkanDynamicOffsetWords(state: borrow VulkanState, reflection: borrow KslResourceReflection, groupIndex: Int, group: borrow BindGroupState) -> [U32] {
     var offsets: [U32] = []
     for binding in vulkanDescriptorBindings(reflection, groupIndex) {
         let descriptorType = binding.descriptorType
@@ -191,8 +189,7 @@ function vulkanDynamicOffsetWords(state: borrow VulkanState, reflection: borrow 
     return offsets
 }
 
-public @Native
-function vulkanBindDescriptorGroup(state: borrow mut VulkanState, pipeline: borrow VulkanPipelineRecord, reflection: borrow KslResourceReflection, groupIndex: Int, group: borrow BindGroup, present: Bool) -> Bool {
+public function vulkanBindDescriptorGroup(state: borrow mut VulkanState, pipeline: borrow VulkanPipelineRecord, reflection: borrow KslResourceReflection, groupIndex: Int, group: borrow BindGroup, present: Bool) -> Bool {
     let bindings = vulkanDescriptorBindings(reflection, groupIndex)
     if bindings.count == 0 { return true }
     if !present {
@@ -203,8 +200,7 @@ function vulkanBindDescriptorGroup(state: borrow mut VulkanState, pipeline: borr
     return vulkanBindDescriptorState(state, pipeline, reflection, groupIndex, groupState)
 }
 
-public @Native
-function vulkanBindDescriptorState(state: borrow mut VulkanState, pipeline: borrow VulkanPipelineRecord, reflection: borrow KslResourceReflection, groupIndex: Int, groupState: borrow BindGroupState) -> Bool {
+public function vulkanBindDescriptorState(state: borrow mut VulkanState, pipeline: borrow VulkanPipelineRecord, reflection: borrow KslResourceReflection, groupIndex: Int, groupState: borrow BindGroupState) -> Bool {
     let bindings = vulkanDescriptorBindings(reflection, groupIndex)
     for binding in bindings {
         let descriptorType = binding.descriptorType
@@ -253,8 +249,7 @@ function vulkanBindDescriptorState(state: borrow mut VulkanState, pipeline: borr
     return true
 }
 
-public @Native
-function vulkanDrawWithBindings(
+public function vulkanDrawWithBindings(
     runtime: RawPtr,
     hasScissor: Bool,
     scissorX: Int,
@@ -377,8 +372,7 @@ function vulkanDrawWithBindings(
     return
 }
 
-public @Native
-function vulkanEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBufferId: Int) {
+public function vulkanEncoderDrawIndirect(encoder: borrow RenderEncoderState, indirectBufferId: Int) {
     if pointerIsNull(encoder.vulkanRuntime) {
         graphicsFail(.Draw, "an indirect draw came from an encoder with no Vulkan runtime")
         return

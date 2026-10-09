@@ -143,7 +143,6 @@ function renderBoundPass(frame: borrow mut RenderFrame, pass: RenderPassDescript
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Liquid Glass"

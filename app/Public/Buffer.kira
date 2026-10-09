@@ -22,8 +22,7 @@ public struct DynamicBuffer {
     var contents: RawPtr
 }
 
-public @Native
-function emptyGraphicsBuffer() -> EMGraphicsBuffer {
+public function emptyGraphicsBuffer() -> EMGraphicsBuffer {
     return EMGraphicsBuffer {
         id: 0
     }
@@ -32,8 +31,7 @@ function emptyGraphicsBuffer() -> EMGraphicsBuffer {
 // The placeholder a host's state struct holds before its first frame creates
 // the real one — id 0 and a null pointer, so a write that reaches it before
 // creation is refused rather than landing somewhere.
-public @Native
-function emptyDynamicBuffer() -> DynamicBuffer {
+public function emptyDynamicBuffer() -> DynamicBuffer {
     return DynamicBuffer {
         buffer: emptyGraphicsBuffer(),
         contents: nullPointer()

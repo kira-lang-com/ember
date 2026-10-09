@@ -3,8 +3,7 @@ import Foundation
 // Vulkan's native run loop. Window events are added at the platform boundary;
 // the GPU lifetime below is deliberately independent of that translation.
 
-public @Native
-function vulkanRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) {
+public function vulkanRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) {
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     runtime.vulkan = VulkanState()
     readHarnessKnobs(runtime)
@@ -68,8 +67,7 @@ function vulkanRunApplication(app: borrow EMGraphicsApplication, runtimeUserData
 
 let vulkanIdleFrameSeconds: Float = 1.0 / 60.0
 
-public @Native
-function vulkanDriveFrames(runtimeUserData: RawPtr) {
+public function vulkanDriveFrames(runtimeUserData: RawPtr) {
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     while !runtime.vulkan.quitRequested {
         if hostPlatform() == .Windows {
@@ -119,8 +117,7 @@ function vulkanDriveFrames(runtimeUserData: RawPtr) {
     return
 }
 
-public @Native
-function vulkanResizeIfNeeded(runtime: borrow mut EMGraphicsAppRuntimeState) {
+public function vulkanResizeIfNeeded(runtime: borrow mut EMGraphicsAppRuntimeState) {
     let window = vulkanWindowFor(vulkanWindowPlatformForHost())
     let width = window.clientWidth(runtime.vulkan.window)
     let height = window.clientHeight(runtime.vulkan.window)
@@ -142,8 +139,7 @@ function vulkanResizeIfNeeded(runtime: borrow mut EMGraphicsAppRuntimeState) {
     return
 }
 
-public @Native
-function vulkanPumpWindows(runtime: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function vulkanPumpWindows(runtime: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     let messages: WindowMessagePointer = runtime.vulkan.messageBlock
     let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
     while peekMessage(messages, nullPointer(), U32(0), U32(0), U32(1)) != 0 {
@@ -161,8 +157,7 @@ function vulkanPumpWindows(runtime: borrow mut EMGraphicsAppRuntimeState, runtim
     return
 }
 
-public @Native
-function vulkanDeliverWindowMessage(runtime: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
+public function vulkanDeliverWindowMessage(runtime: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
     let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
     let scale = vulkanWindowFor(vulkanWindowPlatformForHost()).scale(runtime.vulkan.window)
     let rawX = lparam & 65535
@@ -233,8 +228,7 @@ function vulkanDeliverWindowMessage(runtime: borrow mut EMGraphicsAppRuntimeStat
     return
 }
 
-public @Native
-function vulkanDriveScripts(runtime: borrow mut EMGraphicsAppRuntimeState, frame: borrow mut RenderFrame, scriptFrame: Int) {
+public function vulkanDriveScripts(runtime: borrow mut EMGraphicsAppRuntimeState, frame: borrow mut RenderFrame, scriptFrame: Int) {
     let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
     var clickIndex = 0
     while clickIndex + 3 <= runtime.clickScript.count {
@@ -282,8 +276,7 @@ function vulkanDriveScripts(runtime: borrow mut EMGraphicsAppRuntimeState, frame
     return
 }
 
-public @Native
-function vulkanShutdownState(state: borrow mut VulkanState) {
+public function vulkanShutdownState(state: borrow mut VulkanState) {
     if pointerIsNull(state.instance) {
         if !pointerIsNull(state.window) {
             vulkanWindowFor(vulkanWindowPlatformForHost()).close(state.window)

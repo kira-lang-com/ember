@@ -12,8 +12,7 @@ public function metalPrimitiveTriangle() -> U64 { return 3 }
 public function metalIndexTypeUInt32() -> U64 { return 1 }
 
 // Compile an MSL source library and register it as a shader handle.
-public @Native
-function metalCreateShader(ctx: RawPtr, source: borrow String) -> Int {
+public function metalCreateShader(ctx: RawPtr, source: borrow String) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let nsstr: RawPtr = metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), source)
     let opts: RawPtr = metalMsgSend(metalMsgSend(metalObjcGetClass("MTLCompileOptions"), metalSel("alloc")), metalSel("init"))
@@ -45,8 +44,7 @@ function metalCreateShader(ctx: RawPtr, source: borrow String) -> Int {
 }
 
 // Upload float vertex data into a new MTLBuffer and register it.
-public @Native
-function metalCreateVertexBuffer(ctx: RawPtr, data: borrow [F32]) -> Int {
+public function metalCreateVertexBuffer(ctx: RawPtr, data: borrow [F32]) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let count = data.count
     let bytes = metalMemAlloc(count * 4)
@@ -62,8 +60,7 @@ function metalCreateVertexBuffer(ctx: RawPtr, data: borrow [F32]) -> Int {
 }
 
 // Upload index data into a new MTLBuffer and register it.
-public @Native
-function metalCreateIndexBuffer(ctx: RawPtr, data: borrow [U32]) -> Int {
+public function metalCreateIndexBuffer(ctx: RawPtr, data: borrow [U32]) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let count = data.count
     let bytes = metalMemAlloc(count * 4)
@@ -134,15 +131,13 @@ public function metalApplyBlend(colorAttachment: RawPtr, blend: borrow BlendStat
 
 // Build an MTLRenderPipelineState from a shader library and a color pixel format,
 // and register it.
-public @Native
-function metalCreateRenderPipeline(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool) -> Int {
+public function metalCreateRenderPipeline(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool) -> Int {
     return metalCreateRenderPipelineBlended(ctx, shaderId, colorFormat, depthEnabled, false)
 }
 
 // Build an MTLRenderPipelineState, optionally enabling premultiplied-alpha blending
 // on color attachment 0 (the UI compositor draws translucent, premultiplied quads).
-public @Native
-function metalCreateRenderPipelineBlended(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool, blendEnabled: Bool) -> Int {
+public function metalCreateRenderPipelineBlended(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool, blendEnabled: Bool) -> Int {
     var noFmt: [Int] = []
     var noOff: [Int] = []
     let blend = BlendState { enabled: blendEnabled, preset: .PremultipliedAlpha }
@@ -161,8 +156,7 @@ public function metalVertexFormat(kiraFormat: Int) -> U64 {
 // shaders use `[[stage_in]]` inputs, which REQUIRE an MTLVertexDescriptor on the
 // pipeline (entries `{shader}__vertex__main` / `__fragment__main`). Buffer-indexing
 // shaders (self-tests, UI) pass an empty layout and skip the descriptor.
-public @Native
-function metalCreateRenderPipelineWithEntries(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool, blend: borrow BlendState, vertexEntry: borrow String, fragmentEntry: borrow String, stride: Int, attrFormats: borrow [Int], attrOffsets: borrow [Int]) -> Int {
+public function metalCreateRenderPipelineWithEntries(ctx: RawPtr, shaderId: Int, colorFormat: U64, depthEnabled: Bool, blend: borrow BlendState, vertexEntry: borrow String, fragmentEntry: borrow String, stride: Int, attrFormats: borrow [Int], attrOffsets: borrow [Int]) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let library = metalLookup(ctx, shaderId)
     let vname: RawPtr = metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), vertexEntry)
@@ -218,8 +212,7 @@ function metalCreateRenderPipelineWithEntries(ctx: RawPtr, shaderId: Int, colorF
 // buffer at slot 0 — so, like a uniform, it holds a whole RING and each frame writes
 // its own slot (MetalPacing.kira). Without that, the frame being written and a frame
 // still on the GPU share the same vertices, and the window shows part of each.
-public @Native
-function metalCreateDynamicBuffer(ctx: RawPtr, floatCount: Int) -> Int {
+public function metalCreateDynamicBuffer(ctx: RawPtr, floatCount: Int) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let byteCount = U64(floatCount) * U64(4)
     let buffer: RawPtr = metalMsgSend(device, metalSel("newBufferWithLength:options:"), metalRingBytes(byteCount), 0)
@@ -233,8 +226,7 @@ function metalCreateDynamicBuffer(ctx: RawPtr, floatCount: Int) -> Int {
 // offset by this frame's slot (metalDynamicBufferFrameStart), or it lands in the slot
 // the GPU is reading. The pointer is the base rather than the current slot precisely
 // so that a stale cached copy cannot silently mean the wrong slot.
-public @Native
-function metalDynamicBufferContents(ctx: RawPtr, bufferId: Int) -> RawPtr {
+public function metalDynamicBufferContents(ctx: RawPtr, bufferId: Int) -> RawPtr {
     let buffer = metalLookup(ctx, bufferId)
     return metalMsgSend(buffer, metalSel("contents"))
 }
@@ -242,8 +234,7 @@ function metalDynamicBufferContents(ctx: RawPtr, bufferId: Int) -> RawPtr {
 // Claim this frame's slot and return the byte offset every write this frame adds to
 // its own. The frame still on the GPU keeps the slot it was recorded with, so writes
 // past this offset cannot disturb it.
-public @Native
-function metalDynamicBufferFrameStart(ctx: RawPtr, bufferId: Int) -> Int {
+public function metalDynamicBufferFrameStart(ctx: RawPtr, bufferId: Int) -> Int {
     return Int(metalRingAdvance(ctx, U64(bufferId)))
 }
 
@@ -251,8 +242,7 @@ function metalDynamicBufferFrameStart(ctx: RawPtr, bufferId: Int) -> Int {
 // The buffer holds a whole RING of the uniform (see MetalPacing.kira): the CPU
 // writes the next frame's values while the GPU is still reading the last frame's,
 // so each frame needs its own slot rather than a shared set of bytes.
-public @Native
-function metalCreateUniform(ctx: RawPtr, floatCount: Int) -> Int {
+public function metalCreateUniform(ctx: RawPtr, floatCount: Int) -> Int {
     let device = metalMemReadPtr(ctx, metalOffsetDevice())
     let byteCount = U64(floatCount) * U64(4)
     let buffer: RawPtr = metalMsgSend(device, metalSel("newBufferWithLength:options:"), metalRingBytes(byteCount), 0)
@@ -265,8 +255,7 @@ function metalCreateUniform(ctx: RawPtr, floatCount: Int) -> Int {
 // offset every later bind of this uniform reads from. The slot the previous frame
 // bound is left untouched, so a frame still on the GPU keeps the values it was
 // drawn with.
-public @Native
-function metalUpdateUniform(ctx: RawPtr, uniformId: Int, data: borrow [F32]) {
+public function metalUpdateUniform(ctx: RawPtr, uniformId: Int, data: borrow [F32]) {
     metalRaceProbeUniformWrite(ctx)
     let buffer = metalLookup(ctx, uniformId)
     let contents: RawPtr = metalMsgSend(buffer, metalSel("contents"))
@@ -279,8 +268,7 @@ function metalUpdateUniform(ctx: RawPtr, uniformId: Int, data: borrow [F32]) {
 
 // Bind a uniform buffer to a fragment-shader buffer slot on the active encoder, at
 // the ring slot its most recent write went to.
-public @Native
-function metalEncoderBindFragmentUniform(ctx: RawPtr, uniformId: Int, index: Int) {
+public function metalEncoderBindFragmentUniform(ctx: RawPtr, uniformId: Int, index: Int) {
     let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
     let buffer = metalLookup(ctx, uniformId)
     let offset = metalRingOffset(ctx, U64(uniformId))
@@ -290,8 +278,7 @@ function metalEncoderBindFragmentUniform(ctx: RawPtr, uniformId: Int, index: Int
 
 // Encode a non-indexed draw on the active render-command encoder: bind the pipeline
 // state, the vertex buffer (slot 0), then draw `vertexCount` triangle vertices.
-public @Native
-function metalEncoderDraw(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, vertexCount: Int, instanceCount: Int) {
+public function metalEncoderDraw(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, vertexCount: Int, instanceCount: Int) {
     let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
     let pipeline = metalLookup(ctx, pipelineId)
     metalMsgSend(encoder, metalSel("setRenderPipelineState:"), pipeline)
@@ -311,8 +298,7 @@ function metalEncoderDraw(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, has
 // Encode an INDIRECT draw: bind pipeline + vertex buffer, then let the GPU read
 // the draw arguments (vertexCount/instanceCount/...) from a compute-written
 // argument buffer — the CPU never learns the count (GPU-driven rendering).
-public @Native
-function metalEncoderDrawIndirect(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indirectBufferId: Int) {
+public function metalEncoderDrawIndirect(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indirectBufferId: Int) {
     let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
     let pipeline = metalLookup(ctx, pipelineId)
     metalMsgSend(encoder, metalSel("setRenderPipelineState:"), pipeline)
@@ -328,14 +314,12 @@ function metalEncoderDrawIndirect(ctx: RawPtr, pipelineId: Int, vertexBufferId: 
 
 // Encode an indexed draw: bind the pipeline state and vertex buffer, then draw
 // `indexCount` triangle indices (uint32) from the index buffer.
-public @Native
-function metalEncoderDrawIndexed(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indexBufferId: Int, indexCount: Int, instanceCount: Int) {
+public function metalEncoderDrawIndexed(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indexBufferId: Int, indexCount: Int, instanceCount: Int) {
     metalEncoderDrawIndexedRange(ctx, pipelineId, vertexBufferId, hasVertexBuffer, indexBufferId, indexCount, instanceCount, 0)
     return
 }
 
-public @Native
-function metalEncoderDrawIndexedRange(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indexBufferId: Int, indexCount: Int, instanceCount: Int, firstIndex: Int) {
+public function metalEncoderDrawIndexedRange(ctx: RawPtr, pipelineId: Int, vertexBufferId: Int, hasVertexBuffer: Bool, indexBufferId: Int, indexCount: Int, instanceCount: Int, firstIndex: Int) {
     let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
     let pipeline = metalLookup(ctx, pipelineId)
     metalMsgSend(encoder, metalSel("setRenderPipelineState:"), pipeline)
@@ -351,8 +335,7 @@ function metalEncoderDrawIndexedRange(ctx: RawPtr, pipelineId: Int, vertexBuffer
 
 // MTLScissorRect is four NSUIntegers (32 bytes), passed indirectly on arm64 just
 // like MTLRegion. Limit fill work without changing vertex coordinates or UVs.
-public @Native
-function metalEncoderSetScissorRect(ctx: RawPtr, x: Int, y: Int, width: Int, height: Int) {
+public function metalEncoderSetScissorRect(ctx: RawPtr, x: Int, y: Int, width: Int, height: Int) {
     let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
     if pointerIsNull(encoder) || width <= 0 || height <= 0 {
         return

@@ -2,8 +2,7 @@ public struct EMGraphicsSampler {
     var id: U32 = 0
 }
 
-public @Native
-function emptyGraphicsSampler() -> EMGraphicsSampler {
+public function emptyGraphicsSampler() -> EMGraphicsSampler {
     return EMGraphicsSampler {
         id: 0
     }

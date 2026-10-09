@@ -28,45 +28,38 @@ public @FFI.Extern { library: graphics_support, symbol: kira_live_take_reload, a
 function kiraLiveTakeReload(): Bool
 
 // Whether a live-reload runner asked for a reload this frame.
-public @Native
-function emberLiveReloadPending(): Bool {
+public function emberLiveReloadPending(): Bool {
     return kiraLiveTakeReload()
 }
 
 // The stages a run reports for the live-reload runner to watch. Each is a log
 // line the runner greps for; with no runner the weak C no-op drops them.
-public @Native
-function emberLiveUiFoundationAppStarted(): Void {
+public function emberLiveUiFoundationAppStarted(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.app.started")
     return
 }
 
-public @Native
-function emberLiveUiFoundationTreeBuilt(): Void {
+public function emberLiveUiFoundationTreeBuilt(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.tree.built")
     return
 }
 
-public @Native
-function emberLiveUiFoundationRetainedTreeReady(): Void {
+public function emberLiveUiFoundationRetainedTreeReady(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.retained_tree.ready")
     return
 }
 
-public @Native
-function emberLiveUiFoundationLayoutNonEmpty(): Void {
+public function emberLiveUiFoundationLayoutNonEmpty(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.layout.non_empty")
     return
 }
 
-public @Native
-function emberLiveUiFoundationRenderCommandsGenerated(): Void {
+public function emberLiveUiFoundationRenderCommandsGenerated(): Void {
     kiraLiveEmitLogLine("live.ui_foundation.render_commands.generated")
     return
 }
 
-public @Native
-function emberLiveVisibleContentSubmitted(): Void {
+public function emberLiveVisibleContentSubmitted(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.visible_content.submitted")
     kiraLiveEmitLogLine("KIRA_UI_DRAW_COMMANDS_SUBMITTED")
     kiraLiveEmitLogLine("KIRA_APP_RENDERED_VISIBLE_CONTENT")
@@ -74,15 +67,13 @@ function emberLiveVisibleContentSubmitted(): Void {
 }
 
 // A backend reports where a frame reached, for the live-reload runner to watch.
-public @Native
-function emberLiveFramePresented(): Void {
+public function emberLiveFramePresented(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.frame.submitted")
     kiraLiveEmitFirstFrame()
     return
 }
 
-public @Native
-function emberLiveBackendInitialized(): Void {
+public function emberLiveBackendInitialized(): Void {
     kiraLiveEmitLogLine("live.kira_graphics.backend.initialized")
     return
 }
@@ -92,8 +83,7 @@ function emberLiveBackendInitialized(): Void {
 // KIRA_UI_CLICK_SCRIPT and its siblings use `frame@x,y;frame@x,y`. Every
 // integer is parsed in order, so separators are deliberately insignificant and
 // negative coordinates stay useful for input tests that verify misses.
-public @Native
-function harnessEnvInts(value: borrow String) -> [Int] {
+public function harnessEnvInts(value: borrow String) -> [Int] {
     var out: [Int] = []
     var i = 0
     var going = true
@@ -151,8 +141,7 @@ function harnessEnvInts(value: borrow String) -> [Int] {
 
 // A run handed a harness value takes its knobs from there; otherwise it reads
 // the environment. Both backends resolve their knobs through here.
-public @Native
-function readHarnessKnobs(state: borrow mut EMGraphicsAppRuntimeState) {
+public function readHarnessKnobs(state: borrow mut EMGraphicsAppRuntimeState) {
     if state.app.harness.configured {
         applyHarnessConfig(state)
         return
@@ -201,8 +190,7 @@ function readHarnessKnobs(state: borrow mut EMGraphicsAppRuntimeState) {
 }
 
 // A harness value, copied into the run's knobs.
-public @Native
-function applyHarnessConfig(state: borrow mut EMGraphicsAppRuntimeState) {
+public function applyHarnessConfig(state: borrow mut EMGraphicsAppRuntimeState) {
     let h = state.app.harness
     state.quitAfterFrames = h.quitAfterFrames
     state.resizeSweep = h.resizeSweep
@@ -230,8 +218,7 @@ function applyHarnessConfig(state: borrow mut EMGraphicsAppRuntimeState) {
 
 // Replays the key and text scripts for one frame through the ordinary event
 // handler, so a driven run and a real one take the same path.
-public @Native
-function driveTypingScripts(state: borrow mut EMGraphicsAppRuntimeState, scriptFrame: Int) {
+public function driveTypingScripts(state: borrow mut EMGraphicsAppRuntimeState, scriptFrame: Int) {
     let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
     var keyIndex = 0
     while keyIndex + 3 <= state.keyScript.count {

@@ -14,8 +14,7 @@ public struct EMGraphicsShader {
     var uniformBlocks: [UniformBlockDescriptor] = []
 }
 
-public @Native
-function emptyGraphicsShader() -> EMGraphicsShader {
+public function emptyGraphicsShader() -> EMGraphicsShader {
     return EMGraphicsShader {
         id: 0
     }

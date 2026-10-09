@@ -89,8 +89,7 @@ public function graphicsTracing() -> Bool {
 }
 
 // The older entry point: an unstaged failure.
-public @Native
-function graphicsDiagnostic(message: String) {
+public function graphicsDiagnostic(message: String) {
     kgDiagnostic("general", I32(-1), I32(0), message)
     return
 }

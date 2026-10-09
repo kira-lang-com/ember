@@ -4,8 +4,7 @@ import Foundation
 // This is the producer path: there is no cross-device memory import. The image
 // and memory stay ordinary KG-owned resources while SharedSurface owns only the
 // exported dma-buf descriptor handed to the compositor.
-public @Native
-function vulkanCreateSharedTexture(context: RawPtr, width: Int, height: Int) -> SharedTexture {
+public function vulkanCreateSharedTexture(context: RawPtr, width: Int, height: Int) -> SharedTexture {
     if !vulkanRequireDevice(context, "vulkanCreateSharedTexture") { return SharedTexture {} }
     if width <= 0 || height <= 0 {
         graphicsFail(.Resource, "a shared texture was created " + String(width) + "x" + String(height))
@@ -62,8 +61,7 @@ function vulkanCreateSharedTexture(context: RawPtr, width: Int, height: Int) -> 
 // Import a SharedSurface directly into the native Vulkan backend. The native
 // seam duplicates and consumes the opaque fd, recreates the allocator's exact
 // image description on this VkDevice, and returns handles this backend owns.
-public @Native
-function vulkanImportSharedTexture(context: RawPtr, surface: borrow SharedSurface) -> SharedTexture {
+public function vulkanImportSharedTexture(context: RawPtr, surface: borrow SharedSurface) -> SharedTexture {
     if !vulkanRequireDevice(context, "vulkanImportSharedTexture") { return SharedTexture {} }
     if !surface.isValid() {
         graphicsFail(.Resource, "a shared texture was imported from a surface that is not valid")

@@ -9,8 +9,7 @@ import Foundation
 // runtime state is in hand, because a `WNDPROC` is handed no user pointer to
 // reach it through (see `DawnWindow.kira`).
 
-public @Native
-function dawnRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Void {
+public function dawnRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Void {
     var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     state.dawn = dawnEmptyState()
     readHarnessKnobs(state)
@@ -105,8 +104,7 @@ function dawnRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: 
 // frame takes the resize path — the same `WM_SIZE`, the same reconfigure, the
 // same relayout — and a frame-cost summary describes resizing rather than
 // idling.
-public @Native
-function dawnSweepWindowSize(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnSweepWindowSize(state: borrow mut EMGraphicsAppRuntimeState) {
     if state.resizeSweep <= 0 {
         return
     }
@@ -123,8 +121,7 @@ function dawnSweepWindowSize(state: borrow mut EMGraphicsAppRuntimeState) {
 
 // One frame after another until the window closes, the application requests a
 // quit, or the harness's frame limit is reached.
-public @Native
-function dawnDriveFrames(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnDriveFrames(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     while !state.dawn.quitRequested {
         // Draining the platform's queue. The two window systems are least
         // alike here: Windows hands a client a message queue it peeks, and
@@ -158,8 +155,7 @@ function dawnDriveFrames(state: borrow mut EMGraphicsAppRuntimeState, runtimeUse
 
 // One frame: hand the application a `RenderFrame`, then end whatever it left
 // open and present.
-public @Native
-function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     let graphics = EMGraphics {
         userData: state.userData,
         backend: .Dawn,
@@ -292,8 +288,7 @@ function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserDa
 // Polled rather than driven from `WM_SIZE`: a size message arrives while the
 // window is being dragged, several times a frame, and reconfiguring a surface
 // mid-drag costs more than measuring the rectangle once.
-public @Native
-function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     let width = dawnWindowFor(dawnPlatformForHost()).clientWidth(state.dawn.window)
     let height = dawnWindowFor(dawnPlatformForHost()).clientHeight(state.dawn.window)
     if width <= 0 || height <= 0 {
@@ -326,8 +321,7 @@ function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, runtime
 // can pump, and a pumped `WM_SIZE` arriving inside a frame would begin a second
 // one against an encoder the first still holds. The dropped frame costs a
 // repeated size; running it would corrupt the one in flight.
-public @Native
-function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
+public function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
     var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
     if state.dawn.inFrame || state.dawn.quitRequested || pointerIsNull(state.dawn.device) {
         return
@@ -341,8 +335,7 @@ function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
 
 // Drains the message queue, turning what the application cares about into
 // `EMAppEvent`s and dispatching the rest.
-public @Native
-function dawnPumpMessages(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnPumpMessages(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     let messages: WindowMessagePointer = state.dawn.messageBlock
     let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
     while peekMessage(messages, nullPointer(), U32(0), U32(0), U32(1)) != 0 {
@@ -364,8 +357,7 @@ function dawnPumpMessages(state: borrow mut EMGraphicsAppRuntimeState, runtimeUs
 
 // One queued message as an `EMAppEvent`, or nothing when the application has no
 // vocabulary for it.
-public @Native
-function dawnDeliverMessage(state: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
+public function dawnDeliverMessage(state: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
     let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
     let scale = dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
     // A pointer message carries its position in the low and high halves of

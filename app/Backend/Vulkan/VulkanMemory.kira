@@ -3,8 +3,7 @@ import Foundation
 // Host-visible buffer allocation and the mapped writes shared by vertex,
 // uniform, storage and staging resources.
 
-public @Native
-function vulkanFindMemoryType(state: borrow VulkanState, typeBits: U32, required: U32) -> U32 {
+public function vulkanFindMemoryType(state: borrow VulkanState, typeBits: U32, required: U32) -> U32 {
     let properties = allocateBytes(U64(520))
     vkGetPhysicalDeviceMemoryProperties(state.physicalDevice, properties)
     let count = Int(wordAt(properties, U64(0)))
@@ -20,8 +19,7 @@ function vulkanFindMemoryType(state: borrow VulkanState, typeBits: U32, required
     return U32(4294967295)
 }
 
-public @Native
-function vulkanCreateBufferHandle(state: borrow mut VulkanState, label: borrow String, usage: U32, byteSize: Int, memoryFlags: U32) -> U32 {
+public function vulkanCreateBufferHandle(state: borrow mut VulkanState, label: borrow String, usage: U32, byteSize: Int, memoryFlags: U32) -> U32 {
     if byteSize <= 0 || pointerIsNull(state.device) {
         graphicsFail(.Resource, "buffer '" + label + "' of " + String(byteSize) + " bytes " + (pointerIsNull(state.device) ? "has no device to be created on" : "cannot be created; a buffer needs at least one byte"))
         return U32(0)
@@ -91,8 +89,7 @@ function vulkanCreateBufferHandle(state: borrow mut VulkanState, label: borrow S
     return id
 }
 
-public @Native
-function vulkanWriteFloats(state: borrow VulkanState, bufferId: U32, data: borrow [F32], offset: U64) {
+public function vulkanWriteFloats(state: borrow VulkanState, bufferId: U32, data: borrow [F32], offset: U64) {
     let mapped = vulkanObjectExtra(state, bufferId)
     if pointerIsNull(mapped) {
         return

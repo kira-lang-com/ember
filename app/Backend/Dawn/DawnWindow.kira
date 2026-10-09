@@ -289,14 +289,12 @@ public function dawnWindowProcedure(window: RawPtr, message: U32, wparam: U64, l
 }
 
 // The runtime state a window was opened for, or null before it was attached.
-public @Native
-function dawnWindowRuntime(window: RawPtr) -> RawPtr {
+public function dawnWindowRuntime(window: RawPtr) -> RawPtr {
     return windowLong(window, dawnWindowUserDataIndex())
 }
 
 // Attaches the runtime state to the window, so its procedure can reach it.
-public @Native
-function dawnAttachWindowRuntime(window: RawPtr, runtimeUserData: RawPtr) {
+public function dawnAttachWindowRuntime(window: RawPtr, runtimeUserData: RawPtr) {
     setWindowLong(window, dawnWindowUserDataIndex(), runtimeUserData)
     return
 }
@@ -307,8 +305,7 @@ function dawnAttachWindowRuntime(window: RawPtr, runtimeUserData: RawPtr) {
 // normal case on a second call and not a failure — so a zero atom is only
 // reported when nothing of that name has ever been registered, and the caller
 // finds out by trying to create the window.
-public @Native
-function dawnRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
+public function dawnRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
     return registerWindowClass(WindowClass {
         // `CS_HREDRAW | CS_VREDRAW`: redraw the whole client area when either
         // dimension changes, so a resize repaints rather than smearing.
@@ -329,8 +326,7 @@ function dawnRegisterWindowClass(instance: RawPtr, className: borrow String) -> 
 // `GetDpiForWindow` will answer for the window this opens. A process that never
 // declared awareness is told 96 here and 96 there, so the unscaled path falls
 // out of the same arithmetic rather than needing a branch.
-public @Native
-function dawnSystemScale() -> Float {
+public function dawnSystemScale() -> Float {
     let dpi = Int(systemDpi())
     if dpi <= 0 {
         return 1.0
@@ -352,8 +348,7 @@ public function dawnPixelsFromPoints(points: Int, scale: Float) -> Int {
 // pixels, so the backing scale multiplies in here: a 1920-point window on a
 // 125% display asks for a 2400-pixel client area, exactly as sokol-app does,
 // and the two backends then agree on the drawable Windows gives back.
-public @Native
-function dawnOpenWindow(
+public function dawnOpenWindow(
     instance: RawPtr,
     className: borrow String,
     title: borrow String,
@@ -429,8 +424,7 @@ function dawnOpenWindow(
 // gradient color is the tint the compositor mixes over the blur, in
 // `0xAABBGGRR`, and a dark low-alpha tint is what keeps a bright desktop from
 // washing the chrome out.
-public @Native
-function dawnEnableWindowBackdrop(window: RawPtr) {
+public function dawnEnableWindowBackdrop(window: RawPtr) {
     // The frame first: the backdrop is drawn where the compositor owns the
     // window, and -1 on every side is "the whole client area".
     let margins = allocateBytes(U64(16))
@@ -462,8 +456,7 @@ public function dawnBackdropAcrylic() -> U32 { return U32(3) }
 // Both attributes go in ONE call, because the flags are what the call reads:
 // setting the key and then the alpha in two calls leaves the window carrying
 // whichever was set last.
-public @Native
-function dawnApplyWindowComposition(window: RawPtr, transparent: Bool, opacity: Float) {
+public function dawnApplyWindowComposition(window: RawPtr, transparent: Bool, opacity: Float) {
     if transparent == false && opacity >= 1.0 {
         return
     }
@@ -499,8 +492,7 @@ public function dawnStyleForMode(mode: borrow EMWindowMode) -> U32 {
 }
 
 // Moves an undecorated window over the whole display it is on.
-public @Native
-function dawnCoverDisplay(window: RawPtr) {
+public function dawnCoverDisplay(window: RawPtr) {
     let monitor = monitorForWindow(window, U32(2))
     if pointerIsNull(monitor) {
         return
@@ -525,8 +517,7 @@ function dawnCoverDisplay(window: RawPtr) {
 
 // The client area in physical pixels, which is what the surface is configured
 // with and what a drawable measures.
-public @Native
-function dawnClientWidth(window: RawPtr) -> Int {
+public function dawnClientWidth(window: RawPtr) -> Int {
     if pointerIsNull(window) {
         return 0
     }
@@ -539,8 +530,7 @@ function dawnClientWidth(window: RawPtr) -> Int {
     return width
 }
 
-public @Native
-function dawnClientHeight(window: RawPtr) -> Int {
+public function dawnClientHeight(window: RawPtr) -> Int {
     if pointerIsNull(window) {
         return 0
     }
@@ -556,8 +546,7 @@ function dawnClientHeight(window: RawPtr) -> Int {
 // Physical pixels per point, from the window's own DPI rather than the
 // display's: a window dragged between two monitors of different scales reports
 // the one it is on.
-public @Native
-function dawnWindowScale(window: RawPtr) -> Float {
+public function dawnWindowScale(window: RawPtr) -> Float {
     if pointerIsNull(window) {
         return 1.0
     }
@@ -571,8 +560,7 @@ function dawnWindowScale(window: RawPtr) -> Float {
 // How the window is presented right now, read off the window rather than
 // remembered: a user can leave a mode through the window manager, and a stored
 // copy would go stale exactly when it mattered.
-public @Native
-function dawnReadWindowMode(window: RawPtr) -> EMWindowMode {
+public function dawnReadWindowMode(window: RawPtr) -> EMWindowMode {
     if pointerIsNull(window) {
         return .Windowed
     }
@@ -606,8 +594,7 @@ function dawnReadWindowMode(window: RawPtr) -> EMWindowMode {
 // `SWP_NOMOVE | SWP_NOZORDER`. Windows answers with the same `WM_SIZE` a drag
 // produces, which is what makes a swept size exercise the resize path rather
 // than a path of its own.
-public @Native
-function dawnResizeWindow(window: RawPtr, width: Int, height: Int) {
+public function dawnResizeWindow(window: RawPtr, width: Int, height: Int) {
     if pointerIsNull(window) {
         return
     }
@@ -630,8 +617,7 @@ function dawnResizeWindow(window: RawPtr, width: Int, height: Int) {
 // Moves the window to `mode`, sized in POINTS as `dawnOpenWindow` is. The style
 // is rewritten and the frame recalculated before the size is applied, because
 // Windows caches the non-client metrics until it is told they changed.
-public @Native
-function dawnApplyWindowMode(window: RawPtr, mode: borrow EMWindowMode, width: Int, height: Int) {
+public function dawnApplyWindowMode(window: RawPtr, mode: borrow EMWindowMode, width: Int, height: Int) {
     if pointerIsNull(window) {
         return
     }
@@ -671,8 +657,7 @@ function dawnApplyWindowMode(window: RawPtr, mode: borrow EMWindowMode, width: I
 
 // The modifier keys held right now. `GetKeyState`'s high bit is "down", and the
 // value is signed, so a negative answer is a held key.
-public @Native
-function dawnModifierState() -> EMModifierState {
+public function dawnModifierState() -> EMModifierState {
     return EMModifierState {
         shift: keyState(I32(16)) < I16(0),
         control: keyState(I32(17)) < I16(0),

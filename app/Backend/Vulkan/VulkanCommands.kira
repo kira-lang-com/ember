@@ -2,8 +2,7 @@ import Foundation
 
 // Compute may run during initialization as well as between render passes.
 // Standalone work uses the same command buffer only after its frame retires.
-public @Native
-function vulkanBeginComputeCommands(state: borrow mut VulkanState) -> Bool {
+public function vulkanBeginComputeCommands(state: borrow mut VulkanState) -> Bool {
     if state.passActive {
         graphicsFail(.Frame, "end the Vulkan render pass before dispatching compute")
         return false
@@ -26,8 +25,7 @@ function vulkanBeginComputeCommands(state: borrow mut VulkanState) -> Bool {
 
 // Make compute writes visible to subsequent shaders, vertex/index fetches,
 // indirect commands, transfers and host readback.
-public @Native
-function vulkanComputeBarrier(state: borrow VulkanState) {
+public function vulkanComputeBarrier(state: borrow VulkanState) {
     let barrier = VkMemoryBarrier {
         sType: I32(VK_STRUCTURE_TYPE_MEMORY_BARRIER),
         srcAccessMask: U32(VK_ACCESS_SHADER_WRITE_BIT),
@@ -41,8 +39,7 @@ function vulkanComputeBarrier(state: borrow VulkanState) {
 // Flush recorded commands without presenting. A readback in the middle of a
 // frame consumes the acquire semaphore once, then resumes recording on the
 // same acquired image. The final submission still signals the frame fence.
-public @Native
-function vulkanFlushCommands(state: borrow mut VulkanState, resume: Bool) -> Bool {
+public function vulkanFlushCommands(state: borrow mut VulkanState, resume: Bool) -> Bool {
     if state.passActive {
         graphicsFail(.Frame, "commands cannot be flushed while a render pass is open")
         return false
@@ -88,8 +85,7 @@ function vulkanFlushCommands(state: borrow mut VulkanState, resume: Bool) -> Boo
     }) == vulkanSuccess()
 }
 
-public @Native
-function vulkanFinishComputeCommands(state: borrow mut VulkanState) {
+public function vulkanFinishComputeCommands(state: borrow mut VulkanState) {
     vulkanComputeBarrier(state)
     if !state.frameActive && !vulkanFlushCommands(state, false) {
         graphicsFail(.Frame, "compute submission failed")

@@ -6,7 +6,6 @@ import Foundation
 // the backend reports the center pixel it actually rendered so the run proves
 // real Kira-owned Metal rendering headlessly.
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Metal Clear"

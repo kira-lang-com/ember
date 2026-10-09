@@ -5,7 +5,6 @@ function vulkanSelfTestCapturePath() -> String {
     return ".kira-build/vulkan-clear-test.ppm"
 }
 
-@Native
 function vulkanSelfTestClear() -> Bool {
     if hostPlatform() != .Linux && hostPlatform() != .Windows {
         print("Vulkan rendering requires Linux or Windows; no GPU test was executed")

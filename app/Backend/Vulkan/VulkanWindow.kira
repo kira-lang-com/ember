@@ -66,8 +66,7 @@ public function vulkanWindowProcedure(window: RawPtr, message: U32, wparam: U64,
     return defaultWindowProcedure(window, message, wparam, lparam)
 }
 
-public @Native
-function vulkanRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
+public function vulkanRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
     return registerWindowClass(WindowClass {
         byteSize: U32(80),
         style: U32(3),

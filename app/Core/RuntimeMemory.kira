@@ -80,7 +80,6 @@ function pointerIsNull(ptr: RawPtr): Bool
 // at run time: the target is something the build already knows, and a program
 // that had to open a library to find out could not run on a machine where that
 // library is missing.
-@Native
 comptime macro hostPlatformName {
     kind { function }
     expand(input: Syntax) -> Syntax {

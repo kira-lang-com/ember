@@ -28,8 +28,7 @@ public function metalRegistryKindFree() -> U8 { return 0 }
 // autorelease pool would free it at frame end — before the post-loop readback runs.
 // Retain it here (releasing the previous frame's committed buffer) so it survives the
 // pool pop; metalContextFree releases the last one.
-public @Native
-function metalStashCommandBuffer(ctx: RawPtr, commandBuffer: RawPtr) {
+public function metalStashCommandBuffer(ctx: RawPtr, commandBuffer: RawPtr) {
     let previous = metalMemReadPtr(ctx, metalOffsetCommandBuffer())
     if !pointerIsNull(previous) {
         metalMsgSend(previous, metalSel("release"))
@@ -43,8 +42,7 @@ function metalStashCommandBuffer(ctx: RawPtr, commandBuffer: RawPtr) {
 // boundaries still end their encoders (so texture writes are visible to later
 // encoders), but capture/blur/composite no longer pay a commit and pacing wait per
 // pass. The frame submission hook commits this buffer once.
-public @Native
-function metalContextActiveCommandBuffer(ctx: RawPtr) -> RawPtr {
+public function metalContextActiveCommandBuffer(ctx: RawPtr) -> RawPtr {
     var commandBuffer = metalMemReadPtr(ctx, metalOffsetActiveCommandBuffer())
     if !pointerIsNull(commandBuffer) {
         return commandBuffer
@@ -111,8 +109,7 @@ public function metalRegistryReserve(ctx: RawPtr, needed: U64) {
 
 // Register a +1-owned Objective-C resource pointer and return its handle id. The
 // entry is tagged as an object so teardown releases it.
-public @Native
-function metalRegister(ctx: RawPtr, object: RawPtr) -> Int {
+public function metalRegister(ctx: RawPtr, object: RawPtr) -> Int {
     let id = metalTakeId(ctx)
     let registry = metalMemReadPtr(ctx, metalOffsetRegistry())
     metalMemWritePtr(registry, id * 8, object)
@@ -124,8 +121,7 @@ function metalRegister(ctx: RawPtr, object: RawPtr) -> Int {
 // Register a raw metalMemAlloc block (e.g. a bind group) and return its handle id.
 // The entry is tagged as a raw block so teardown frees it with metalMemFree rather
 // than sending it an Objective-C `release` (which would crash on a non-object).
-public @Native
-function metalRegisterRawBlock(ctx: RawPtr, block: RawPtr) -> Int {
+public function metalRegisterRawBlock(ctx: RawPtr, block: RawPtr) -> Int {
     let id = metalTakeId(ctx)
     let registry = metalMemReadPtr(ctx, metalOffsetRegistry())
     metalMemWritePtr(registry, id * 8, block)
@@ -168,8 +164,7 @@ public function metalTakeId(ctx: RawPtr) -> U64 {
 // nor a block. That matters because a caller cannot see the difference — a
 // double `destroyUniform` would otherwise over-release an Objective-C object and
 // take the process down some frames later.
-public @Native
-function metalUnregister(ctx: RawPtr, id: Int) {
+public function metalUnregister(ctx: RawPtr, id: Int) {
     if id <= 0 {
         return
     }
@@ -200,8 +195,7 @@ function metalUnregister(ctx: RawPtr, id: Int) {
 }
 
 // Resolve a handle id back to its Objective-C resource pointer.
-public @Native
-function metalLookup(ctx: RawPtr, id: Int) -> RawPtr {
+public function metalLookup(ctx: RawPtr, id: Int) -> RawPtr {
     let registry = metalMemReadPtr(ctx, metalOffsetRegistry())
     return metalMemReadPtr(registry, id * 8)
 }
@@ -209,8 +203,7 @@ function metalLookup(ctx: RawPtr, id: Int) -> RawPtr {
 
 // Resolve a handle id (as U64) to its Objective-C resource pointer. Used by the
 // bind-group apply loop, which carries ids as U64 in its raw entry block.
-public @Native
-function metalLookupU64(ctx: RawPtr, id: U64) -> RawPtr {
+public function metalLookupU64(ctx: RawPtr, id: U64) -> RawPtr {
     let registry = metalMemReadPtr(ctx, metalOffsetRegistry())
     return metalMemReadPtr(registry, id * 8)
 }

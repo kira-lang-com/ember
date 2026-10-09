@@ -36,7 +36,6 @@ function triangleVertexLayout() -> VertexLayout {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Vulkan Triangle",

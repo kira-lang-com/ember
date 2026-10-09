@@ -64,8 +64,7 @@ public function metalNsOtherDragged() -> Int { return 27 }
 // boxes NSPoint/NSRect/CGFloat as NSValue/NSNumber (a pointer return, which
 // marshals), and -getValue: writes the raw doubles into `buf`. A null boxed
 // value leaves the buffer's first slot zeroed so stale reads decode to 0.
-public @Native
-function metalKvcValueInto(obj: RawPtr, key: RawPtr, buf: RawPtr) {
+public function metalKvcValueInto(obj: RawPtr, key: RawPtr, buf: RawPtr) {
     metalMemWriteU64(buf, 0, 0)
     metalMemWriteU64(buf, 8, 0)
     metalMemWriteU64(buf, 16, 0)
@@ -90,8 +89,7 @@ function metalKvcValueInto(obj: RawPtr, key: RawPtr, buf: RawPtr) {
 // mismatch against our own -windowNumber means the pointer is over someone else.
 // `mouseLocation` is used rather than the event's own location because the answer
 // has to be in screen space, and it is the current cursor position either way.
-public @Native
-function metalWindowIsUnderCursor(app: RawPtr, window: RawPtr) -> Bool {
+public function metalWindowIsUnderCursor(app: RawPtr, window: RawPtr) -> Bool {
     // System-posted moves can carry no window; the key window is the one they
     // would have been delivered to, so it is what the comparison is against.
     var ours = window
@@ -129,8 +127,7 @@ function metalWindowIsUnderCursor(app: RawPtr, window: RawPtr) -> Bool {
 
 // Modifier state from -[NSEvent modifierFlags] (bit 17 shift, 18 control,
 // 19 option, 20 command), extracted with div/mod (no bitwise ops needed).
-public @Native
-function metalModifiersFromFlags(flags: Int) -> EMModifierState {
+public function metalModifiersFromFlags(flags: Int) -> EMModifierState {
     return EMModifierState {
         shift: (flags / 131072) - ((flags / 131072) / 2) * 2 == 1,
         control: (flags / 262144) - ((flags / 262144) / 2) * 2 == 1,
@@ -143,8 +140,7 @@ function metalModifiersFromFlags(flags: Int) -> EMModifierState {
 // carries nothing for the app). Pointer coordinates convert from window space
 // (bottom-left origin, points) to view-local top-left via the content view's
 // bounds height.
-public @Native
-function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> EMAppEvent {
+public function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> EMAppEvent {
     let etype = Int(metalMsgSendCount(event, metalSel("type")))
     var kind: EMAppEventKind = .None
     var button: EMPointerButton = .None
@@ -354,8 +350,7 @@ public function metalPointersDiffer(a: RawPtr, b: RawPtr) -> Bool {
 // first responder on click and the child would otherwise hold the keyboard
 // forever. Hit testing is the whole of the decision. Mouse types 1, 2 and 3
 // are left, right and other mouse-down.
-public @Native
-function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
+public function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
     let etype = Int(metalMsgSendCount(event, metalSel("type")))
     if etype != 1 && etype != 2 && etype != 3 {
         return
@@ -388,8 +383,7 @@ function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
 // nativeRecover). The window still gets -sendEvent: for activation/title-bar
 // behavior, except key-downs (kept from the window so the unhandled-key beep
 // never fires).
-public @Native
-function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: borrow (Float, Float) -> Bool) -> [EMAppEvent] {
+public function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: borrow (Float, Float) -> Bool) -> [EMAppEvent] {
     if metalUsesUIKit!() {
         return metalUIKitTakeEvents()
     }
@@ -484,8 +478,7 @@ function metalPumpEvents(app: RawPtr, view: RawPtr, ctx: RawPtr, dragRegion: bor
 // set a title bar's double click to do (System Settings > Desktop & Dock), and
 // anything else hands the drag to the window server, which tracks it without
 // this loop.
-public @Native
-function metalWindowBeginTitlebarGesture(view: RawPtr, event: RawPtr) {
+public function metalWindowBeginTitlebarGesture(view: RawPtr, event: RawPtr) {
     let window: RawPtr = metalMsgSend(view, metalSel("window"))
     if pointerIsNull(window) {
         return
@@ -505,8 +498,7 @@ function metalWindowBeginTitlebarGesture(view: RawPtr, event: RawPtr) {
     return
 }
 
-public @Native
-function metalStringEquals(string: RawPtr, literal: String) -> Bool {
+public function metalStringEquals(string: RawPtr, literal: String) -> Bool {
     if pointerIsNull(string) {
         return false
     }

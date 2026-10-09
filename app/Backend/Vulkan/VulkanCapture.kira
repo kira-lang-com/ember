@@ -5,8 +5,7 @@ import Foundation
 // instrument, not a rendering path: a finite capture is what lets a test inspect
 // actual pixels instead of trusting draw counters.
 
-public @Native
-function vulkanRecordFrameCapture(state: borrow mut VulkanState) -> U32 {
+public function vulkanRecordFrameCapture(state: borrow mut VulkanState) -> U32 {
     if !state.captureSupported || state.swapchainImages.count == 0 {
         graphicsFail(.Capture, "this swapchain cannot be read back")
         return U32(0)
@@ -38,8 +37,7 @@ function vulkanRecordFrameCapture(state: borrow mut VulkanState) -> U32 {
     return staging
 }
 
-public @Native
-function vulkanWriteFrameCapture(state: borrow mut VulkanState, staging: U32, path: borrow String) {
+public function vulkanWriteFrameCapture(state: borrow mut VulkanState, staging: U32, path: borrow String) {
     if staging == 0 { return }
     if vkQueueWaitIdle(state.queue) != vulkanSuccess() {
         graphicsFail(.Capture, "capture submission did not complete")
@@ -58,8 +56,7 @@ function vulkanWriteFrameCapture(state: borrow mut VulkanState, staging: U32, pa
     return
 }
 
-public @Native
-function vulkanPortablePixmap(mapped: RawPtr, width: Int, height: Int, format: I32) -> [U8] {
+public function vulkanPortablePixmap(mapped: RawPtr, width: Int, height: Int, format: I32) -> [U8] {
     let blueFirst = format == vulkanFormatBgra8()
     var bytes: [U8] = []
     for byte in dawnAsciiBytes("P6\n" + String(width) + " " + String(height) + "\n255\n") {
@@ -87,8 +84,7 @@ function vulkanPortablePixmap(mapped: RawPtr, width: Int, height: Int, format: I
 // that has no swapchain to capture. Ends the frame in flight: the copy is
 // recorded after everything drawn so far, and the submission is waited for
 // before the pixels are read.
-public @Native
-function vulkanCaptureTexture(context: RawPtr, texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
+public function vulkanCaptureTexture(context: RawPtr, texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
     if !vulkanRequireDevice(context, "vulkanCaptureTexture") { return false }
     var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
     if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {

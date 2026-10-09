@@ -40,8 +40,7 @@ public struct RenderBackendSelection {
 // Web/WASM lands on Dawn honestly: the browser sandbox has no host-OS probe, so
 // `hostPlatform()` returns `Unknown` there, and Dawn is the only backend that
 // exists on wasm32-emscripten, through emscripten's WebGPU port.
-public @Native
-function graphicsDefaultBackend() -> RenderBackendKind {
+public function graphicsDefaultBackend() -> RenderBackendKind {
     let platform = hostPlatform()
     if platform == .MacOS {
         return graphicsBackendFromEnvironment(.Metal)
@@ -77,8 +76,7 @@ public function graphicsUsesWaylandClientWindowControls() -> Bool {
 // A name that is neither is reported rather than ignored: a typo in an
 // environment variable that silently selects the default is a run that proves
 // nothing about the backend it was supposed to exercise.
-public @Native
-function graphicsBackendFromEnvironment(fallback: RenderBackendKind) -> RenderBackendKind {
+public function graphicsBackendFromEnvironment(fallback: RenderBackendKind) -> RenderBackendKind {
     let requested = environmentValue("KIRA_GRAPHICS_BACKEND")
     if requested.count == 0 {
         return fallback
@@ -105,8 +103,7 @@ public function effectivePlatform(requested: EMPlatform) -> EMPlatform {
 }
 
 
-public @Native
-function validateRenderBackend(backend: RenderBackendKind, platform: EMPlatform) -> RenderBackendSelection {
+public function validateRenderBackend(backend: RenderBackendKind, platform: EMPlatform) -> RenderBackendSelection {
     let resolvedPlatform = effectivePlatform(move platform)
     match backend {
         Metal -> return validateMetalBackend(move resolvedPlatform)
@@ -116,8 +113,7 @@ function validateRenderBackend(backend: RenderBackendKind, platform: EMPlatform)
 }
 
 
-public @Native
-function validateVulkanBackend(platform: EMPlatform) -> RenderBackendSelection {
+public function validateVulkanBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .Windows || platform == .Linux {
         return RenderBackendSelection {
             backend: .Vulkan,
@@ -139,8 +135,7 @@ function validateVulkanBackend(platform: EMPlatform) -> RenderBackendSelection {
 // of what was Windows-only here. The second platform is `DawnWindowWayland`,
 // beside `DawnWindow.kira`, and the platform list in `DawnPlatform.kira` is
 // what demands one per platform it names.
-public @Native
-function validateDawnBackend(platform: EMPlatform) -> RenderBackendSelection {
+public function validateDawnBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .Windows {
         return RenderBackendSelection {
             backend: .Dawn,
@@ -165,8 +160,7 @@ function validateDawnBackend(platform: EMPlatform) -> RenderBackendSelection {
 }
 
 
-public @Native
-function validateMetalBackend(platform: EMPlatform) -> RenderBackendSelection {
+public function validateMetalBackend(platform: EMPlatform) -> RenderBackendSelection {
     if platform == .MacOS {
         return RenderBackendSelection {
             backend: .Metal,

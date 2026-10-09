@@ -366,8 +366,7 @@ public function waylandOnSeatGlobal(data: RawPtr, registry: RawPtr, name: U32, i
 // Called once, after the window exists and the run state is in hand -- the run
 // state being what the handlers are given, and what `open` has no way to pass
 // them.
-public @Native
-function dawnWaylandAttachInput(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnWaylandAttachInput(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
     var current = state
     if pointerIsNull(current.dawn.window) {
         return

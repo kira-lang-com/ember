@@ -11,8 +11,7 @@ public function vulkanCompositeAlpha(capabilities: borrow VkSurfaceCapabilitiesK
     return I32(8)
 }
 
-public @Native
-function vulkanSurfaceExtent(state: borrow VulkanState, capabilities: RawPtr) -> VkExtent2D {
+public function vulkanSurfaceExtent(state: borrow VulkanState, capabilities: RawPtr) -> VkExtent2D {
     if wordAt(capabilities, U64(8)) != U32(4294967295) {
         return VkExtent2D {
             width: wordAt(capabilities, U64(8)),
@@ -38,8 +37,7 @@ function vulkanSurfaceExtent(state: borrow VulkanState, capabilities: RawPtr) ->
     }
 }
 
-public @Native
-function vulkanChooseSurfaceFormat(state: borrow VulkanState, count: Int, formats: RawPtr) -> VkSurfaceFormatKHR {
+public function vulkanChooseSurfaceFormat(state: borrow VulkanState, count: Int, formats: RawPtr) -> VkSurfaceFormatKHR {
     var selected = VkSurfaceFormatKHR {
         format: vulkanFormatBgra8()
     }
@@ -64,8 +62,7 @@ function vulkanChooseSurfaceFormat(state: borrow VulkanState, count: Int, format
     return selected
 }
 
-public @Native
-function vulkanCreateSwapchain(state: borrow mut VulkanState) -> Bool {
+public function vulkanCreateSwapchain(state: borrow mut VulkanState) -> Bool {
     let capabilities = allocateBytes(U64(52))
     let capabilitiesResult = vkGetPhysicalDeviceSurfaceCapabilitiesKHR(state.physicalDevice, state.surface, capabilities)
     if capabilitiesResult != vulkanSuccess() {
@@ -202,8 +199,7 @@ function vulkanCreateSwapchain(state: borrow mut VulkanState) -> Bool {
     return true
 }
 
-public @Native
-function vulkanDestroySwapchain(state: borrow mut VulkanState) {
+public function vulkanDestroySwapchain(state: borrow mut VulkanState) {
     for semaphore in state.swapchainPresentSemaphores {
         vkDestroySemaphore(state.device, semaphore, nullPointer())
     }
@@ -221,8 +217,7 @@ function vulkanDestroySwapchain(state: borrow mut VulkanState) {
     return
 }
 
-public @Native
-function vulkanRecreateSwapchain(state: borrow mut VulkanState) -> Bool {
+public function vulkanRecreateSwapchain(state: borrow mut VulkanState) -> Bool {
     vkDeviceWaitIdle(state.device)
     vulkanDestroySwapchain(state)
     return vulkanCreateSwapchain(state)

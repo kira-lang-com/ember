@@ -64,8 +64,7 @@ public class BindGroup {
     var id: U32 = 0
 }
 
-public @Native
-function emptyBindGroup() -> BindGroup {
+public function emptyBindGroup() -> BindGroup {
     return BindGroup {
         storage: nativeState(BindGroupState {}),
         id: 0
@@ -77,8 +76,7 @@ function emptyBindGroup() -> BindGroup {
 // there is nothing behind the token to read — and nothing to free, which is
 // the point. `emptyBindGroup` stays for callers that may still add entries;
 // this is for slots whose emptiness is final.
-public @Native
-function unboundBindGroup() -> BindGroup {
+public function unboundBindGroup() -> BindGroup {
     return BindGroup {
         storage: nativeState(BindGroupState {}),
         id: 0
@@ -103,8 +101,7 @@ public function sokolMaxSamplerBindSlots() -> Int { return 12 }
 // `sg_bind_group` — so there is nothing to allocate beyond this value.
 // 1 rather than a counter: sokol keys nothing on this id, so every live
 // group answers the same "not empty" sentinel `bindGroupResult` reads.
-public @Native
-function sokolCreateBindGroupId(label: borrow String) -> BindGroup {
+public function sokolCreateBindGroupId(label: borrow String) -> BindGroup {
     return BindGroup {
         storage: nativeState(BindGroupState {
             label: label
@@ -119,8 +116,7 @@ function sokolCreateBindGroupId(label: borrow String) -> BindGroup {
 // range this is checked against is the binding space a KSL group numbers into —
 // the same one a texture entry is checked against — and a shader that declares
 // its uniform after eight textures is not asking sokol for a ninth block.
-public @Native
-function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uniform: borrow EMUniform) {
+public function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uniform: borrow EMUniform) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if uniformSlot < 0 || uniformSlot >= sokolMaxViewBindSlots() {
         graphicsFail(.Binding, "bind group '" + state.label + "' uniform slot is outside the binding range a shader group numbers into")
@@ -134,8 +130,7 @@ function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uni
     return
 }
 
-public @Native
-function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, texture: borrow EMGraphicsTexture) {
+public function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, texture: borrow EMGraphicsTexture) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if texture.viewId == 0 {
         graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a texture with no sampled view")
@@ -152,8 +147,7 @@ function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, tex
     return
 }
 
-public @Native
-function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sampler: borrow EMGraphicsSampler) {
+public function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sampler: borrow EMGraphicsSampler) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if sampler.id == 0 {
         graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind sampler 0")
@@ -170,8 +164,7 @@ function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sam
     return
 }
 
-public @Native
-function sokolBindGroupAddStorageBuffer(group: borrow BindGroup, storageSlot: Int, viewId: U32) {
+public function sokolBindGroupAddStorageBuffer(group: borrow BindGroup, storageSlot: Int, viewId: U32) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if viewId == 0 {
         graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a storage buffer with no view")
@@ -191,8 +184,7 @@ function sokolBindGroupAddStorageBuffer(group: borrow BindGroup, storageSlot: In
 // A no-op on Sokol: a `BindGroup` is an ordinary Kira value with no device
 // resource behind it — it never was one, even in the C-side table this
 // replaced, which only ever held CPU-side bookkeeping.
-public @Native
-function sokolDestroyBindGroupId(bindGroupId: U32) {
+public function sokolDestroyBindGroupId(bindGroupId: U32) {
     return
 }
 

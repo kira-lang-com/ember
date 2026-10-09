@@ -7,12 +7,10 @@
 //
 // What stays here is what is genuinely a number rather than a closed set.
 
-public @Native
-function uniformSlotScene() -> Int {
+public function uniformSlotScene() -> Int {
     return 0
 }
 
-public @Native
-function uniformSlotObject() -> Int {
+public function uniformSlotObject() -> Int {
     return 1
 }

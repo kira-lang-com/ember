@@ -79,7 +79,6 @@ function trianglePass() -> RenderPassDescriptor {
 }
 
 @Main
-@Native
 function main() {
     var app = EMGraphicsApplication {
         title: "Ember Metal Triangle"
