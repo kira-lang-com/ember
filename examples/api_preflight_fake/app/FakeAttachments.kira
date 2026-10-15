@@ -4,20 +4,15 @@ import Foundation
 struct FakeRenderTarget {
     var kind: FakeRenderTargetKind = FakeRenderTargetKind.swapchain
     var texture: FakeGraphicsTexture = FakeGraphicsTexture {}
-    var mipLevel: Int = 0
-    var arrayLayer: Int = 0
+    var mipLevel: Number = 0
+    var arrayLayer: Number = 0
 }
 
 struct FakeColorAttachment {
     var target: FakeRenderTarget = FakeRenderTarget {}
     var loadAction: FakeLoadAction = FakeLoadAction.clear
     var storeAction: FakeStoreAction = FakeStoreAction.store
-    var clearColor: Color = Color {
-        r: 0.0
-        g: 0.0
-        b: 0.0
-        a: 1.0
-    }
+    var clearColor: RGBAColor = RGBAColor { r: 0.0 g: 0.0 b: 0.0 a: 1.0 }
     var resolveTarget: FakeRenderTarget = FakeRenderTarget {}
     var hasResolveTarget: Bool = false
 }
@@ -26,7 +21,7 @@ struct FakeDepthAttachment {
     var texture: FakeGraphicsTexture = FakeGraphicsTexture {}
     var loadAction: FakeLoadAction = FakeLoadAction.clear
     var storeAction: FakeStoreAction = FakeStoreAction.store
-    var clearDepth: Float = 1.0
+    var clearDepth: Number = 1
     var readOnly: Bool = false
 }
 
@@ -34,7 +29,7 @@ struct FakeStencilAttachment {
     var texture: FakeGraphicsTexture = FakeGraphicsTexture {}
     var loadAction: FakeLoadAction = FakeLoadAction.clear
     var storeAction: FakeStoreAction = FakeStoreAction.store
-    var clearStencil: Int = 0
+    var clearStencil: Number = 0
     var readOnly: Bool = false
 }
 
@@ -62,4 +57,3 @@ struct FakeRenderPassDescriptorFixed {
     var stencilAttachment: FakeStencilAttachment = FakeStencilAttachment {}
     var hasStencilAttachment: Bool = false
 }
-

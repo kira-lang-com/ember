@@ -4,7 +4,7 @@ import Ember
 construct VkCompositeAlphaUsesSupportedBits() extends Test {
     test {
         var capabilities = VkSurfaceCapabilitiesKHR()
-        for bit in [1, 2, 4, 8] {
+        for bit in[1, 2, 4, 8] {
             capabilities.supportedCompositeAlpha = U32(bit)
             if vulkanCompositeAlpha(capabilities) != I32(bit) { return false }
         }
@@ -15,10 +15,13 @@ construct VkCompositeAlphaUsesSupportedBits() extends Test {
 
 construct VkSampleCountsMapToVulkanFlags() extends Test {
     test {
-        for samples in [1, 2, 4, 8, 16, 32, 64] {
-            if vulkanSampleCount(samples) != I32(samples) { return false }
+        for samples in[1, 2, 4, 8, 16, 32, 64] {
+            match vulkanSampleCount(samples) {
+                Some(flag) -> if flag != I32(samples) { return false }
+                None -> return false
+            }
         }
-        return vulkanSampleCount(0) == I32(0) && vulkanSampleCount(3) == I32(0)
+        return vulkanSampleCount(0) == .None && vulkanSampleCount(3) == .None
     }
     expect { return .Ok(true) }
 }
@@ -44,7 +47,9 @@ construct VkSpirvRejectsMalformedHex() extends Test {
 construct VkSpirvPreservesWordBits() extends Test {
     test {
         let words = vulkanSpirvWords("07230203ffffffff80000000")
-        return words.count == 3 && words[0] == U32(119734787) && words[1] == U32(4294967295) && words[2] == U32(2147483648)
+        return words.count == 3 && words[0] == U32(119734787) && words[1] == U32(
+            4294967295
+        ) && words[2] == U32(2147483648)
     }
     expect { return .Ok(true) }
 }

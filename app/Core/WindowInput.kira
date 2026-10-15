@@ -1,0 +1,32 @@
+import Foundation
+
+// What a window's input has told a backend so far: where the pointer last was,
+// and whether the window has focus. A move reports its delta from here, and a
+// wheel, which carries no position of its own, lands where the pointer is.
+public struct WindowInput {
+    var pointerX: Number = 0
+    var pointerY: Number = 0
+    // Whether a pointer position has arrived yet. The first move has nothing to
+    // measure a delta against.
+    var hasPointer: Bool = false
+    var focused: Bool = true
+}
+
+extend WindowInput {
+    // The pointer now at (x, y), answering how far it moved.
+    function movePointer(borrow mut self, x: Number, y: Number) -> PointerDelta {
+        let delta = self.hasPointer ? PointerDelta {
+            x : x - self.pointerX,
+            y: y - self.pointerY
+        }: PointerDelta()
+        self.pointerX = x
+        self.pointerY = y
+        self.hasPointer = true
+        return delta
+    }
+}
+
+public struct PointerDelta {
+    var x: Number = 0
+    var y: Number = 0
+}

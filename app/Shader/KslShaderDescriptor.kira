@@ -3,3 +3,11 @@ public struct KslShaderDescriptor {
     var asset: String = ""
     var directory: String = "generated/shaders"
 }
+
+// The entry names `kira shader build` gives each stage it emits, which a shader
+// read off disk is therefore called by.
+public namespace KslEntry {
+    let vertex: String = "vertex_main"
+    let fragment: String = "fragment_main"
+    let compute: String = "compute_main"
+}

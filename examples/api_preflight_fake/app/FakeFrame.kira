@@ -8,83 +8,57 @@ class FakeRenderFrame {
         return self.encoder
     }
 
-    function endPass() {
-        return
-    }
+    function endPass() {}
 
-    function renderPass(descriptor: borrow FakeRenderPassDescriptor, body: (FakeRenderEncoder) -> Void) {
+    function renderPass(
+        descriptor: borrow FakeRenderPassDescriptor,
+        body: (FakeRenderEncoder) -> Void
+    ) {
         let encoder = beginRenderPass(descriptor)
         let callbackEncoder = encoder
         body(move callbackEncoder)
         endPass()
-        return
     }
 }
 
 class FakeGraphics {
     function createShaderFromKsl(descriptor: borrow FakeKslShaderDescriptor) -> FakeShader {
-        return FakeShader {
-            id: 1
-        }
+        return FakeShader { id: 1 }
     }
 
     function createBuffer(descriptor: borrow FakeBufferDescriptor) -> FakeGraphicsBuffer {
-        return FakeGraphicsBuffer {
-            id: 1
-        }
+        return FakeGraphicsBuffer { id: 1 }
     }
 
     function createTexture(descriptor: borrow FakeTextureDescriptor) -> FakeGraphicsTexture {
-        return FakeGraphicsTexture {
-            id: 1
-        }
+        return FakeGraphicsTexture { id: 1 }
     }
 
     function createSampler(descriptor: borrow FakeSamplerDescriptor) -> FakeGraphicsSampler {
-        return FakeGraphicsSampler {
-            id: 1
-        }
+        return FakeGraphicsSampler { id: 1 }
     }
 
     function createRenderPipeline(descriptor: borrow FakePipelineDescriptor) -> FakeRenderPipeline {
-        return FakeRenderPipeline {
-            id: 1
-        }
+        return FakeRenderPipeline { id: 1 }
     }
 
     function createBindGroup(descriptor: borrow FakeBindGroupDescriptor) -> FakeBindGroup {
-        return FakeBindGroup {
-            id: 1
-        }
+        return FakeBindGroup { id: 1 }
     }
 
     function createUniform() -> FakeUniform {
-        return FakeUniform {
-            id: 1
-        }
+        return FakeUniform { id: 1 }
     }
 
-    function destroyShader(shader: FakeShader) {
-        return
-    }
+    function destroyShader(shader: FakeShader) {}
 
-    function destroyBuffer(buffer: borrow FakeGraphicsBuffer) {
-        return
-    }
+    function destroyBuffer(buffer: borrow FakeGraphicsBuffer) {}
 
-    function destroyTexture(texture: borrow FakeGraphicsTexture) {
-        return
-    }
+    function destroyTexture(texture: borrow FakeGraphicsTexture) {}
 
-    function destroySampler(sampler: borrow FakeGraphicsSampler) {
-        return
-    }
+    function destroySampler(sampler: borrow FakeGraphicsSampler) {}
 
-    function destroyRenderPipeline(pipeline: borrow FakeRenderPipeline) {
-        return
-    }
+    function destroyRenderPipeline(pipeline: borrow FakeRenderPipeline) {}
 
-    function destroyBindGroup(bindGroup: borrow FakeBindGroup) {
-        return
-    }
+    function destroyBindGroup(bindGroup: borrow FakeBindGroup) {}
 }

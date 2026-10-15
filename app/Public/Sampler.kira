@@ -1,9 +1,7 @@
-public struct EMGraphicsSampler {
-    var id: U32 = 0
+public struct GraphicsSampler {
+    var id: SamplerId = NoSamplerId
 }
 
-public function emptyGraphicsSampler() -> EMGraphicsSampler {
-    return EMGraphicsSampler {
-        id: 0
-    }
+public function emptyGraphicsSampler() -> GraphicsSampler {
+    return GraphicsSampler { id: NoSamplerId }
 }

@@ -1,0 +1,32 @@
+// The units every frame is measured in, named once.
+//
+// A backend's monotonic clock counts nanoseconds — `mach_absolute_time` scaled
+// up on Apple, a performance counter on Windows, `clock_gettime` elsewhere — and
+// every measurement in this package is seconds, because that is the unit a frame
+// budget is written in and the one `FrameStatistics` reports.
+//
+// Converting between them is the only arithmetic this file holds, so the two
+// constants cannot drift apart from each other or be written out inconsistently
+// at a third site.
+public namespace FrameClock {
+    // Nanoseconds in a second. Read as `Number`, so the divisor above it does not
+    // have to be a fixed width the value being converted might not fit in.
+    let nanosecondsPerSecond: UNumber = 1000000000
+    // A millisecond, the unit a budget is quoted in.
+    let nanosecondsPerMillisecond: UNumber = 1000000
+}
+
+// Nanoseconds as seconds.
+public function secondsFromNanoseconds(nanoseconds: Number) -> Number {
+    return nanoseconds / FrameClock.nanosecondsPerSecond
+}
+
+// Seconds as whole nanoseconds, for handing a duration back to a clock.
+public function nanosecondsFromSeconds(seconds: Number) -> UNumber {
+    return floor(seconds * FrameClock.nanosecondsPerSecond)
+}
+
+// Nanoseconds as milliseconds, which is what a frame budget is compared in.
+public function millisecondsFromNanoseconds(nanoseconds: Number) -> Number {
+    return nanoseconds / FrameClock.nanosecondsPerMillisecond
+}

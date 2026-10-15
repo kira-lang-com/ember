@@ -1,125 +1,239 @@
 import Foundation
+import Heap
 
 // Record readback while the acquired image still belongs to the application.
 // Consume the staging buffer after its submission fence completes. This is a proof
 // instrument, not a rendering path: a finite capture is what lets a test inspect
 // actual pixels instead of trusting draw counters.
 
-public function vulkanRecordFrameCapture(state: borrow mut VulkanState) -> U32 {
-    if !state.captureSupported || state.swapchainImages.count == 0 {
-        graphicsFail(.Capture, "this swapchain cannot be read back")
-        return U32(0)
+namespace VulkanCapture {
+    let bytesPerPixel: UNumber = 4
+}
+
+// The order a mapped 8-bit image of `format` holds its channels in.
+function vulkanPixelOrder(format: I32) -> PixelOrder {
+    if format == VulkanVocabulary.formatBgra8 {
+        return .Bgra
     }
-    if !vulkanAcquireSwapchainImage(state) {
-        graphicsFail(.Capture, "no swapchain image to capture: the frame was not begun or the acquire failed")
-        return U32(0)
+    return .Rgba
+}
+
+// A host-visible buffer a `width` by `height` image is copied into.
+function vulkanCaptureStaging(
+    state: borrow mut VulkanState,
+    label: borrow String,
+    width: UNumber,
+    height: UNumber
+) -> Result<U32, CaptureFailure> {
+    match vulkanCreateBufferHandle(
+        state,
+        VulkanBufferRequest {
+            label: label,
+            usage: VulkanVocabulary.bufferUsageTransferDestination,
+            byteSize: width * height * VulkanCapture.bytesPerPixel
+        }
+    ) {
+        Ok(staging) -> return .Ok(staging)
+        Error(failure) -> {
+            log fault("could not create a capture's staging buffer", failure)
+            return .Error(.StagingRefused)
+        }
+    }
+}
+
+// A staging buffer an image is copied into, and the image's shape.
+struct VulkanStagedImage {
+    let staging: U32
+    let width: UNumber
+    let height: UNumber
+    let format: I32
+}
+
+function vulkanCopyImageToStaging(
+    state: borrow VulkanState,
+    image: RawPtr,
+    staged: borrow VulkanStagedImage
+) {
+    vkCmdCopyImageToBuffer(
+        state.commandBuffer,
+        image,
+        VulkanVocabulary.imageLayoutTransferSource,
+        vulkanObject(state, staged.staging),
+        U32(1),
+        VkBufferImageCopy {
+            imageSubresource: VkImageSubresourceLayers {
+                aspectMask: VulkanVocabulary.aspectColor,
+                layerCount: U32(1)
+            },
+            imageExtent: VkExtent3D {
+                width: U32(staged.width),
+                height: U32(staged.height),
+                depth: U32(1)
+            }
+        }
+    )
+}
+
+// The staging buffer's pixels written to `path`, and the buffer released.
+function vulkanWriteStaging(
+    state: borrow mut VulkanState,
+    staged: borrow VulkanStagedImage,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    let mapped = match vulkanObjectMapped(state, staged.staging) {
+        Some(mapped) -> mapped
+        None -> {
+            vulkanReleaseObject(state, staged.staging)
+            return .Error(.MapFailed)
+        }
+    }
+    let pixels = MappedPixels {
+        start: mapped,
+        width: staged.width,
+        height: staged.height,
+        bytesPerRow: staged.width * VulkanCapture.bytesPerPixel,
+        order: vulkanPixelOrder(staged.format)
+    }
+    let written = writeCapture(pixels, path)
+    vulkanReleaseObject(state, staged.staging)
+    return written
+}
+
+// The swapchain image's shape, staged in `staging`.
+function vulkanSwapchainStaged(state: borrow VulkanState, staging: U32) -> VulkanStagedImage {
+    return VulkanStagedImage {
+        staging: staging,
+        width: state.swapchainWidth,
+        height: state.swapchainHeight,
+        format: state.swapchainFormat
+    }
+}
+
+// The copy of the acquired swapchain image into a staging buffer, recorded
+// into the frame in flight. Answers the buffer `vulkanWriteFrameCapture` reads
+// once the frame is submitted.
+public function vulkanRecordFrameCapture(
+    state: borrow mut VulkanState
+) -> Result<U32, CaptureFailure> {
+    if !state.captureSupported || state.swapchainImages.count == 0 {
+        return .Error(.NotReadable)
+    }
+    match vulkanAcquireSwapchainImage(state) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("no swapchain image to capture", failure)
+            return .Error(.NoImage)
+        }
     }
     if state.passActive { vulkanEndPassAndCommitState(state) }
-    let byteCount = state.swapchainWidth * state.swapchainHeight * 4
-    let staging = vulkanCreateBufferHandle(state, "kira-vulkan-frame-capture", vulkanBufferUsageTransferDestination(), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if staging == 0 {
-        return U32(0)
+    let staging = match vulkanCaptureStaging(
+        state,
+        "kira-vulkan-frame-capture",
+        state.swapchainWidth,
+        state.swapchainHeight
+    ) {
+        Ok(staging) -> staging
+        Error(failure) -> return .Error(failure)
     }
-    let image = state.swapchainImages[Int(state.currentImageIndex)]
-    vulkanTransitionSwapchainImage(state, image, state.currentImageIndex, vulkanImageLayoutTransferSource(), vulkanStageColorAttachmentOutput(), vulkanStageTransfer(), vulkanAccessColorAttachmentWrite(), vulkanAccessTransferRead())
-    vkCmdCopyImageToBuffer(state.commandBuffer, image, vulkanImageLayoutTransferSource(), vulkanObject(state, staging), U32(1), VkBufferImageCopy {
-        imageSubresource: VkImageSubresourceLayers {
-            aspectMask: vulkanAspectColor(),
-            layerCount: U32(1)
-        },
-        imageExtent: VkExtent3D {
-            width: U32(state.swapchainWidth),
-            height: U32(state.swapchainHeight),
-            depth: U32(1)
-        }
-    })
-    vulkanTransitionSwapchainImage(state, image, state.currentImageIndex, vulkanImageLayoutPresent(), vulkanStageTransfer(), vulkanStageBottomOfPipe(), vulkanAccessTransferRead(), vulkanAccessNone())
-    return staging
+    let image = state.swapchainImages[Number(state.currentImageIndex)]
+    vulkanTransitionSwapchainImage(state, state.currentImageIndex, .TransferSource)
+    vulkanCopyImageToStaging(state, image, vulkanSwapchainStaged(state, staging))
+    vulkanTransitionSwapchainImage(state, state.currentImageIndex, .Present)
+    return .Ok(staging)
 }
 
-public function vulkanWriteFrameCapture(state: borrow mut VulkanState, staging: U32, path: borrow String) {
-    if staging == 0 { return }
-    if vkQueueWaitIdle(state.queue) != vulkanSuccess() {
-        graphicsFail(.Capture, "capture submission did not complete")
-        return
+// The frame `vulkanRecordFrameCapture` copied out, written to `path` once its
+// submission completes.
+public function vulkanWriteFrameCapture(
+    state: borrow mut VulkanState,
+    staging: U32,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
+        vulkanReleaseObject(state, staging)
+        return .Error(.SubmissionFailed)
     }
-    let mapped = vulkanObjectExtra(state, staging)
-    if !pointerIsNull(mapped) {
-        let pixels = vulkanPortablePixmap(mapped, state.swapchainWidth, state.swapchainHeight, state.swapchainFormat)
-        if writeBytesFile(path, pixels) {
-            graphicsTrace(.Capture, "wrote the presented frame to " + path)
-        } else {
-            graphicsFail(.Capture, "could not write the presented frame to " + path)
-        }
+    if state.tracing.capture {
+        log debug(
+            "writing a frame capture",
+            area: "capture",
+            path: path,
+            staging: staging,
+            width: state.swapchainWidth,
+            height: state.swapchainHeight
+        )
     }
-    vulkanReleaseBuffer(state, staging)
-    return
+    return vulkanWriteStaging(state, vulkanSwapchainStaged(state, staging), path)
 }
 
-public function vulkanPortablePixmap(mapped: RawPtr, width: Int, height: Int, format: I32) -> [U8] {
-    let blueFirst = format == vulkanFormatBgra8()
-    var bytes: [U8] = []
-    for byte in dawnAsciiBytes("P6\n" + String(width) + " " + String(height) + "\n255\n") {
-        bytes.append(byte)
-    }
-    var row = 0
-    while row < height {
-        var column = 0
-        while column < width {
-            let offset = U64(row * width * 4 + column * 4)
-            let first = rawByteAt(mapped, offset)
-            let green = rawByteAt(mapped, offset + U64(1))
-            let third = rawByteAt(mapped, offset + U64(2))
-            bytes.append(blueFirst ? third : first)
-            bytes.append(green)
-            bytes.append(blueFirst ? first : third)
-            column = column + 1
+// Opens a headless frame for a capture to record into, with no pass open.
+function vulkanOpenCaptureFrame(state: borrow mut VulkanState) -> Result<Void, CaptureFailure> {
+    match vulkanBeginHeadlessFrame(state) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not begin the frame a texture capture records into", failure)
+            return .Error(.FrameNotBegun)
         }
-        row = row + 1
     }
-    return bytes
+    if state.passActive { vulkanEndPassAndCommitState(state) }
+    return .Ok
+}
+
+// A staging buffer the size of `texture`, and what its bytes will mean.
+function vulkanStageTexture(
+    state: borrow mut VulkanState,
+    texture: borrow GraphicsTexture
+) -> Result<VulkanStagedImage, CaptureFailure> {
+    let staging = match vulkanCaptureStaging(
+        state,
+        "kira-vulkan-texture-capture",
+        texture.width,
+        texture.height
+    ) {
+        Ok(staging) -> staging
+        Error(failure) -> return .Error(failure)
+    }
+    return .Ok(
+        VulkanStagedImage {
+            staging: staging,
+            width: texture.width,
+            height: texture.height,
+            format: vulkanObjectFormat(state, texture.id.raw)
+        }
+    )
 }
 
 // Reads a render target back and writes it as a PPM, for a headless device
 // that has no swapchain to capture. Ends the frame in flight: the copy is
 // recorded after everything drawn so far, and the submission is waited for
 // before the pixels are read.
-public function vulkanCaptureTexture(context: RawPtr, texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
-    if !vulkanRequireDevice(context, "vulkanCaptureTexture") { return false }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+public function vulkanCaptureTexture(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    if !vulkanRequireDevice(context, "vulkanCaptureTexture") {
+        return .Error(.NoDevice)
+    }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
-        graphicsFail(.Capture, "there is no texture to capture")
-        return false
+        return .Error(.NoTexture)
     }
-    if !vulkanBeginHeadlessFrame(runtime.vulkan) { return false }
-    if runtime.vulkan.passActive { vulkanEndPassAndCommitState(runtime.vulkan) }
-    let byteCount = texture.width * texture.height * 4
-    let staging = vulkanCreateBufferHandle(runtime.vulkan, "kira-vulkan-texture-capture", vulkanBufferUsageTransferDestination(), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if staging == 0 { return false }
-    vulkanTransitionImage(runtime.vulkan, texture.id, vulkanImageLayoutTransferSource(), vulkanStageColorAttachmentOutput(), vulkanStageTransfer(), vulkanAccessColorAttachmentWrite(), vulkanAccessTransferRead(), vulkanAspectColor())
-    vkCmdCopyImageToBuffer(runtime.vulkan.commandBuffer, vulkanObject(runtime.vulkan, texture.id), vulkanImageLayoutTransferSource(), vulkanObject(runtime.vulkan, staging), U32(1), VkBufferImageCopy {
-        imageSubresource: VkImageSubresourceLayers {
-            aspectMask: vulkanAspectColor(),
-            layerCount: U32(1)
-        },
-        imageExtent: VkExtent3D {
-            width: U32(texture.width),
-            height: U32(texture.height),
-            depth: U32(1)
-        }
-    })
+    match vulkanOpenCaptureFrame(runtime.vulkan) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    let staged = match vulkanStageTexture(runtime.vulkan, texture) {
+        Ok(staged) -> staged
+        Error(failure) -> return .Error(failure)
+    }
+    vulkanTransitionImage(
+        runtime.vulkan,
+        texture.id.raw,
+        .TransferSource,
+        VulkanVocabulary.aspectColor
+    )
+    vulkanCopyImageToStaging(runtime.vulkan, vulkanObject(runtime.vulkan, texture.id.raw), staged)
     vulkanSubmitHeadlessFrame(context)
-    let mapped = vulkanObjectExtra(runtime.vulkan, staging)
-    var written = false
-    if !pointerIsNull(mapped) {
-        let pixels = vulkanPortablePixmap(mapped, texture.width, texture.height, vulkanObjectFormat(runtime.vulkan, texture.id))
-        written = writeBytesFile(path, pixels)
-        if written {
-            graphicsTrace(.Capture, "wrote the texture to " + path)
-        } else {
-            graphicsFail(.Capture, "could not write the texture to " + path)
-        }
-    }
-    vulkanReleaseBuffer(runtime.vulkan, staging)
-    return written
+    return vulkanWriteStaging(runtime.vulkan, staged, path)
 }

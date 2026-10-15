@@ -1,0 +1,109 @@
+import Foundation
+import Ember
+// An exported texture on a headless Vulkan device: allocated with a dma-buf
+// behind it, cleared by an ordinary pass, and read back.
+//
+// The width is chosen so a packed row (100 * 4 = 400 bytes) is not a multiple
+// of any alignment a driver pads to, so a stride reported as the packed row
+// would be a stride nobody measured.
+
+public namespace ExportTarget {
+    let width: UN32 = 100
+    let height: UN32 = 30
+    let bytesPerPixel: Number = 4
+    let file: String = "vulkan-export-test.ppm"
+}
+
+// The handle and layout an importer is handed: a live fd, a stride that holds
+// a whole row, and the linear layout.
+public function vulkanSelfTestExportedMemoryIsUsable(memory: borrow ExportedMemory) -> Bool {
+    return memory.kind == .DmaBuf
+        && memory.handle > 0
+        && memory.width == ExportTarget.width
+        && memory.height == ExportTarget.height
+        && memory.stride >= ExportTarget.width * ExportTarget.bytesPerPixel
+        && memory.layout == .Linear
+}
+
+// Clears the exported texture to the known colour and captures it to `path`.
+public function vulkanSelfTestClearExported(
+    device: borrow mut GraphicsHeadless,
+    texture: borrow GraphicsTexture,
+    path: borrow String
+) -> Bool {
+    var frame = match device.frame() {
+        Ok(frame) -> frame
+        Error(failure) -> {
+            log fault("no headless frame", failure)
+            return false
+        }
+    }
+    let encoder = frame.beginRenderPass(
+        clearTextureRenderPass(texture, RGBAColor { r: 0.125, g: 0.25, b: 0.5 })
+    )
+    frame.endPass()
+    device.submit()
+    return match device.capture(texture, path) {
+        Ok -> true
+        Error(failure) -> {
+            log fault("could not capture the exported texture", failure)
+            false
+        }
+    }
+}
+
+public function vulkanSelfTestExportedPixelMatches(path: borrow String) -> Bool {
+    return match vulkanSelfTestMiddlePixel(path) {
+        None -> false
+        Some(bytes) -> bytes[0] == U8(ClearColor.red)
+            && bytes[1] == U8(ClearColor.green)
+            && bytes[2] == U8(ClearColor.blue)
+    }
+}
+
+public function vulkanSelfTestExport() -> Bool {
+    if targetPlatform!() != .Linux {
+        log info("dma-buf export requires Linux; no export test was executed")
+        return false
+    }
+    if !vulkanSelfTestPrepareCaptureDirectory() { return false }
+    var device = try openHeadlessGraphicsWithBackend(.Vulkan) otherwise return false
+    let exported = match device.graphics().createExportedTexture(
+        ExportedTextureDescriptor {
+            label: "export-test",
+            width: ExportTarget.width,
+            height: ExportTarget.height
+        }
+    ) {
+        Ok(exported) -> exported
+        Error(failure) -> {
+            log fault("no exported texture", failure)
+            device.close()
+            return false
+        }
+    }
+    let path = CaptureLocation.directory + "/" + ExportTarget.file
+    vulkanSelfTestClearCapture(path)
+    let usable = vulkanSelfTestExportedMemoryIsUsable(exported.memory)
+    let cleared = vulkanSelfTestClearExported(device, exported.texture, path)
+        && vulkanSelfTestExportedPixelMatches(path)
+    log info("exported", stride: exported.memory.stride, offset: exported.memory.offset)
+    device.graphics().destroyExportedTexture(exported)
+    device.close()
+    vulkanSelfTestClearCapture(path)
+    return usable && cleared
+}
+
+construct ExportedTextureIsADmaBufThatRenders() extends Test {
+    test { return vulkanSelfTestExport() }
+    expect {
+        if targetPlatform!() != .Linux {
+            let skipped: Result<Any, TestFailure> = .Error(
+                .Compile("dma-buf export requires Linux")
+            )
+            return skipped
+        }
+        let e: Result<Any, TestFailure> = .Ok(true)
+        return e
+    }
+}

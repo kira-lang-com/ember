@@ -1,0 +1,72 @@
+// What each id in the surface names, kept apart so one cannot be passed where
+// another belongs.
+//
+// Every backend mints its objects from one numbered table, so all of these are
+// a `UN32` underneath and every one of them is a valid index into that table. That
+// is exactly the hazard: `createBindGroup` taking a texture id would compile, and
+// bind whatever object happened to live at that slot. `.raw` is where an id
+// becomes an index again, and it appears only there.
+//
+// The naming: a `…Id` is the thing itself, a `…ViewId` is a view onto it, and a
+// `…Slot` is a number in a shader's binding space that is not an id at all.
+
+public distinct BufferId = UN32
+public distinct TextureId = UN32
+public distinct ViewId = UN32
+public distinct ShaderId = UN32
+public distinct SamplerId = UN32
+public distinct PipelineId = UN32
+public distinct BindGroupId = UN32
+public distinct UniformId = UN32
+public distinct ComputePipelineId = UN32
+
+// An id naming nothing, which is what an uncreated resource holds.
+//
+// A named absence rather than zero: zero is a perfectly good id for the first
+// object a backend mints, so it cannot double as "none".
+public let NoBufferId: BufferId = BufferId(0)
+public let NoTextureId: TextureId = TextureId(0)
+public let NoViewId: ViewId = ViewId(0)
+public let NoShaderId: ShaderId = ShaderId(0)
+public let NoSamplerId: SamplerId = SamplerId(0)
+public let NoPipelineId: PipelineId = PipelineId(0)
+public let NoBindGroupId: BindGroupId = BindGroupId(0)
+public let NoUniformId: UniformId = UniformId(0)
+public let NoComputePipelineId: ComputePipelineId = ComputePipelineId(0)
+
+// Whether an id names a resource rather than nothing.
+extend BufferId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend TextureId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend ViewId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend ShaderId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend SamplerId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend PipelineId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend BindGroupId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend UniformId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+extend ComputePipelineId {
+    function isPresent(borrow self) -> Bool { return self.raw != 0 }
+}
+
+// A list of buffer ids as the table indices a backend binds, which is where an
+// id becomes an index again.
+function bufferIndices(ids: borrow [BufferId]) -> [U32] {
+    var indices: [U32] = []
+    for id in ids { indices.append(U32(id.raw)) }
+    return indices
+}

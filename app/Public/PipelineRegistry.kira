@@ -25,17 +25,21 @@ comptime macro PipelineRegistry {
                 // Each member is asked once, here, rather than by the renderer:
                 // the plan is what travels, so a declaration's members never run
                 // again after startup.
-                rows.append(quote {
-                    plans.append(PipelinePlan(
-                        label: #{declaration.name.asString()},
-                        shader: #{declaration.name}.shader(),
-                        vertices: #{declaration.name}.vertices(),
-                        blending: #{declaration.name}.blending(),
-                        depth: #{declaration.name}.depth(),
-                        raster: #{declaration.name}.raster(),
-                        colorFormat: #{declaration.name}.colorFormat(),
-                    ))
-                })
+                rows.append(
+                    quote {
+                        plans.append(
+                            PipelinePlan(
+                                label: #{declaration.name.asString()},
+                                shader: #{declaration.name}.shader(),
+                                vertices: #{declaration.name}.vertices(),
+                                blending: #{declaration.name}.blending(),
+                                depth: #{declaration.name}.depth(),
+                                raster: #{declaration.name}.raster(),
+                                colorFormat: #{declaration.name}.colorFormat(),
+                            )
+                        )
+                    }
+                )
             }
         }
         // A program that declares no pipelines gets nothing. A collector runs for
@@ -44,7 +48,7 @@ comptime macro PipelineRegistry {
         // programs that never import the type — which is a compile error in a
         // program whose only crime is not using the feature.
         if rows.count == 0 {
-            return quote { }
+            return quote {}
         }
         return quote {
             // Every `Pipeline` declaration in this program, in declaration order.

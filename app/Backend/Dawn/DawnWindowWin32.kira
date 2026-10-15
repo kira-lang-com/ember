@@ -1,3 +1,5 @@
+import Heap
+
 // The Windows window, as the platform contract sees it.
 //
 // Every member delegates: the Win32 is `DawnWindow.kira`, unchanged, and this is
@@ -6,37 +8,38 @@
 // is part of opening a window on this platform and no other platform has the step
 // at all -- a caller that had to know about it would be a caller that knows which
 // window it is holding.
-public construct DawnWindowWin32() extends DawnWindow {
-    function open(title: borrow String, width: Int, height: Int, mode: borrow EMWindowMode, transparent: Bool, opacity: Float) -> RawPtr {
+construct DawnWindowWin32() extends DawnWindow {
+    function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure> {
         let instance = moduleHandle("")
         if !dawnRegisterWindowClass(instance, "EmberDawnWindow") {
-            return nullPointer()
+            return .Error(.ClassNotRegistered)
         }
-        return dawnOpenWindow(instance, "EmberDawnWindow", title, width, height, mode, transparent, opacity)
+        return dawnOpenWindow(instance, "EmberDawnWindow", window)
     }
 
-    function clientWidth(window: RawPtr) -> Int { return dawnClientWidth(window) }
-    function clientHeight(window: RawPtr) -> Int { return dawnClientHeight(window) }
-    function scale(window: RawPtr) -> Float { return dawnWindowScale(window) }
+    function clientWidth(window: RawPtr) -> Number { return dawnClientWidth(window) }
+    function clientHeight(window: RawPtr) -> Number { return dawnClientHeight(window) }
+    function scale(window: RawPtr) -> Number { return dawnWindowScale(window) }
 
-    function resize(window: RawPtr, width: Int, height: Int) {
+    function resize(window: RawPtr, width: Number, height: Number) {
         dawnResizeWindow(window, width, height)
-        return
     }
 
     function createSurface(instance: RawPtr, window: RawPtr) -> RawPtr {
-        return wgpuInstanceCreateSurface(instance, WGPUSurfaceDescriptor {
-            nextInChain: WGPUSurfaceSourceWindowsHWND {
-                chain: WGPUChainedStruct { sType: dawnStructureWindowsHwnd() },
-                hinstance: moduleHandle(""),
-                hwnd: window
-            },
-            label: dawnText("ember-surface")
-        })
+        return wgpuInstanceCreateSurface(
+            instance,
+            WGPUSurfaceDescriptor {
+                nextInChain: WGPUSurfaceSourceWindowsHWND {
+                    chain: WGPUChainedStruct { sType: DawnVocabulary.structureWindowsHwnd },
+                    hinstance: moduleHandle(""),
+                    hwnd: window
+                },
+                label: dawnText("ember-surface")
+            }
+        )
     }
 
     function close(window: RawPtr) -> Void {
         destroyWindowHandle(window)
-        return
     }
 }

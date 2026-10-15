@@ -1,40 +1,48 @@
+// A uniform block's declaration and its first payload.
+//
+// The values are `Number`s, as everywhere on the public surface; a uniform
+// block is still a byte layout, std140 packing them as 32-bit floats, and the
+// backend narrows them to that width when it writes the block. The count is a
+// count of those floats, which is why it is named for them rather than being a
+// count of "values" — a block of `uint`s is the same size and is declared
+// through a different descriptor.
 public struct UniformDescriptor {
     var label: String = ""
-    var expectedFloatCount: Int = 0
-    var data: [F32]
+    var expectedFloatCount: UN32 = 0
+    var data: [Number] = []
 }
 
 public struct UniformBindEntry {
-    var uniformSlot: Int = 0
-    var uniform: EMUniform
+    var uniformSlot: UN32 = 0
+    var uniform: GraphicsUniform
 }
 
 public struct TextureBindEntry {
-    var textureSlot: Int = 0
-    var texture: EMGraphicsTexture
+    var textureSlot: UN32 = 0
+    var texture: GraphicsTexture = GraphicsTexture()
 }
 
 public struct SamplerBindEntry {
-    var samplerSlot: Int = 0
-    var sampler: EMGraphicsSampler
+    var samplerSlot: UN32 = 0
+    var sampler: GraphicsSampler = GraphicsSampler()
 }
 
 // A storage buffer bound at a shader slot, held by the public buffer id. Vulkan
 // and Dawn resolve that id to their own device-side view at draw time.
 public struct StorageBindEntry {
-    var storageSlot: Int = 0
-    var viewId: U32 = 0
+    var storageSlot: UN32 = 0
+    var bufferId: BufferId = NoBufferId
     // How many bytes of the buffer the shader reads.
     //
     // WebGPU binds a buffer as a range, and a range needs a length. Carried here
     // because the side that
     // creates the entry is the side that still holds the buffer it came from.
-    var byteSize: Int = 0
+    var byteSize: UNumber = 0
 }
 
 public struct BindGroupDescriptor {
     var label: String = ""
-    var uniformEntries: [UniformBindEntry]
-    var textureEntries: [TextureBindEntry]
-    var samplerEntries: [SamplerBindEntry]
+    var uniformEntries: [UniformBindEntry] = []
+    var textureEntries: [TextureBindEntry] = []
+    var samplerEntries: [SamplerBindEntry] = []
 }

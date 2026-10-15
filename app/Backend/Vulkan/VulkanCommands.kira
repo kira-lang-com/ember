@@ -1,26 +1,101 @@
 import Foundation
+import Heap
+
+// Why a frame, or a batch of commands outside one, could not go on.
+public enum VulkanFrameFailure {
+    NoDevice
+    PassOpen
+    OutsideFrame
+    FenceWaitFailed(VulkanResult)
+    FenceResetFailed(VulkanResult)
+    CommandBufferNotReset(VulkanResult)
+    CommandBufferNotBegun(VulkanResult)
+    CommandBufferNotEnded(VulkanResult)
+    DescriptorPoolNotReset(VulkanResult)
+    SubmitFailed(VulkanResult)
+    QueueWaitFailed(VulkanResult)
+    SwapchainLost(VulkanSwapchainFailure)
+    NoImage(VulkanResult)
+}
+
+// How long a command buffer's recording is used for.
+public enum VulkanRecording {
+    // Submitted once, then reset: headless frames and work outside a frame.
+    OneTime
+    // A windowed frame, reused every frame.
+    Reused
+}
+
+function vulkanRecordingFlags(recording: borrow VulkanRecording) -> U32 {
+    return match recording {
+        OneTime -> VulkanVocabulary.commandBufferOneTime
+        Reused -> U32(0)
+    }
+}
+
+// The command buffer emptied and opened for recording again.
+public function vulkanRestartCommandBuffer(
+    state: borrow VulkanState,
+    recording: borrow VulkanRecording
+) -> Result<Void, VulkanFrameFailure> {
+    let resetResult = vulkanResultOf(vkResetCommandBuffer(state.commandBuffer, U32(0)))
+    if resetResult != .Success {
+        return .Error(.CommandBufferNotReset(resetResult))
+    }
+    let beginResult = vulkanResultOf(
+        vkBeginCommandBuffer(
+            state.commandBuffer,
+            VkCommandBufferBeginInfo {
+                sType: VulkanVocabulary.structureCommandBufferBeginInfo,
+                flags: vulkanRecordingFlags(recording)
+            }
+        )
+    )
+    if beginResult != .Success {
+        return .Error(.CommandBufferNotBegun(beginResult))
+    }
+    return .Ok
+}
+
+// The last submission waited out, and everything it kept alive released: the
+// upload buffers it read, the objects released while it was recorded, and the
+// descriptor sets it bound.
+public function vulkanRetireFrame(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
+    match vulkanWaitForFrame(state) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    vulkanReleasePendingUploads(state)
+    vulkanReleaseRetiredObjects(state)
+    if isNull(state.descriptorPool) {
+        return .Ok
+    }
+    let poolResult = vulkanResultOf(
+        vkResetDescriptorPool(state.device, state.descriptorPool, U32(0))
+    )
+    if poolResult != .Success {
+        return .Error(.DescriptorPoolNotReset(poolResult))
+    }
+    return .Ok
+}
 
 // Compute may run during initialization as well as between render passes.
 // Standalone work uses the same command buffer only after its frame retires.
-public function vulkanBeginComputeCommands(state: borrow mut VulkanState) -> Bool {
+public function vulkanBeginComputeCommands(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
     if state.passActive {
-        graphicsFail(.Frame, "end the Vulkan render pass before dispatching compute")
-        return false
+        return .Error(.PassOpen)
     }
-    if state.frameActive { return true }
-    if !vulkanWaitForFrame(state) { return false }
-    if vkResetCommandBuffer(state.commandBuffer, U32(0)) != vulkanSuccess() {
-        graphicsFail(.Compute, "could not reset the command buffer for compute work outside a frame")
-        return false
+    if state.frameActive {
+        return .Ok
     }
-    if vkResetDescriptorPool(state.device, state.descriptorPool, U32(0)) != vulkanSuccess() {
-        graphicsFail(.Compute, "could not reset the descriptor pool for compute work outside a frame")
-        return false
+    return match vulkanRetireFrame(state) {
+        Ok -> vulkanRestartCommandBuffer(state, .OneTime)
+        Error(failure) -> .Error(failure)
     }
-    return vkBeginCommandBuffer(state.commandBuffer, VkCommandBufferBeginInfo {
-        sType: vulkanStructureCommandBufferBeginInfo(),
-        flags: vulkanCommandBufferOneTime()
-    }) == vulkanSuccess()
 }
 
 // Make compute writes visible to subsequent shaders, vertex/index fetches,
@@ -29,66 +104,129 @@ public function vulkanComputeBarrier(state: borrow VulkanState) {
     let barrier = VkMemoryBarrier {
         sType: I32(VK_STRUCTURE_TYPE_MEMORY_BARRIER),
         srcAccessMask: U32(VK_ACCESS_SHADER_WRITE_BIT),
-        dstAccessMask: U32(VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT)
+        dstAccessMask: U32(
+            VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT
+        )
     }
-    vkCmdPipelineBarrier(state.commandBuffer, U32(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
-        U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT), U32(0),
-        U32(1), barrier, U32(0), nullPointer(), U32(0), nullPointer())
+    vkCmdPipelineBarrier(
+        state.commandBuffer,
+        U32(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+        U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT),
+        U32(0),
+        U32(1),
+        barrier,
+        U32(0),
+        nullPointer(),
+        U32(0),
+        nullPointer()
+    )
 }
 
-// Flush recorded commands without presenting. A readback in the middle of a
-// frame consumes the acquire semaphore once, then resumes recording on the
-// same acquired image. The final submission still signals the frame fence.
-public function vulkanFlushCommands(state: borrow mut VulkanState, resume: Bool) -> Bool {
+// Submit what is recorded without presenting, and wait for it. A readback in
+// the middle of a frame consumes the acquire semaphore once; the frame's final
+// submission still signals the frame fence.
+public function vulkanFlushCommands(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
     if state.passActive {
-        graphicsFail(.Frame, "commands cannot be flushed while a render pass is open")
-        return false
+        return .Error(.PassOpen)
     }
-    if vkEndCommandBuffer(state.commandBuffer) != vulkanSuccess() {
-        graphicsFail(.Frame, "could not end the command buffer to flush it")
-        return false
+    let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
+    if endResult != .Success {
+        return .Error(.CommandBufferNotEnded(endResult))
     }
-    let commandSlot = vulkanPointerSlot()
-    let semaphoreSlot = vulkanPointerSlot()
-    let stageSlot = vulkanWordSlot()
-    writePointer(commandSlot, U64(0), state.commandBuffer)
-    writePointer(semaphoreSlot, U64(0), state.imageAvailable)
-    writeWord(stageSlot, U64(0), U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
-    let result = vkQueueSubmit(state.queue, U32(1), VkSubmitInfo {
-        sType: vulkanStructureSubmitInfo(),
-        waitSemaphoreCount: state.acquireWaitPending ? U32(1) : U32(0),
-        pWaitSemaphores: semaphoreSlot,
-        pWaitDstStageMask: stageSlot,
-        commandBufferCount: U32(1),
-        pCommandBuffers: commandSlot
-    }, nullPointer())
-    freeBytes(commandSlot)
-    freeBytes(semaphoreSlot)
-    freeBytes(stageSlot)
-    if result != vulkanSuccess() {
-        graphicsFail(.Frame, "could not submit flushed commands (" + vulkanResultName(result) + ")")
-        return false
+    let result = vulkanSubmitRecorded(state)
+    if result != .Success {
+        return .Error(.SubmitFailed(result))
     }
     state.acquireWaitPending = false
-    if vkQueueWaitIdle(state.queue) != vulkanSuccess() {
-        graphicsFail(.Device, "waiting for the queue after a flush failed")
-        return false
+    let waitResult = vulkanResultOf(vkQueueWaitIdle(state.queue))
+    if waitResult != .Success {
+        return .Error(.QueueWaitFailed(waitResult))
     }
-    if !resume { return true }
-    if vkResetCommandBuffer(state.commandBuffer, U32(0)) != vulkanSuccess() {
-        graphicsFail(.Frame, "could not reset the command buffer to resume recording after a flush")
-        return false
+    return .Ok
+}
+
+// The recorded command buffer, submitted with no fence, waiting on the acquire
+// semaphore where this frame has not consumed it yet.
+function vulkanSubmitRecorded(state: borrow VulkanState) -> VulkanResult {
+    let commands = boxed<RawPtr>(state.commandBuffer)
+    let semaphore = boxed<RawPtr>(state.imageAvailable)
+    let stage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
+    let waits = match state.acquireWaitPending {
+        true -> U32(1)
+        false -> U32(0)
     }
-    return vkBeginCommandBuffer(state.commandBuffer, VkCommandBufferBeginInfo {
-        sType: vulkanStructureCommandBufferBeginInfo(),
-        flags: vulkanCommandBufferOneTime()
-    }) == vulkanSuccess()
+    return vulkanResultOf(
+        vkQueueSubmit(
+            state.queue,
+            U32(1),
+            VkSubmitInfo {
+                sType: VulkanVocabulary.structureSubmitInfo,
+                waitSemaphoreCount: waits,
+                pWaitSemaphores: semaphore.pointer(),
+                pWaitDstStageMask: stage.pointer(),
+                commandBufferCount: U32(1),
+                pCommandBuffers: commands.pointer()
+            },
+            nullPointer()
+        )
+    )
+}
+
+// `vulkanFlushCommands`, then recording resumed on the same frame and image.
+public function vulkanFlushAndResume(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
+    return match vulkanFlushCommands(state) {
+        Ok -> vulkanRestartCommandBuffer(state, .OneTime)
+        Error(failure) -> .Error(failure)
+    }
 }
 
 public function vulkanFinishComputeCommands(state: borrow mut VulkanState) {
     vulkanComputeBarrier(state)
-    if !state.frameActive && !vulkanFlushCommands(state, false) {
-        graphicsFail(.Frame, "compute submission failed")
-        state.quitRequested = true
+    if state.frameActive {
+        return
+    }
+    match vulkanFlushCommands(state) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not submit compute work outside a frame; quitting", failure)
+            state.quitRequested = true
+        }
+    }
+}
+
+// Waits for the queue to finish before something it may still read is
+// destroyed. A queue that will not go idle is a device that has stopped, and
+// nothing will run on it again, so the caller destroys the object anyway; the
+// failure is logged with what was being released.
+public function vulkanSettleQueue(state: borrow VulkanState, releasing: borrow String) {
+    if isNull(state.queue) {
+        return
+    }
+    let result = vulkanResultOf(vkQueueWaitIdle(state.queue))
+    if result != .Success {
+        log fault(
+            "the queue did not go idle before a release",
+            result: result,
+            releasing: releasing
+        )
+    }
+}
+
+// `vulkanSettleQueue` for the whole device: every queue, before teardown.
+public function vulkanSettleDevice(state: borrow VulkanState, releasing: borrow String) {
+    if isNull(state.device) {
+        return
+    }
+    let result = vulkanResultOf(vkDeviceWaitIdle(state.device))
+    if result != .Success {
+        log fault(
+            "the device did not go idle before a release",
+            result: result,
+            releasing: releasing
+        )
     }
 }

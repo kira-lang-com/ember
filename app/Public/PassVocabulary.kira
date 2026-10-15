@@ -25,7 +25,7 @@ public enum TextureUsage {
     SampledStorage
 }
 
-public function textureUsageCode(usage: TextureUsage) -> Int {
+public function textureUsageCode(usage: TextureUsage) -> Number {
     match usage {
         Sampled -> return 1
         RenderTarget -> return 2
@@ -49,7 +49,7 @@ public enum LoadAction {
     DontCare
 }
 
-public function loadActionCode(action: LoadAction) -> Int {
+public function loadActionCode(action: LoadAction) -> Number {
     match action {
         Clear -> return 1
         Load -> return 2
@@ -62,7 +62,7 @@ public enum StoreAction {
     DontCare
 }
 
-public function storeActionCode(action: StoreAction) -> Int {
+public function storeActionCode(action: StoreAction) -> Number {
     match action {
         Store -> return 1
         DontCare -> return 2
@@ -74,7 +74,7 @@ public enum RenderTargetKind {
     Texture
 }
 
-public function renderTargetKindCode(kind: RenderTargetKind) -> Int {
+public function renderTargetKindCode(kind: RenderTargetKind) -> Number {
     match kind {
         Swapchain -> return 1
         Texture -> return 2
@@ -91,20 +91,12 @@ public enum AttachmentStorage {
     Memoryless
 }
 
-public function attachmentStorageCode(storage: AttachmentStorage) -> Int {
-    match storage {
-        Persistent -> return 1
-        Transient -> return 2
-        Memoryless -> return 3
-    }
-}
-
 public enum TextureFilter {
     Nearest
     Linear
 }
 
-public function textureFilterCode(filter: TextureFilter) -> Int {
+public function textureFilterCode(filter: TextureFilter) -> Number {
     match filter {
         Nearest -> return 1
         Linear -> return 2
@@ -116,7 +108,7 @@ public enum AddressMode {
     Repeat
 }
 
-public function addressModeCode(mode: AddressMode) -> Int {
+public function addressModeCode(mode: AddressMode) -> Number {
     match mode {
         ClampToEdge -> return 1
         Repeat -> return 2

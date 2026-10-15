@@ -1,0 +1,166 @@
+// Handing exported memory to another process on Tessera, through DeviceKit.
+//
+// An exported texture's memory is a dma-buf the device rendered into. DeviceKit
+// adopts it as a surface and exports that to the device manager, which answers
+// a one-use token; the process the token is sent to imports the surface by it.
+// A token is spent by its import, so memory shown again is exported afresh.
+//
+// This is Ember's because DeviceKit is a private framework below Ember
+// (roadmap/17-devicekit.md §2.2): a program that draws links Ember and never
+// DeviceKit, and hands the token on in whatever message its own protocol
+// carries it in. Only Tessera has a device manager, so this file takes part
+// only in a build for Tessera (KLF section 27.8).
+
+import Foundation
+import LibTessera on tessera
+import DeviceKit on tessera
+
+// The port DeviceKit's export completions land on. One serves every export a
+// program makes; `close` gives it back.
+public struct MemoryExporter {
+    var port: Handle
+}
+
+// The token the device manager answered an export with: what the importing
+// process names the surface by.
+public struct MemoryToken {
+    var high: UNumber
+    var low: UNumber
+}
+
+// Why memory could not be exported.
+public enum MemoryExportFailure {
+    // There was no port for the completions to land on.
+    NoPort(TesseraError)
+    // The memory names no handle.
+    NoHandle
+    // The memory is an IOSurface, which Tessera does not have.
+    NotDmaBuf
+    // DeviceKit would not adopt the memory as a surface.
+    NotAdopted(TesseraError)
+    // The device manager refused the export, or the wait for its answer failed.
+    NotExported(TesseraError)
+    // The wait for the answer returned without one.
+    NoAnswer
+}
+
+// The key an export's completion carries; the port carries nothing else.
+namespace MemoryExportKey {
+    let completion: Number = 1
+}
+
+// The layouts an exported texture can have, as DRM spells them
+// (include/uapi/drm/drm_fourcc.h). A fourcc is its four characters in a
+// little-endian word: XR24 is the memory order B, G, R, X and XB24 is R, G, B,
+// X. Exported memory is shown, and a display ignores alpha, so the X formats
+// name both of Ember's. Modifier 0 is DRM_FORMAT_MOD_LINEAR.
+namespace DrmLayout {
+    let xr24: FourCc = FourCc(0x34325258)
+    let xb24: FourCc = FourCc(0x34324258)
+    let linear: Modifier = Modifier(0)
+}
+
+function fourCcOf(format: ExportedPixelFormat) -> FourCc {
+    return match format {
+        Bgra8Unorm -> DrmLayout.xr24
+        Rgba8Unorm -> DrmLayout.xb24
+    }
+}
+
+function modifierOf(layout: ExportedMemoryLayout) -> Modifier {
+    return match layout {
+        Linear -> DrmLayout.linear
+    }
+}
+
+// The handle DeviceKit adopts `memory` by.
+function nativeHandleOf(
+    memory: borrow ExportedMemory
+) -> Result<NativeHandle, MemoryExportFailure> {
+    if memory.handle == 0 { return .Error(.NoHandle) }
+    return match memory.kind {
+        DmaBuf -> .Ok(NativeHandle { kind: .DmaBufFd, value: memory.handle })
+        IOSurface -> .Error(.NotDmaBuf)
+    }
+}
+
+// How `memory` is laid out: one plane, as the device allocated it.
+function surfaceInfoOf(memory: borrow ExportedMemory) -> SurfaceInfo {
+    let plane = SurfacePlane {
+        offset: memory.offset,
+        stride: memory.stride,
+        size: memory.stride * memory.height,
+    }
+    let unused = SurfacePlane { offset: 0, stride: 0, size: 0 }
+    return SurfaceInfo {
+        width: memory.width,
+        height: memory.height,
+        format: fourCcOf(memory.format),
+        usage: SurfaceUsage.scanout,
+        modifier: modifierOf(memory.layout),
+        planeCount: 1,
+        flags: SurfaceFlags.none,
+        plane0: plane,
+        plane1: unused,
+        plane2: unused,
+        plane3: unused,
+    }
+}
+
+public function makeMemoryExporter() -> Result<MemoryExporter, MemoryExportFailure> {
+    return match portCreate(.None) {
+        Ok(port) -> .Ok(MemoryExporter { port: port })
+        Error(failure) -> .Error(.NoPort(failure))
+    }
+}
+
+extend MemoryExporter {
+    // Gives the port back. A close that fails is said; nothing else can be
+    // done about it.
+    function close(borrow self) {
+        match handleClose(port) {
+            Ok -> {}
+            Error(failure) -> log warn("could not close the export port", error: errorName(failure))
+        }
+    }
+
+    // The token `memory` was exported under.
+    function export(
+        borrow self,
+        memory: borrow ExportedMemory,
+    ) -> Result<MemoryToken, MemoryExportFailure> {
+        let handle = match nativeHandleOf(memory) {
+            Ok(value) -> value
+            Error(failure) -> return .Error(failure)
+        }
+        let adopted = match surfaceAdopt(handle, surfaceInfoOf(memory)) {
+            Ok(value) -> value
+            Error(failure) -> return .Error(.NotAdopted(failure))
+        }
+        let exported = awaitExport(adopted)
+        // The manager holds its own descriptor once the export is answered.
+        match refClose(adopted) {
+            Ok -> {}
+            Error(failure) -> log warn(
+                "could not close an adopted surface",
+                error: errorName(failure)
+            )
+        }
+        return exported
+    }
+
+    function awaitExport(borrow self, adopted: Ref) -> Result<MemoryToken, MemoryExportFailure> {
+        match surfaceExport(adopted, RefRights.same, 0, port, MemoryExportKey.completion) {
+            Ok -> {}
+            Error(failure) -> return .Error(.NotExported(failure))
+        }
+        let completions = match portWait(port, 1, Deadline.infinite) {
+            Ok(value) -> value
+            Error(failure) -> return .Error(.NotExported(failure))
+        }
+        if completions.count == 0 { return .Error(.NoAnswer) }
+        let answer = completions[0]
+        if answer.error.code != .Ok { return .Error(.NotExported(answer.error)) }
+        return .Ok(MemoryToken { high: answer.result0, low: answer.result1 })
+    }
+}

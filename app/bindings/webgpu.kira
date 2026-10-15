@@ -94,13 +94,25 @@ struct WGPUCallback {}
 @FFI.Callback { abi: c, params: [I32, WGPUCompilationInfo_ptr, RawPtr, RawPtr], result: Void }
 struct WGPUCompilationInfoCallback {}
 
-@FFI.Callback { abi: c, params: [I32, WGPUComputePipelineImpl_ptr, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [I32, WGPUComputePipelineImpl_ptr, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPUCreateComputePipelineAsyncCallback {}
 
-@FFI.Callback { abi: c, params: [I32, WGPURenderPipelineImpl_ptr, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [I32, WGPURenderPipelineImpl_ptr, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPUCreateRenderPipelineAsyncCallback {}
 
-@FFI.Callback { abi: c, params: [WGPUDeviceImpl_ptr_ptr, I32, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [WGPUDeviceImpl_ptr_ptr, I32, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPUDeviceLostCallback {}
 
 @FFI.Callback { abi: c, params: [I32, WGPUStringView, RawPtr, RawPtr], result: Void }
@@ -115,13 +127,25 @@ struct WGPUProc {}
 @FFI.Callback { abi: c, params: [I32, WGPUStringView, RawPtr, RawPtr], result: Void }
 struct WGPUQueueWorkDoneCallback {}
 
-@FFI.Callback { abi: c, params: [I32, WGPUAdapterImpl_ptr, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [I32, WGPUAdapterImpl_ptr, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPURequestAdapterCallback {}
 
-@FFI.Callback { abi: c, params: [I32, WGPUDeviceImpl_ptr, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [I32, WGPUDeviceImpl_ptr, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPURequestDeviceCallback {}
 
-@FFI.Callback { abi: c, params: [WGPUDeviceImpl_ptr_ptr, I32, WGPUStringView, RawPtr, RawPtr], result: Void }
+@FFI.Callback {
+    abi: c,
+    params: [WGPUDeviceImpl_ptr_ptr, I32, WGPUStringView, RawPtr, RawPtr],
+    result: Void
+}
 struct WGPUUncapturedErrorCallback {}
 
 @FFI.Struct { layout: c }
@@ -1983,13 +2007,23 @@ struct uint64_t_ptr {}
 function wgpuAdapterAddRef(adapter: WGPUAdapterImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterCreateDevice, abi: c }
-function wgpuAdapterCreateDevice(adapter: WGPUAdapterImpl_ptr, descriptor: WGPUDeviceDescriptor_ptr) -> WGPUDeviceImpl_ptr
+function wgpuAdapterCreateDevice(
+    adapter: WGPUAdapterImpl_ptr,
+    descriptor: WGPUDeviceDescriptor_ptr
+) -> WGPUDeviceImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterGetFeatures, abi: c }
-function wgpuAdapterGetFeatures(adapter: WGPUAdapterImpl_ptr, features: WGPUSupportedFeatures_ptr) -> Void
+function wgpuAdapterGetFeatures(
+    adapter: WGPUAdapterImpl_ptr,
+    features: WGPUSupportedFeatures_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterGetFormatCapabilities, abi: c }
-function wgpuAdapterGetFormatCapabilities(adapter: WGPUAdapterImpl_ptr, format: I32, capabilities: WGPUDawnFormatCapabilities_ptr) -> I32
+function wgpuAdapterGetFormatCapabilities(
+    adapter: WGPUAdapterImpl_ptr,
+    format: I32,
+    capabilities: WGPUDawnFormatCapabilities_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterGetInfo, abi: c }
 function wgpuAdapterGetInfo(adapter: WGPUAdapterImpl_ptr, info: WGPUAdapterInfo_ptr) -> I32
@@ -2007,16 +2041,24 @@ function wgpuAdapterHasFeature(adapter: WGPUAdapterImpl_ptr, feature: I32) -> U3
 function wgpuAdapterInfoFreeMembers(adapterInfo: WGPUAdapterInfo) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterPropertiesMemoryHeapsFreeMembers, abi: c }
-function wgpuAdapterPropertiesMemoryHeapsFreeMembers(adapterPropertiesMemoryHeaps: WGPUAdapterPropertiesMemoryHeaps) -> Void
+function wgpuAdapterPropertiesMemoryHeapsFreeMembers(
+    adapterPropertiesMemoryHeaps: WGPUAdapterPropertiesMemoryHeaps
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterPropertiesSubgroupMatrixConfigsFreeMembers, abi: c }
-function wgpuAdapterPropertiesSubgroupMatrixConfigsFreeMembers(adapterPropertiesSubgroupMatrixConfigs: WGPUAdapterPropertiesSubgroupMatrixConfigs) -> Void
+function wgpuAdapterPropertiesSubgroupMatrixConfigsFreeMembers(
+    adapterPropertiesSubgroupMatrixConfigs: WGPUAdapterPropertiesSubgroupMatrixConfigs
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterRelease, abi: c }
 function wgpuAdapterRelease(adapter: WGPUAdapterImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuAdapterRequestDevice, abi: c }
-function wgpuAdapterRequestDevice(adapter: WGPUAdapterImpl_ptr, descriptor: WGPUDeviceDescriptor_ptr, callbackInfo: WGPURequestDeviceCallbackInfo) -> WGPUFuture
+function wgpuAdapterRequestDevice(
+    adapter: WGPUAdapterImpl_ptr,
+    descriptor: WGPUDeviceDescriptor_ptr,
+    callbackInfo: WGPURequestDeviceCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuBindGroupAddRef, abi: c }
 function wgpuBindGroupAddRef(bindGroup: WGPUBindGroupImpl_ptr) -> Void
@@ -2028,7 +2070,10 @@ function wgpuBindGroupLayoutAddRef(bindGroupLayout: WGPUBindGroupLayoutImpl_ptr)
 function wgpuBindGroupLayoutRelease(bindGroupLayout: WGPUBindGroupLayoutImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuBindGroupLayoutSetLabel, abi: c }
-function wgpuBindGroupLayoutSetLabel(bindGroupLayout: WGPUBindGroupLayoutImpl_ptr, label: WGPUStringView) -> Void
+function wgpuBindGroupLayoutSetLabel(
+    bindGroupLayout: WGPUBindGroupLayoutImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuBindGroupRelease, abi: c }
 function wgpuBindGroupRelease(bindGroup: WGPUBindGroupImpl_ptr) -> Void
@@ -2040,7 +2085,10 @@ function wgpuBindGroupSetLabel(bindGroup: WGPUBindGroupImpl_ptr, label: WGPUStri
 function wgpuBufferAddRef(buffer: WGPUBufferImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferCreateTexelView, abi: c }
-function wgpuBufferCreateTexelView(buffer: WGPUBufferImpl_ptr, descriptor: WGPUTexelBufferViewDescriptor_ptr) -> WGPUTexelBufferViewImpl_ptr
+function wgpuBufferCreateTexelView(
+    buffer: WGPUBufferImpl_ptr,
+    descriptor: WGPUTexelBufferViewDescriptor_ptr
+) -> WGPUTexelBufferViewImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferDestroy, abi: c }
 function wgpuBufferDestroy(buffer: WGPUBufferImpl_ptr) -> Void
@@ -2061,10 +2109,21 @@ function wgpuBufferGetSize(buffer: WGPUBufferImpl_ptr) -> U64
 function wgpuBufferGetUsage(buffer: WGPUBufferImpl_ptr) -> U64
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferMapAsync, abi: c }
-function wgpuBufferMapAsync(buffer: WGPUBufferImpl_ptr, mode: U64, offset: U64, size: U64, callbackInfo: WGPUBufferMapCallbackInfo) -> WGPUFuture
+function wgpuBufferMapAsync(
+    buffer: WGPUBufferImpl_ptr,
+    mode: U64,
+    offset: U64,
+    size: U64,
+    callbackInfo: WGPUBufferMapCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferReadMappedRange, abi: c }
-function wgpuBufferReadMappedRange(buffer: WGPUBufferImpl_ptr, offset: U64, data: RawPtr, size: U64) -> I32
+function wgpuBufferReadMappedRange(
+    buffer: WGPUBufferImpl_ptr,
+    offset: U64,
+    data: RawPtr,
+    size: U64
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferRelease, abi: c }
 function wgpuBufferRelease(buffer: WGPUBufferImpl_ptr) -> Void
@@ -2076,7 +2135,12 @@ function wgpuBufferSetLabel(buffer: WGPUBufferImpl_ptr, label: WGPUStringView) -
 function wgpuBufferUnmap(buffer: WGPUBufferImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuBufferWriteMappedRange, abi: c }
-function wgpuBufferWriteMappedRange(buffer: WGPUBufferImpl_ptr, offset: U64, data: RawPtr, size: U64) -> I32
+function wgpuBufferWriteMappedRange(
+    buffer: WGPUBufferImpl_ptr,
+    offset: U64,
+    data: RawPtr,
+    size: U64
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandBufferAddRef, abi: c }
 function wgpuCommandBufferAddRef(commandBuffer: WGPUCommandBufferImpl_ptr) -> Void
@@ -2085,208 +2149,407 @@ function wgpuCommandBufferAddRef(commandBuffer: WGPUCommandBufferImpl_ptr) -> Vo
 function wgpuCommandBufferRelease(commandBuffer: WGPUCommandBufferImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandBufferSetLabel, abi: c }
-function wgpuCommandBufferSetLabel(commandBuffer: WGPUCommandBufferImpl_ptr, label: WGPUStringView) -> Void
+function wgpuCommandBufferSetLabel(
+    commandBuffer: WGPUCommandBufferImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderAddRef, abi: c }
 function wgpuCommandEncoderAddRef(commandEncoder: WGPUCommandEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderBeginComputePass, abi: c }
-function wgpuCommandEncoderBeginComputePass(commandEncoder: WGPUCommandEncoderImpl_ptr, descriptor: WGPUComputePassDescriptor_ptr) -> WGPUComputePassEncoderImpl_ptr
+function wgpuCommandEncoderBeginComputePass(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    descriptor: WGPUComputePassDescriptor_ptr
+) -> WGPUComputePassEncoderImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderBeginRenderPass, abi: c }
-function wgpuCommandEncoderBeginRenderPass(commandEncoder: WGPUCommandEncoderImpl_ptr, descriptor: WGPURenderPassDescriptor_ptr) -> WGPURenderPassEncoderImpl_ptr
+function wgpuCommandEncoderBeginRenderPass(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    descriptor: WGPURenderPassDescriptor_ptr
+) -> WGPURenderPassEncoderImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderClearBuffer, abi: c }
-function wgpuCommandEncoderClearBuffer(commandEncoder: WGPUCommandEncoderImpl_ptr, buffer: WGPUBufferImpl_ptr, offset: U64, size: U64) -> Void
+function wgpuCommandEncoderClearBuffer(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    offset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderCopyBufferToBuffer, abi: c }
-function wgpuCommandEncoderCopyBufferToBuffer(commandEncoder: WGPUCommandEncoderImpl_ptr, source: WGPUBufferImpl_ptr, sourceOffset: U64, destination: WGPUBufferImpl_ptr, destinationOffset: U64, size: U64) -> Void
+function wgpuCommandEncoderCopyBufferToBuffer(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    source: WGPUBufferImpl_ptr,
+    sourceOffset: U64,
+    destination: WGPUBufferImpl_ptr,
+    destinationOffset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderCopyBufferToTexture, abi: c }
-function wgpuCommandEncoderCopyBufferToTexture(commandEncoder: WGPUCommandEncoderImpl_ptr, source: WGPUTexelCopyBufferInfo_ptr, destination: WGPUTexelCopyTextureInfo_ptr, copySize: WGPUExtent3D_ptr) -> Void
+function wgpuCommandEncoderCopyBufferToTexture(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    source: WGPUTexelCopyBufferInfo_ptr,
+    destination: WGPUTexelCopyTextureInfo_ptr,
+    copySize: WGPUExtent3D_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderCopyTextureToBuffer, abi: c }
-function wgpuCommandEncoderCopyTextureToBuffer(commandEncoder: WGPUCommandEncoderImpl_ptr, source: WGPUTexelCopyTextureInfo_ptr, destination: WGPUTexelCopyBufferInfo_ptr, copySize: WGPUExtent3D_ptr) -> Void
+function wgpuCommandEncoderCopyTextureToBuffer(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    source: WGPUTexelCopyTextureInfo_ptr,
+    destination: WGPUTexelCopyBufferInfo_ptr,
+    copySize: WGPUExtent3D_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderCopyTextureToTexture, abi: c }
-function wgpuCommandEncoderCopyTextureToTexture(commandEncoder: WGPUCommandEncoderImpl_ptr, source: WGPUTexelCopyTextureInfo_ptr, destination: WGPUTexelCopyTextureInfo_ptr, copySize: WGPUExtent3D_ptr) -> Void
+function wgpuCommandEncoderCopyTextureToTexture(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    source: WGPUTexelCopyTextureInfo_ptr,
+    destination: WGPUTexelCopyTextureInfo_ptr,
+    copySize: WGPUExtent3D_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderFinish, abi: c }
-function wgpuCommandEncoderFinish(commandEncoder: WGPUCommandEncoderImpl_ptr, descriptor: WGPUCommandBufferDescriptor_ptr) -> WGPUCommandBufferImpl_ptr
+function wgpuCommandEncoderFinish(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    descriptor: WGPUCommandBufferDescriptor_ptr
+) -> WGPUCommandBufferImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderInjectValidationError, abi: c }
-function wgpuCommandEncoderInjectValidationError(commandEncoder: WGPUCommandEncoderImpl_ptr, message: WGPUStringView) -> Void
+function wgpuCommandEncoderInjectValidationError(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    message: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderInsertDebugMarker, abi: c }
-function wgpuCommandEncoderInsertDebugMarker(commandEncoder: WGPUCommandEncoderImpl_ptr, markerLabel: WGPUStringView) -> Void
+function wgpuCommandEncoderInsertDebugMarker(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    markerLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderPopDebugGroup, abi: c }
 function wgpuCommandEncoderPopDebugGroup(commandEncoder: WGPUCommandEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderPushDebugGroup, abi: c }
-function wgpuCommandEncoderPushDebugGroup(commandEncoder: WGPUCommandEncoderImpl_ptr, groupLabel: WGPUStringView) -> Void
+function wgpuCommandEncoderPushDebugGroup(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    groupLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderRelease, abi: c }
 function wgpuCommandEncoderRelease(commandEncoder: WGPUCommandEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderResolveQuerySet, abi: c }
-function wgpuCommandEncoderResolveQuerySet(commandEncoder: WGPUCommandEncoderImpl_ptr, querySet: WGPUQuerySetImpl_ptr, firstQuery: U32, queryCount: U32, destination: WGPUBufferImpl_ptr, destinationOffset: U64) -> Void
+function wgpuCommandEncoderResolveQuerySet(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    querySet: WGPUQuerySetImpl_ptr,
+    firstQuery: U32,
+    queryCount: U32,
+    destination: WGPUBufferImpl_ptr,
+    destinationOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderSetLabel, abi: c }
-function wgpuCommandEncoderSetLabel(commandEncoder: WGPUCommandEncoderImpl_ptr, label: WGPUStringView) -> Void
+function wgpuCommandEncoderSetLabel(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderWriteBuffer, abi: c }
-function wgpuCommandEncoderWriteBuffer(commandEncoder: WGPUCommandEncoderImpl_ptr, buffer: WGPUBufferImpl_ptr, bufferOffset: U64, data: RawPtr, size: U64) -> Void
+function wgpuCommandEncoderWriteBuffer(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    bufferOffset: U64,
+    data: RawPtr,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCommandEncoderWriteTimestamp, abi: c }
-function wgpuCommandEncoderWriteTimestamp(commandEncoder: WGPUCommandEncoderImpl_ptr, querySet: WGPUQuerySetImpl_ptr, queryIndex: U32) -> Void
+function wgpuCommandEncoderWriteTimestamp(
+    commandEncoder: WGPUCommandEncoderImpl_ptr,
+    querySet: WGPUQuerySetImpl_ptr,
+    queryIndex: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderAddRef, abi: c }
 function wgpuComputePassEncoderAddRef(computePassEncoder: WGPUComputePassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderDispatchWorkgroups, abi: c }
-function wgpuComputePassEncoderDispatchWorkgroups(computePassEncoder: WGPUComputePassEncoderImpl_ptr, workgroupCountX: U32, workgroupCountY: U32, workgroupCountZ: U32) -> Void
+function wgpuComputePassEncoderDispatchWorkgroups(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    workgroupCountX: U32,
+    workgroupCountY: U32,
+    workgroupCountZ: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderDispatchWorkgroupsIndirect, abi: c }
-function wgpuComputePassEncoderDispatchWorkgroupsIndirect(computePassEncoder: WGPUComputePassEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64) -> Void
+function wgpuComputePassEncoderDispatchWorkgroupsIndirect(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderEnd, abi: c }
 function wgpuComputePassEncoderEnd(computePassEncoder: WGPUComputePassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderInsertDebugMarker, abi: c }
-function wgpuComputePassEncoderInsertDebugMarker(computePassEncoder: WGPUComputePassEncoderImpl_ptr, markerLabel: WGPUStringView) -> Void
+function wgpuComputePassEncoderInsertDebugMarker(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    markerLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderPopDebugGroup, abi: c }
-function wgpuComputePassEncoderPopDebugGroup(computePassEncoder: WGPUComputePassEncoderImpl_ptr) -> Void
+function wgpuComputePassEncoderPopDebugGroup(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderPushDebugGroup, abi: c }
-function wgpuComputePassEncoderPushDebugGroup(computePassEncoder: WGPUComputePassEncoderImpl_ptr, groupLabel: WGPUStringView) -> Void
+function wgpuComputePassEncoderPushDebugGroup(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    groupLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderRelease, abi: c }
 function wgpuComputePassEncoderRelease(computePassEncoder: WGPUComputePassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderSetBindGroup, abi: c }
-function wgpuComputePassEncoderSetBindGroup(computePassEncoder: WGPUComputePassEncoderImpl_ptr, groupIndex: U32, group: WGPUBindGroupImpl_ptr, dynamicOffsetCount: U64, dynamicOffsets: uint32_t_ptr) -> Void
+function wgpuComputePassEncoderSetBindGroup(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    groupIndex: U32,
+    group: WGPUBindGroupImpl_ptr,
+    dynamicOffsetCount: U64,
+    dynamicOffsets: uint32_t_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderSetImmediates, abi: c }
-function wgpuComputePassEncoderSetImmediates(computePassEncoder: WGPUComputePassEncoderImpl_ptr, offset: U32, data: RawPtr, size: U64) -> Void
+function wgpuComputePassEncoderSetImmediates(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    offset: U32,
+    data: RawPtr,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderSetLabel, abi: c }
-function wgpuComputePassEncoderSetLabel(computePassEncoder: WGPUComputePassEncoderImpl_ptr, label: WGPUStringView) -> Void
+function wgpuComputePassEncoderSetLabel(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderSetPipeline, abi: c }
-function wgpuComputePassEncoderSetPipeline(computePassEncoder: WGPUComputePassEncoderImpl_ptr, pipeline: WGPUComputePipelineImpl_ptr) -> Void
+function wgpuComputePassEncoderSetPipeline(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    pipeline: WGPUComputePipelineImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderSetResourceTable, abi: c }
-function wgpuComputePassEncoderSetResourceTable(computePassEncoder: WGPUComputePassEncoderImpl_ptr, table: WGPUResourceTableImpl_ptr) -> Void
+function wgpuComputePassEncoderSetResourceTable(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    table: WGPUResourceTableImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePassEncoderWriteTimestamp, abi: c }
-function wgpuComputePassEncoderWriteTimestamp(computePassEncoder: WGPUComputePassEncoderImpl_ptr, querySet: WGPUQuerySetImpl_ptr, queryIndex: U32) -> Void
+function wgpuComputePassEncoderWriteTimestamp(
+    computePassEncoder: WGPUComputePassEncoderImpl_ptr,
+    querySet: WGPUQuerySetImpl_ptr,
+    queryIndex: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePipelineAddRef, abi: c }
 function wgpuComputePipelineAddRef(computePipeline: WGPUComputePipelineImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePipelineGetBindGroupLayout, abi: c }
-function wgpuComputePipelineGetBindGroupLayout(computePipeline: WGPUComputePipelineImpl_ptr, groupIndex: U32) -> WGPUBindGroupLayoutImpl_ptr
+function wgpuComputePipelineGetBindGroupLayout(
+    computePipeline: WGPUComputePipelineImpl_ptr,
+    groupIndex: U32
+) -> WGPUBindGroupLayoutImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePipelineRelease, abi: c }
 function wgpuComputePipelineRelease(computePipeline: WGPUComputePipelineImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuComputePipelineSetLabel, abi: c }
-function wgpuComputePipelineSetLabel(computePipeline: WGPUComputePipelineImpl_ptr, label: WGPUStringView) -> Void
+function wgpuComputePipelineSetLabel(
+    computePipeline: WGPUComputePipelineImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuCreateInstance, abi: c }
 function wgpuCreateInstance(descriptor: WGPUInstanceDescriptor_ptr) -> WGPUInstanceImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDawnDrmFormatCapabilitiesFreeMembers, abi: c }
-function wgpuDawnDrmFormatCapabilitiesFreeMembers(dawnDrmFormatCapabilities: WGPUDawnDrmFormatCapabilities) -> Void
+function wgpuDawnDrmFormatCapabilitiesFreeMembers(
+    dawnDrmFormatCapabilities: WGPUDawnDrmFormatCapabilities
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceAddRef, abi: c }
 function wgpuDeviceAddRef(device: WGPUDeviceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateBindGroup, abi: c }
-function wgpuDeviceCreateBindGroup(device: WGPUDeviceImpl_ptr, descriptor: WGPUBindGroupDescriptor_ptr) -> WGPUBindGroupImpl_ptr
+function wgpuDeviceCreateBindGroup(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUBindGroupDescriptor_ptr
+) -> WGPUBindGroupImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateBindGroupLayout, abi: c }
-function wgpuDeviceCreateBindGroupLayout(device: WGPUDeviceImpl_ptr, descriptor: WGPUBindGroupLayoutDescriptor_ptr) -> WGPUBindGroupLayoutImpl_ptr
+function wgpuDeviceCreateBindGroupLayout(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUBindGroupLayoutDescriptor_ptr
+) -> WGPUBindGroupLayoutImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateBuffer, abi: c }
-function wgpuDeviceCreateBuffer(device: WGPUDeviceImpl_ptr, descriptor: WGPUBufferDescriptor_ptr) -> WGPUBufferImpl_ptr
+function wgpuDeviceCreateBuffer(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUBufferDescriptor_ptr
+) -> WGPUBufferImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateCommandEncoder, abi: c }
-function wgpuDeviceCreateCommandEncoder(device: WGPUDeviceImpl_ptr, descriptor: WGPUCommandEncoderDescriptor_ptr) -> WGPUCommandEncoderImpl_ptr
+function wgpuDeviceCreateCommandEncoder(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUCommandEncoderDescriptor_ptr
+) -> WGPUCommandEncoderImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateComputePipeline, abi: c }
-function wgpuDeviceCreateComputePipeline(device: WGPUDeviceImpl_ptr, descriptor: WGPUComputePipelineDescriptor_ptr) -> WGPUComputePipelineImpl_ptr
+function wgpuDeviceCreateComputePipeline(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUComputePipelineDescriptor_ptr
+) -> WGPUComputePipelineImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateComputePipelineAsync, abi: c }
-function wgpuDeviceCreateComputePipelineAsync(device: WGPUDeviceImpl_ptr, descriptor: WGPUComputePipelineDescriptor_ptr, callbackInfo: WGPUCreateComputePipelineAsyncCallbackInfo) -> WGPUFuture
+function wgpuDeviceCreateComputePipelineAsync(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUComputePipelineDescriptor_ptr,
+    callbackInfo: WGPUCreateComputePipelineAsyncCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorBuffer, abi: c }
-function wgpuDeviceCreateErrorBuffer(device: WGPUDeviceImpl_ptr, descriptor: WGPUBufferDescriptor_ptr) -> WGPUBufferImpl_ptr
+function wgpuDeviceCreateErrorBuffer(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUBufferDescriptor_ptr
+) -> WGPUBufferImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorComputePipeline, abi: c }
-function wgpuDeviceCreateErrorComputePipeline(device: WGPUDeviceImpl_ptr, label: WGPUStringView) -> WGPUComputePipelineImpl_ptr
+function wgpuDeviceCreateErrorComputePipeline(
+    device: WGPUDeviceImpl_ptr,
+    label: WGPUStringView
+) -> WGPUComputePipelineImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorExternalTexture, abi: c }
-function wgpuDeviceCreateErrorExternalTexture(device: WGPUDeviceImpl_ptr) -> WGPUExternalTextureImpl_ptr
+function wgpuDeviceCreateErrorExternalTexture(
+    device: WGPUDeviceImpl_ptr
+) -> WGPUExternalTextureImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorRenderPipeline, abi: c }
-function wgpuDeviceCreateErrorRenderPipeline(device: WGPUDeviceImpl_ptr, label: WGPUStringView) -> WGPURenderPipelineImpl_ptr
+function wgpuDeviceCreateErrorRenderPipeline(
+    device: WGPUDeviceImpl_ptr,
+    label: WGPUStringView
+) -> WGPURenderPipelineImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorShaderModule, abi: c }
-function wgpuDeviceCreateErrorShaderModule(device: WGPUDeviceImpl_ptr, descriptor: WGPUShaderModuleDescriptor_ptr, errorMessage: WGPUStringView) -> WGPUShaderModuleImpl_ptr
+function wgpuDeviceCreateErrorShaderModule(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUShaderModuleDescriptor_ptr,
+    errorMessage: WGPUStringView
+) -> WGPUShaderModuleImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateErrorTexture, abi: c }
-function wgpuDeviceCreateErrorTexture(device: WGPUDeviceImpl_ptr, descriptor: WGPUTextureDescriptor_ptr) -> WGPUTextureImpl_ptr
+function wgpuDeviceCreateErrorTexture(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUTextureDescriptor_ptr
+) -> WGPUTextureImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateExternalTexture, abi: c }
-function wgpuDeviceCreateExternalTexture(device: WGPUDeviceImpl_ptr, externalTextureDescriptor: WGPUExternalTextureDescriptor_ptr) -> WGPUExternalTextureImpl_ptr
+function wgpuDeviceCreateExternalTexture(
+    device: WGPUDeviceImpl_ptr,
+    externalTextureDescriptor: WGPUExternalTextureDescriptor_ptr
+) -> WGPUExternalTextureImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreatePipelineLayout, abi: c }
-function wgpuDeviceCreatePipelineLayout(device: WGPUDeviceImpl_ptr, descriptor: WGPUPipelineLayoutDescriptor_ptr) -> WGPUPipelineLayoutImpl_ptr
+function wgpuDeviceCreatePipelineLayout(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUPipelineLayoutDescriptor_ptr
+) -> WGPUPipelineLayoutImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateQuerySet, abi: c }
-function wgpuDeviceCreateQuerySet(device: WGPUDeviceImpl_ptr, descriptor: WGPUQuerySetDescriptor_ptr) -> WGPUQuerySetImpl_ptr
+function wgpuDeviceCreateQuerySet(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUQuerySetDescriptor_ptr
+) -> WGPUQuerySetImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateRenderBundleEncoder, abi: c }
-function wgpuDeviceCreateRenderBundleEncoder(device: WGPUDeviceImpl_ptr, descriptor: WGPURenderBundleEncoderDescriptor_ptr) -> WGPURenderBundleEncoderImpl_ptr
+function wgpuDeviceCreateRenderBundleEncoder(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPURenderBundleEncoderDescriptor_ptr
+) -> WGPURenderBundleEncoderImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateRenderPipeline, abi: c }
-function wgpuDeviceCreateRenderPipeline(device: WGPUDeviceImpl_ptr, descriptor: WGPURenderPipelineDescriptor_ptr) -> WGPURenderPipelineImpl_ptr
+function wgpuDeviceCreateRenderPipeline(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPURenderPipelineDescriptor_ptr
+) -> WGPURenderPipelineImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateRenderPipelineAsync, abi: c }
-function wgpuDeviceCreateRenderPipelineAsync(device: WGPUDeviceImpl_ptr, descriptor: WGPURenderPipelineDescriptor_ptr, callbackInfo: WGPUCreateRenderPipelineAsyncCallbackInfo) -> WGPUFuture
+function wgpuDeviceCreateRenderPipelineAsync(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPURenderPipelineDescriptor_ptr,
+    callbackInfo: WGPUCreateRenderPipelineAsyncCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateResourceTable, abi: c }
-function wgpuDeviceCreateResourceTable(device: WGPUDeviceImpl_ptr, descriptor: WGPUResourceTableDescriptor_ptr) -> WGPUResourceTableImpl_ptr
+function wgpuDeviceCreateResourceTable(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUResourceTableDescriptor_ptr
+) -> WGPUResourceTableImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateSampler, abi: c }
-function wgpuDeviceCreateSampler(device: WGPUDeviceImpl_ptr, descriptor: WGPUSamplerDescriptor_ptr) -> WGPUSamplerImpl_ptr
+function wgpuDeviceCreateSampler(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUSamplerDescriptor_ptr
+) -> WGPUSamplerImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateShaderModule, abi: c }
-function wgpuDeviceCreateShaderModule(device: WGPUDeviceImpl_ptr, descriptor: WGPUShaderModuleDescriptor_ptr) -> WGPUShaderModuleImpl_ptr
+function wgpuDeviceCreateShaderModule(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUShaderModuleDescriptor_ptr
+) -> WGPUShaderModuleImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceCreateTexture, abi: c }
-function wgpuDeviceCreateTexture(device: WGPUDeviceImpl_ptr, descriptor: WGPUTextureDescriptor_ptr) -> WGPUTextureImpl_ptr
+function wgpuDeviceCreateTexture(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUTextureDescriptor_ptr
+) -> WGPUTextureImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceDestroy, abi: c }
 function wgpuDeviceDestroy(device: WGPUDeviceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceForceLoss, abi: c }
-function wgpuDeviceForceLoss(device: WGPUDeviceImpl_ptr, type_value: I32, message: WGPUStringView) -> Void
+function wgpuDeviceForceLoss(
+    device: WGPUDeviceImpl_ptr,
+    type_value: I32,
+    message: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceGetAHardwareBufferProperties, abi: c }
-function wgpuDeviceGetAHardwareBufferProperties(device: WGPUDeviceImpl_ptr, handle: RawPtr, properties: WGPUAHardwareBufferProperties_ptr) -> I32
+function wgpuDeviceGetAHardwareBufferProperties(
+    device: WGPUDeviceImpl_ptr,
+    handle: RawPtr,
+    properties: WGPUAHardwareBufferProperties_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceGetAdapter, abi: c }
 function wgpuDeviceGetAdapter(device: WGPUDeviceImpl_ptr) -> WGPUAdapterImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceGetAdapterInfo, abi: c }
-function wgpuDeviceGetAdapterInfo(device: WGPUDeviceImpl_ptr, adapterInfo: WGPUAdapterInfo_ptr) -> I32
+function wgpuDeviceGetAdapterInfo(
+    device: WGPUDeviceImpl_ptr,
+    adapterInfo: WGPUAdapterInfo_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceGetFeatures, abi: c }
-function wgpuDeviceGetFeatures(device: WGPUDeviceImpl_ptr, features: WGPUSupportedFeatures_ptr) -> Void
+function wgpuDeviceGetFeatures(
+    device: WGPUDeviceImpl_ptr,
+    features: WGPUSupportedFeatures_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceGetLimits, abi: c }
 function wgpuDeviceGetLimits(device: WGPUDeviceImpl_ptr, limits: WGPULimits_ptr) -> I32
@@ -2301,19 +2564,35 @@ function wgpuDeviceGetQueue(device: WGPUDeviceImpl_ptr) -> WGPUQueueImpl_ptr
 function wgpuDeviceHasFeature(device: WGPUDeviceImpl_ptr, feature: I32) -> U32
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceImportSharedBufferMemory, abi: c }
-function wgpuDeviceImportSharedBufferMemory(device: WGPUDeviceImpl_ptr, descriptor: WGPUSharedBufferMemoryDescriptor_ptr) -> WGPUSharedBufferMemoryImpl_ptr
+function wgpuDeviceImportSharedBufferMemory(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUSharedBufferMemoryDescriptor_ptr
+) -> WGPUSharedBufferMemoryImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceImportSharedFence, abi: c }
-function wgpuDeviceImportSharedFence(device: WGPUDeviceImpl_ptr, descriptor: WGPUSharedFenceDescriptor_ptr) -> WGPUSharedFenceImpl_ptr
+function wgpuDeviceImportSharedFence(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUSharedFenceDescriptor_ptr
+) -> WGPUSharedFenceImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceImportSharedTextureMemory, abi: c }
-function wgpuDeviceImportSharedTextureMemory(device: WGPUDeviceImpl_ptr, descriptor: WGPUSharedTextureMemoryDescriptor_ptr) -> WGPUSharedTextureMemoryImpl_ptr
+function wgpuDeviceImportSharedTextureMemory(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUSharedTextureMemoryDescriptor_ptr
+) -> WGPUSharedTextureMemoryImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceInjectError, abi: c }
-function wgpuDeviceInjectError(device: WGPUDeviceImpl_ptr, type_value: I32, message: WGPUStringView) -> Void
+function wgpuDeviceInjectError(
+    device: WGPUDeviceImpl_ptr,
+    type_value: I32,
+    message: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDevicePopErrorScope, abi: c }
-function wgpuDevicePopErrorScope(device: WGPUDeviceImpl_ptr, callbackInfo: WGPUPopErrorScopeCallbackInfo) -> WGPUFuture
+function wgpuDevicePopErrorScope(
+    device: WGPUDeviceImpl_ptr,
+    callbackInfo: WGPUPopErrorScopeCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuDevicePushErrorScope, abi: c }
 function wgpuDevicePushErrorScope(device: WGPUDeviceImpl_ptr, filter: I32) -> Void
@@ -2325,13 +2604,19 @@ function wgpuDeviceRelease(device: WGPUDeviceImpl_ptr) -> Void
 function wgpuDeviceSetLabel(device: WGPUDeviceImpl_ptr, label: WGPUStringView) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceSetLoggingCallback, abi: c }
-function wgpuDeviceSetLoggingCallback(device: WGPUDeviceImpl_ptr, callbackInfo: WGPULoggingCallbackInfo) -> Void
+function wgpuDeviceSetLoggingCallback(
+    device: WGPUDeviceImpl_ptr,
+    callbackInfo: WGPULoggingCallbackInfo
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceTick, abi: c }
 function wgpuDeviceTick(device: WGPUDeviceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuDeviceValidateTextureDescriptor, abi: c }
-function wgpuDeviceValidateTextureDescriptor(device: WGPUDeviceImpl_ptr, descriptor: WGPUTextureDescriptor_ptr) -> Void
+function wgpuDeviceValidateTextureDescriptor(
+    device: WGPUDeviceImpl_ptr,
+    descriptor: WGPUTextureDescriptor_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuExternalTextureAddRef, abi: c }
 function wgpuExternalTextureAddRef(externalTexture: WGPUExternalTextureImpl_ptr) -> Void
@@ -2349,7 +2634,10 @@ function wgpuExternalTextureRefresh(externalTexture: WGPUExternalTextureImpl_ptr
 function wgpuExternalTextureRelease(externalTexture: WGPUExternalTextureImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuExternalTextureSetLabel, abi: c }
-function wgpuExternalTextureSetLabel(externalTexture: WGPUExternalTextureImpl_ptr, label: WGPUStringView) -> Void
+function wgpuExternalTextureSetLabel(
+    externalTexture: WGPUExternalTextureImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuGetInstanceFeatures, abi: c }
 function wgpuGetInstanceFeatures(features: WGPUSupportedInstanceFeatures_ptr) -> Void
@@ -2367,10 +2655,16 @@ function wgpuHasInstanceFeature(feature: I32) -> U32
 function wgpuInstanceAddRef(instance: WGPUInstanceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuInstanceCreateSurface, abi: c }
-function wgpuInstanceCreateSurface(instance: WGPUInstanceImpl_ptr, descriptor: WGPUSurfaceDescriptor_ptr) -> WGPUSurfaceImpl_ptr
+function wgpuInstanceCreateSurface(
+    instance: WGPUInstanceImpl_ptr,
+    descriptor: WGPUSurfaceDescriptor_ptr
+) -> WGPUSurfaceImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuInstanceGetWGSLLanguageFeatures, abi: c }
-function wgpuInstanceGetWGSLLanguageFeatures(instance: WGPUInstanceImpl_ptr, features: WGPUSupportedWGSLLanguageFeatures_ptr) -> Void
+function wgpuInstanceGetWGSLLanguageFeatures(
+    instance: WGPUInstanceImpl_ptr,
+    features: WGPUSupportedWGSLLanguageFeatures_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuInstanceHasWGSLLanguageFeature, abi: c }
 function wgpuInstanceHasWGSLLanguageFeature(instance: WGPUInstanceImpl_ptr, feature: I32) -> U32
@@ -2382,10 +2676,19 @@ function wgpuInstanceProcessEvents(instance: WGPUInstanceImpl_ptr) -> Void
 function wgpuInstanceRelease(instance: WGPUInstanceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuInstanceRequestAdapter, abi: c }
-function wgpuInstanceRequestAdapter(instance: WGPUInstanceImpl_ptr, options: WGPURequestAdapterOptions_ptr, callbackInfo: WGPURequestAdapterCallbackInfo) -> WGPUFuture
+function wgpuInstanceRequestAdapter(
+    instance: WGPUInstanceImpl_ptr,
+    options: WGPURequestAdapterOptions_ptr,
+    callbackInfo: WGPURequestAdapterCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuInstanceWaitAny, abi: c }
-function wgpuInstanceWaitAny(instance: WGPUInstanceImpl_ptr, futureCount: U64, futures: WGPUFutureWaitInfo_ptr, timeoutNS: U64) -> I32
+function wgpuInstanceWaitAny(
+    instance: WGPUInstanceImpl_ptr,
+    futureCount: U64,
+    futures: WGPUFutureWaitInfo_ptr,
+    timeoutNS: U64
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuPipelineLayoutAddRef, abi: c }
 function wgpuPipelineLayoutAddRef(pipelineLayout: WGPUPipelineLayoutImpl_ptr) -> Void
@@ -2394,7 +2697,10 @@ function wgpuPipelineLayoutAddRef(pipelineLayout: WGPUPipelineLayoutImpl_ptr) ->
 function wgpuPipelineLayoutRelease(pipelineLayout: WGPUPipelineLayoutImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuPipelineLayoutSetLabel, abi: c }
-function wgpuPipelineLayoutSetLabel(pipelineLayout: WGPUPipelineLayoutImpl_ptr, label: WGPUStringView) -> Void
+function wgpuPipelineLayoutSetLabel(
+    pipelineLayout: WGPUPipelineLayoutImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQuerySetAddRef, abi: c }
 function wgpuQuerySetAddRef(querySet: WGPUQuerySetImpl_ptr) -> Void
@@ -2418,13 +2724,28 @@ function wgpuQuerySetSetLabel(querySet: WGPUQuerySetImpl_ptr, label: WGPUStringV
 function wgpuQueueAddRef(queue: WGPUQueueImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueCopyExternalTextureForBrowser, abi: c }
-function wgpuQueueCopyExternalTextureForBrowser(queue: WGPUQueueImpl_ptr, source: WGPUImageCopyExternalTexture_ptr, destination: WGPUTexelCopyTextureInfo_ptr, copySize: WGPUExtent3D_ptr, options: WGPUCopyTextureForBrowserOptions_ptr) -> Void
+function wgpuQueueCopyExternalTextureForBrowser(
+    queue: WGPUQueueImpl_ptr,
+    source: WGPUImageCopyExternalTexture_ptr,
+    destination: WGPUTexelCopyTextureInfo_ptr,
+    copySize: WGPUExtent3D_ptr,
+    options: WGPUCopyTextureForBrowserOptions_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueCopyTextureForBrowser, abi: c }
-function wgpuQueueCopyTextureForBrowser(queue: WGPUQueueImpl_ptr, source: WGPUTexelCopyTextureInfo_ptr, destination: WGPUTexelCopyTextureInfo_ptr, copySize: WGPUExtent3D_ptr, options: WGPUCopyTextureForBrowserOptions_ptr) -> Void
+function wgpuQueueCopyTextureForBrowser(
+    queue: WGPUQueueImpl_ptr,
+    source: WGPUTexelCopyTextureInfo_ptr,
+    destination: WGPUTexelCopyTextureInfo_ptr,
+    copySize: WGPUExtent3D_ptr,
+    options: WGPUCopyTextureForBrowserOptions_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueOnSubmittedWorkDone, abi: c }
-function wgpuQueueOnSubmittedWorkDone(queue: WGPUQueueImpl_ptr, callbackInfo: WGPUQueueWorkDoneCallbackInfo) -> WGPUFuture
+function wgpuQueueOnSubmittedWorkDone(
+    queue: WGPUQueueImpl_ptr,
+    callbackInfo: WGPUQueueWorkDoneCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueRelease, abi: c }
 function wgpuQueueRelease(queue: WGPUQueueImpl_ptr) -> Void
@@ -2433,13 +2754,30 @@ function wgpuQueueRelease(queue: WGPUQueueImpl_ptr) -> Void
 function wgpuQueueSetLabel(queue: WGPUQueueImpl_ptr, label: WGPUStringView) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueSubmit, abi: c }
-function wgpuQueueSubmit(queue: WGPUQueueImpl_ptr, commandCount: U64, commands: WGPUCommandBufferImpl_ptr_ptr) -> Void
+function wgpuQueueSubmit(
+    queue: WGPUQueueImpl_ptr,
+    commandCount: U64,
+    commands: WGPUCommandBufferImpl_ptr_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueWriteBuffer, abi: c }
-function wgpuQueueWriteBuffer(queue: WGPUQueueImpl_ptr, buffer: WGPUBufferImpl_ptr, bufferOffset: U64, data: RawPtr, size: U64) -> Void
+function wgpuQueueWriteBuffer(
+    queue: WGPUQueueImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    bufferOffset: U64,
+    data: RawPtr,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuQueueWriteTexture, abi: c }
-function wgpuQueueWriteTexture(queue: WGPUQueueImpl_ptr, destination: WGPUTexelCopyTextureInfo_ptr, data: RawPtr, dataSize: U64, dataLayout: WGPUTexelCopyBufferLayout_ptr, writeSize: WGPUExtent3D_ptr) -> Void
+function wgpuQueueWriteTexture(
+    queue: WGPUQueueImpl_ptr,
+    destination: WGPUTexelCopyTextureInfo_ptr,
+    data: RawPtr,
+    dataSize: U64,
+    dataLayout: WGPUTexelCopyBufferLayout_ptr,
+    writeSize: WGPUExtent3D_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleAddRef, abi: c }
 function wgpuRenderBundleAddRef(renderBundle: WGPURenderBundleImpl_ptr) -> Void
@@ -2448,154 +2786,339 @@ function wgpuRenderBundleAddRef(renderBundle: WGPURenderBundleImpl_ptr) -> Void
 function wgpuRenderBundleEncoderAddRef(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderDraw, abi: c }
-function wgpuRenderBundleEncoderDraw(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, vertexCount: U32, instanceCount: U32, firstVertex: U32, firstInstance: U32) -> Void
+function wgpuRenderBundleEncoderDraw(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    vertexCount: U32,
+    instanceCount: U32,
+    firstVertex: U32,
+    firstInstance: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderDrawIndexed, abi: c }
-function wgpuRenderBundleEncoderDrawIndexed(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, indexCount: U32, instanceCount: U32, firstIndex: U32, baseVertex: I32, firstInstance: U32) -> Void
+function wgpuRenderBundleEncoderDrawIndexed(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    indexCount: U32,
+    instanceCount: U32,
+    firstIndex: U32,
+    baseVertex: I32,
+    firstInstance: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderDrawIndexedIndirect, abi: c }
-function wgpuRenderBundleEncoderDrawIndexedIndirect(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64) -> Void
+function wgpuRenderBundleEncoderDrawIndexedIndirect(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderDrawIndirect, abi: c }
-function wgpuRenderBundleEncoderDrawIndirect(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64) -> Void
+function wgpuRenderBundleEncoderDrawIndirect(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderFinish, abi: c }
-function wgpuRenderBundleEncoderFinish(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, descriptor: WGPURenderBundleDescriptor_ptr) -> WGPURenderBundleImpl_ptr
+function wgpuRenderBundleEncoderFinish(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    descriptor: WGPURenderBundleDescriptor_ptr
+) -> WGPURenderBundleImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderInsertDebugMarker, abi: c }
-function wgpuRenderBundleEncoderInsertDebugMarker(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, markerLabel: WGPUStringView) -> Void
+function wgpuRenderBundleEncoderInsertDebugMarker(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    markerLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderPopDebugGroup, abi: c }
-function wgpuRenderBundleEncoderPopDebugGroup(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr) -> Void
+function wgpuRenderBundleEncoderPopDebugGroup(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderPushDebugGroup, abi: c }
-function wgpuRenderBundleEncoderPushDebugGroup(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, groupLabel: WGPUStringView) -> Void
+function wgpuRenderBundleEncoderPushDebugGroup(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    groupLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderRelease, abi: c }
-function wgpuRenderBundleEncoderRelease(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr) -> Void
+function wgpuRenderBundleEncoderRelease(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetBindGroup, abi: c }
-function wgpuRenderBundleEncoderSetBindGroup(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, groupIndex: U32, group: WGPUBindGroupImpl_ptr, dynamicOffsetCount: U64, dynamicOffsets: uint32_t_ptr) -> Void
+function wgpuRenderBundleEncoderSetBindGroup(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    groupIndex: U32,
+    group: WGPUBindGroupImpl_ptr,
+    dynamicOffsetCount: U64,
+    dynamicOffsets: uint32_t_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetImmediates, abi: c }
-function wgpuRenderBundleEncoderSetImmediates(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, offset: U32, data: RawPtr, size: U64) -> Void
+function wgpuRenderBundleEncoderSetImmediates(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    offset: U32,
+    data: RawPtr,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetIndexBuffer, abi: c }
-function wgpuRenderBundleEncoderSetIndexBuffer(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, buffer: WGPUBufferImpl_ptr, format: I32, offset: U64, size: U64) -> Void
+function wgpuRenderBundleEncoderSetIndexBuffer(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    format: I32,
+    offset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetLabel, abi: c }
-function wgpuRenderBundleEncoderSetLabel(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, label: WGPUStringView) -> Void
+function wgpuRenderBundleEncoderSetLabel(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetPipeline, abi: c }
-function wgpuRenderBundleEncoderSetPipeline(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, pipeline: WGPURenderPipelineImpl_ptr) -> Void
+function wgpuRenderBundleEncoderSetPipeline(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    pipeline: WGPURenderPipelineImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetResourceTable, abi: c }
-function wgpuRenderBundleEncoderSetResourceTable(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, table: WGPUResourceTableImpl_ptr) -> Void
+function wgpuRenderBundleEncoderSetResourceTable(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    table: WGPUResourceTableImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleEncoderSetVertexBuffer, abi: c }
-function wgpuRenderBundleEncoderSetVertexBuffer(renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr, slot: U32, buffer: WGPUBufferImpl_ptr, offset: U64, size: U64) -> Void
+function wgpuRenderBundleEncoderSetVertexBuffer(
+    renderBundleEncoder: WGPURenderBundleEncoderImpl_ptr,
+    slot: U32,
+    buffer: WGPUBufferImpl_ptr,
+    offset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleRelease, abi: c }
 function wgpuRenderBundleRelease(renderBundle: WGPURenderBundleImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderBundleSetLabel, abi: c }
-function wgpuRenderBundleSetLabel(renderBundle: WGPURenderBundleImpl_ptr, label: WGPUStringView) -> Void
+function wgpuRenderBundleSetLabel(
+    renderBundle: WGPURenderBundleImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderAddRef, abi: c }
 function wgpuRenderPassEncoderAddRef(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderBeginOcclusionQuery, abi: c }
-function wgpuRenderPassEncoderBeginOcclusionQuery(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, queryIndex: U32) -> Void
+function wgpuRenderPassEncoderBeginOcclusionQuery(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    queryIndex: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderDraw, abi: c }
-function wgpuRenderPassEncoderDraw(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, vertexCount: U32, instanceCount: U32, firstVertex: U32, firstInstance: U32) -> Void
+function wgpuRenderPassEncoderDraw(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    vertexCount: U32,
+    instanceCount: U32,
+    firstVertex: U32,
+    firstInstance: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderDrawIndexed, abi: c }
-function wgpuRenderPassEncoderDrawIndexed(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, indexCount: U32, instanceCount: U32, firstIndex: U32, baseVertex: I32, firstInstance: U32) -> Void
+function wgpuRenderPassEncoderDrawIndexed(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    indexCount: U32,
+    instanceCount: U32,
+    firstIndex: U32,
+    baseVertex: I32,
+    firstInstance: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderDrawIndexedIndirect, abi: c }
-function wgpuRenderPassEncoderDrawIndexedIndirect(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64) -> Void
+function wgpuRenderPassEncoderDrawIndexedIndirect(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderDrawIndirect, abi: c }
-function wgpuRenderPassEncoderDrawIndirect(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64) -> Void
+function wgpuRenderPassEncoderDrawIndirect(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderEnd, abi: c }
 function wgpuRenderPassEncoderEnd(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderEndOcclusionQuery, abi: c }
-function wgpuRenderPassEncoderEndOcclusionQuery(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
+function wgpuRenderPassEncoderEndOcclusionQuery(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderExecuteBundles, abi: c }
-function wgpuRenderPassEncoderExecuteBundles(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, bundleCount: U64, bundles: WGPURenderBundleImpl_ptr_ptr) -> Void
+function wgpuRenderPassEncoderExecuteBundles(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    bundleCount: U64,
+    bundles: WGPURenderBundleImpl_ptr_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderInsertDebugMarker, abi: c }
-function wgpuRenderPassEncoderInsertDebugMarker(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, markerLabel: WGPUStringView) -> Void
+function wgpuRenderPassEncoderInsertDebugMarker(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    markerLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderMultiDrawIndexedIndirect, abi: c }
-function wgpuRenderPassEncoderMultiDrawIndexedIndirect(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64, maxDrawCount: U32, drawCountBuffer: WGPUBufferImpl_ptr, drawCountBufferOffset: U64) -> Void
+function wgpuRenderPassEncoderMultiDrawIndexedIndirect(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64,
+    maxDrawCount: U32,
+    drawCountBuffer: WGPUBufferImpl_ptr,
+    drawCountBufferOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderMultiDrawIndirect, abi: c }
-function wgpuRenderPassEncoderMultiDrawIndirect(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, indirectBuffer: WGPUBufferImpl_ptr, indirectOffset: U64, maxDrawCount: U32, drawCountBuffer: WGPUBufferImpl_ptr, drawCountBufferOffset: U64) -> Void
+function wgpuRenderPassEncoderMultiDrawIndirect(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    indirectBuffer: WGPUBufferImpl_ptr,
+    indirectOffset: U64,
+    maxDrawCount: U32,
+    drawCountBuffer: WGPUBufferImpl_ptr,
+    drawCountBufferOffset: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderPixelLocalStorageBarrier, abi: c }
-function wgpuRenderPassEncoderPixelLocalStorageBarrier(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
+function wgpuRenderPassEncoderPixelLocalStorageBarrier(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderPopDebugGroup, abi: c }
-function wgpuRenderPassEncoderPopDebugGroup(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
+function wgpuRenderPassEncoderPopDebugGroup(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderPushDebugGroup, abi: c }
-function wgpuRenderPassEncoderPushDebugGroup(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, groupLabel: WGPUStringView) -> Void
+function wgpuRenderPassEncoderPushDebugGroup(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    groupLabel: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderRelease, abi: c }
 function wgpuRenderPassEncoderRelease(renderPassEncoder: WGPURenderPassEncoderImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetBindGroup, abi: c }
-function wgpuRenderPassEncoderSetBindGroup(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, groupIndex: U32, group: WGPUBindGroupImpl_ptr, dynamicOffsetCount: U64, dynamicOffsets: uint32_t_ptr) -> Void
+function wgpuRenderPassEncoderSetBindGroup(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    groupIndex: U32,
+    group: WGPUBindGroupImpl_ptr,
+    dynamicOffsetCount: U64,
+    dynamicOffsets: uint32_t_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetBlendConstant, abi: c }
-function wgpuRenderPassEncoderSetBlendConstant(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, color: WGPUColor_ptr) -> Void
+function wgpuRenderPassEncoderSetBlendConstant(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    color: WGPUColor_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetImmediates, abi: c }
-function wgpuRenderPassEncoderSetImmediates(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, offset: U32, data: RawPtr, size: U64) -> Void
+function wgpuRenderPassEncoderSetImmediates(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    offset: U32,
+    data: RawPtr,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetIndexBuffer, abi: c }
-function wgpuRenderPassEncoderSetIndexBuffer(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, buffer: WGPUBufferImpl_ptr, format: I32, offset: U64, size: U64) -> Void
+function wgpuRenderPassEncoderSetIndexBuffer(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    format: I32,
+    offset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetLabel, abi: c }
-function wgpuRenderPassEncoderSetLabel(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, label: WGPUStringView) -> Void
+function wgpuRenderPassEncoderSetLabel(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetPipeline, abi: c }
-function wgpuRenderPassEncoderSetPipeline(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, pipeline: WGPURenderPipelineImpl_ptr) -> Void
+function wgpuRenderPassEncoderSetPipeline(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    pipeline: WGPURenderPipelineImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetResourceTable, abi: c }
-function wgpuRenderPassEncoderSetResourceTable(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, table: WGPUResourceTableImpl_ptr) -> Void
+function wgpuRenderPassEncoderSetResourceTable(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    table: WGPUResourceTableImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetScissorRect, abi: c }
-function wgpuRenderPassEncoderSetScissorRect(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, x: U32, y: U32, width: U32, height: U32) -> Void
+function wgpuRenderPassEncoderSetScissorRect(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    x: U32,
+    y: U32,
+    width: U32,
+    height: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetStencilReference, abi: c }
-function wgpuRenderPassEncoderSetStencilReference(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, reference: U32) -> Void
+function wgpuRenderPassEncoderSetStencilReference(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    reference: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetVertexBuffer, abi: c }
-function wgpuRenderPassEncoderSetVertexBuffer(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, slot: U32, buffer: WGPUBufferImpl_ptr, offset: U64, size: U64) -> Void
+function wgpuRenderPassEncoderSetVertexBuffer(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    slot: U32,
+    buffer: WGPUBufferImpl_ptr,
+    offset: U64,
+    size: U64
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderSetViewport, abi: c }
-function wgpuRenderPassEncoderSetViewport(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, x: F32, y: F32, width: F32, height: F32, minDepth: F32, maxDepth: F32) -> Void
+function wgpuRenderPassEncoderSetViewport(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    x: F32,
+    y: F32,
+    width: F32,
+    height: F32,
+    minDepth: F32,
+    maxDepth: F32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPassEncoderWriteTimestamp, abi: c }
-function wgpuRenderPassEncoderWriteTimestamp(renderPassEncoder: WGPURenderPassEncoderImpl_ptr, querySet: WGPUQuerySetImpl_ptr, queryIndex: U32) -> Void
+function wgpuRenderPassEncoderWriteTimestamp(
+    renderPassEncoder: WGPURenderPassEncoderImpl_ptr,
+    querySet: WGPUQuerySetImpl_ptr,
+    queryIndex: U32
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPipelineAddRef, abi: c }
 function wgpuRenderPipelineAddRef(renderPipeline: WGPURenderPipelineImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPipelineGetBindGroupLayout, abi: c }
-function wgpuRenderPipelineGetBindGroupLayout(renderPipeline: WGPURenderPipelineImpl_ptr, groupIndex: U32) -> WGPUBindGroupLayoutImpl_ptr
+function wgpuRenderPipelineGetBindGroupLayout(
+    renderPipeline: WGPURenderPipelineImpl_ptr,
+    groupIndex: U32
+) -> WGPUBindGroupLayoutImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPipelineRelease, abi: c }
 function wgpuRenderPipelineRelease(renderPipeline: WGPURenderPipelineImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuRenderPipelineSetLabel, abi: c }
-function wgpuRenderPipelineSetLabel(renderPipeline: WGPURenderPipelineImpl_ptr, label: WGPUStringView) -> Void
+function wgpuRenderPipelineSetLabel(
+    renderPipeline: WGPURenderPipelineImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuResourceTableAddRef, abi: c }
 function wgpuResourceTableAddRef(resourceTable: WGPUResourceTableImpl_ptr) -> Void
@@ -2607,7 +3130,10 @@ function wgpuResourceTableDestroy(resourceTable: WGPUResourceTableImpl_ptr) -> V
 function wgpuResourceTableGetSize(resourceTable: WGPUResourceTableImpl_ptr) -> U32
 
 @FFI.Extern { library: dawn, symbol: wgpuResourceTableInsert, abi: c }
-function wgpuResourceTableInsert(resourceTable: WGPUResourceTableImpl_ptr, resource: WGPUBindingResource_ptr) -> U32
+function wgpuResourceTableInsert(
+    resourceTable: WGPUResourceTableImpl_ptr,
+    resource: WGPUBindingResource_ptr
+) -> U32
 
 @FFI.Extern { library: dawn, symbol: wgpuResourceTableRelease, abi: c }
 function wgpuResourceTableRelease(resourceTable: WGPUResourceTableImpl_ptr) -> Void
@@ -2616,10 +3142,17 @@ function wgpuResourceTableRelease(resourceTable: WGPUResourceTableImpl_ptr) -> V
 function wgpuResourceTableRemove(resourceTable: WGPUResourceTableImpl_ptr, slot: U32) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuResourceTableSetLabel, abi: c }
-function wgpuResourceTableSetLabel(resourceTable: WGPUResourceTableImpl_ptr, label: WGPUStringView) -> Void
+function wgpuResourceTableSetLabel(
+    resourceTable: WGPUResourceTableImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuResourceTableUpdate, abi: c }
-function wgpuResourceTableUpdate(resourceTable: WGPUResourceTableImpl_ptr, slot: U32, resource: WGPUBindingResource_ptr) -> I32
+function wgpuResourceTableUpdate(
+    resourceTable: WGPUResourceTableImpl_ptr,
+    slot: U32,
+    resource: WGPUBindingResource_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSamplerAddRef, abi: c }
 function wgpuSamplerAddRef(sampler: WGPUSamplerImpl_ptr) -> Void
@@ -2634,88 +3167,148 @@ function wgpuSamplerSetLabel(sampler: WGPUSamplerImpl_ptr, label: WGPUStringView
 function wgpuShaderModuleAddRef(shaderModule: WGPUShaderModuleImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuShaderModuleGetCompilationInfo, abi: c }
-function wgpuShaderModuleGetCompilationInfo(shaderModule: WGPUShaderModuleImpl_ptr, callbackInfo: WGPUCompilationInfoCallbackInfo) -> WGPUFuture
+function wgpuShaderModuleGetCompilationInfo(
+    shaderModule: WGPUShaderModuleImpl_ptr,
+    callbackInfo: WGPUCompilationInfoCallbackInfo
+) -> WGPUFuture
 
 @FFI.Extern { library: dawn, symbol: wgpuShaderModuleRelease, abi: c }
 function wgpuShaderModuleRelease(shaderModule: WGPUShaderModuleImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuShaderModuleSetLabel, abi: c }
-function wgpuShaderModuleSetLabel(shaderModule: WGPUShaderModuleImpl_ptr, label: WGPUStringView) -> Void
+function wgpuShaderModuleSetLabel(
+    shaderModule: WGPUShaderModuleImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryAddRef, abi: c }
 function wgpuSharedBufferMemoryAddRef(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryBeginAccess, abi: c }
-function wgpuSharedBufferMemoryBeginAccess(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr, buffer: WGPUBufferImpl_ptr, descriptor: WGPUSharedBufferMemoryBeginAccessDescriptor_ptr) -> I32
+function wgpuSharedBufferMemoryBeginAccess(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    descriptor: WGPUSharedBufferMemoryBeginAccessDescriptor_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryCreateBuffer, abi: c }
-function wgpuSharedBufferMemoryCreateBuffer(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr, descriptor: WGPUBufferDescriptor_ptr) -> WGPUBufferImpl_ptr
+function wgpuSharedBufferMemoryCreateBuffer(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr,
+    descriptor: WGPUBufferDescriptor_ptr
+) -> WGPUBufferImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryEndAccess, abi: c }
-function wgpuSharedBufferMemoryEndAccess(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr, buffer: WGPUBufferImpl_ptr, descriptor: WGPUSharedBufferMemoryEndAccessState_ptr) -> I32
+function wgpuSharedBufferMemoryEndAccess(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr,
+    buffer: WGPUBufferImpl_ptr,
+    descriptor: WGPUSharedBufferMemoryEndAccessState_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryEndAccessStateFreeMembers, abi: c }
-function wgpuSharedBufferMemoryEndAccessStateFreeMembers(sharedBufferMemoryEndAccessState: WGPUSharedBufferMemoryEndAccessState) -> Void
+function wgpuSharedBufferMemoryEndAccessStateFreeMembers(
+    sharedBufferMemoryEndAccessState: WGPUSharedBufferMemoryEndAccessState
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryGetProperties, abi: c }
-function wgpuSharedBufferMemoryGetProperties(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr, properties: WGPUSharedBufferMemoryProperties_ptr) -> I32
+function wgpuSharedBufferMemoryGetProperties(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr,
+    properties: WGPUSharedBufferMemoryProperties_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryIsDeviceLost, abi: c }
-function wgpuSharedBufferMemoryIsDeviceLost(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr) -> U32
+function wgpuSharedBufferMemoryIsDeviceLost(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr
+) -> U32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemoryRelease, abi: c }
 function wgpuSharedBufferMemoryRelease(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedBufferMemorySetLabel, abi: c }
-function wgpuSharedBufferMemorySetLabel(sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr, label: WGPUStringView) -> Void
+function wgpuSharedBufferMemorySetLabel(
+    sharedBufferMemory: WGPUSharedBufferMemoryImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedFenceAddRef, abi: c }
 function wgpuSharedFenceAddRef(sharedFence: WGPUSharedFenceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedFenceExportInfo, abi: c }
-function wgpuSharedFenceExportInfo(sharedFence: WGPUSharedFenceImpl_ptr, info: WGPUSharedFenceExportInfo_ptr) -> Void
+function wgpuSharedFenceExportInfo(
+    sharedFence: WGPUSharedFenceImpl_ptr,
+    info: WGPUSharedFenceExportInfo_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedFenceRelease, abi: c }
 function wgpuSharedFenceRelease(sharedFence: WGPUSharedFenceImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedFenceSetLabel, abi: c }
-function wgpuSharedFenceSetLabel(sharedFence: WGPUSharedFenceImpl_ptr, label: WGPUStringView) -> Void
+function wgpuSharedFenceSetLabel(
+    sharedFence: WGPUSharedFenceImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryAddRef, abi: c }
 function wgpuSharedTextureMemoryAddRef(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryBeginAccess, abi: c }
-function wgpuSharedTextureMemoryBeginAccess(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr, texture: WGPUTextureImpl_ptr, descriptor: WGPUSharedTextureMemoryBeginAccessDescriptor_ptr) -> I32
+function wgpuSharedTextureMemoryBeginAccess(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr,
+    texture: WGPUTextureImpl_ptr,
+    descriptor: WGPUSharedTextureMemoryBeginAccessDescriptor_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryCreateTexture, abi: c }
-function wgpuSharedTextureMemoryCreateTexture(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr, descriptor: WGPUTextureDescriptor_ptr) -> WGPUTextureImpl_ptr
+function wgpuSharedTextureMemoryCreateTexture(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr,
+    descriptor: WGPUTextureDescriptor_ptr
+) -> WGPUTextureImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryEndAccess, abi: c }
-function wgpuSharedTextureMemoryEndAccess(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr, texture: WGPUTextureImpl_ptr, descriptor: WGPUSharedTextureMemoryEndAccessState_ptr) -> I32
+function wgpuSharedTextureMemoryEndAccess(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr,
+    texture: WGPUTextureImpl_ptr,
+    descriptor: WGPUSharedTextureMemoryEndAccessState_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryEndAccessStateFreeMembers, abi: c }
-function wgpuSharedTextureMemoryEndAccessStateFreeMembers(sharedTextureMemoryEndAccessState: WGPUSharedTextureMemoryEndAccessState) -> Void
+function wgpuSharedTextureMemoryEndAccessStateFreeMembers(
+    sharedTextureMemoryEndAccessState: WGPUSharedTextureMemoryEndAccessState
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryGetProperties, abi: c }
-function wgpuSharedTextureMemoryGetProperties(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr, properties: WGPUSharedTextureMemoryProperties_ptr) -> I32
+function wgpuSharedTextureMemoryGetProperties(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr,
+    properties: WGPUSharedTextureMemoryProperties_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryIsDeviceLost, abi: c }
-function wgpuSharedTextureMemoryIsDeviceLost(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr) -> U32
+function wgpuSharedTextureMemoryIsDeviceLost(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr
+) -> U32
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemoryRelease, abi: c }
-function wgpuSharedTextureMemoryRelease(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr) -> Void
+function wgpuSharedTextureMemoryRelease(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSharedTextureMemorySetLabel, abi: c }
-function wgpuSharedTextureMemorySetLabel(sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr, label: WGPUStringView) -> Void
+function wgpuSharedTextureMemorySetLabel(
+    sharedTextureMemory: WGPUSharedTextureMemoryImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSupportedFeaturesFreeMembers, abi: c }
 function wgpuSupportedFeaturesFreeMembers(supportedFeatures: WGPUSupportedFeatures) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSupportedInstanceFeaturesFreeMembers, abi: c }
-function wgpuSupportedInstanceFeaturesFreeMembers(supportedInstanceFeatures: WGPUSupportedInstanceFeatures) -> Void
+function wgpuSupportedInstanceFeaturesFreeMembers(
+    supportedInstanceFeatures: WGPUSupportedInstanceFeatures
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSupportedWGSLLanguageFeaturesFreeMembers, abi: c }
-function wgpuSupportedWGSLLanguageFeaturesFreeMembers(supportedWGSLLanguageFeatures: WGPUSupportedWGSLLanguageFeatures) -> Void
+function wgpuSupportedWGSLLanguageFeaturesFreeMembers(
+    supportedWGSLLanguageFeatures: WGPUSupportedWGSLLanguageFeatures
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSurfaceAddRef, abi: c }
 function wgpuSurfaceAddRef(surface: WGPUSurfaceImpl_ptr) -> Void
@@ -2724,13 +3317,23 @@ function wgpuSurfaceAddRef(surface: WGPUSurfaceImpl_ptr) -> Void
 function wgpuSurfaceCapabilitiesFreeMembers(surfaceCapabilities: WGPUSurfaceCapabilities) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSurfaceConfigure, abi: c }
-function wgpuSurfaceConfigure(surface: WGPUSurfaceImpl_ptr, config: WGPUSurfaceConfiguration_ptr) -> Void
+function wgpuSurfaceConfigure(
+    surface: WGPUSurfaceImpl_ptr,
+    config: WGPUSurfaceConfiguration_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSurfaceGetCapabilities, abi: c }
-function wgpuSurfaceGetCapabilities(surface: WGPUSurfaceImpl_ptr, adapter: WGPUAdapterImpl_ptr, capabilities: WGPUSurfaceCapabilities_ptr) -> I32
+function wgpuSurfaceGetCapabilities(
+    surface: WGPUSurfaceImpl_ptr,
+    adapter: WGPUAdapterImpl_ptr,
+    capabilities: WGPUSurfaceCapabilities_ptr
+) -> I32
 
 @FFI.Extern { library: dawn, symbol: wgpuSurfaceGetCurrentTexture, abi: c }
-function wgpuSurfaceGetCurrentTexture(surface: WGPUSurfaceImpl_ptr, surfaceTexture: WGPUSurfaceTexture_ptr) -> Void
+function wgpuSurfaceGetCurrentTexture(
+    surface: WGPUSurfaceImpl_ptr,
+    surfaceTexture: WGPUSurfaceTexture_ptr
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuSurfacePresent, abi: c }
 function wgpuSurfacePresent(surface: WGPUSurfaceImpl_ptr) -> I32
@@ -2751,16 +3354,25 @@ function wgpuTexelBufferViewAddRef(texelBufferView: WGPUTexelBufferViewImpl_ptr)
 function wgpuTexelBufferViewRelease(texelBufferView: WGPUTexelBufferViewImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuTexelBufferViewSetLabel, abi: c }
-function wgpuTexelBufferViewSetLabel(texelBufferView: WGPUTexelBufferViewImpl_ptr, label: WGPUStringView) -> Void
+function wgpuTexelBufferViewSetLabel(
+    texelBufferView: WGPUTexelBufferViewImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuTextureAddRef, abi: c }
 function wgpuTextureAddRef(texture: WGPUTextureImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuTextureCreateErrorView, abi: c }
-function wgpuTextureCreateErrorView(texture: WGPUTextureImpl_ptr, descriptor: WGPUTextureViewDescriptor_ptr) -> WGPUTextureViewImpl_ptr
+function wgpuTextureCreateErrorView(
+    texture: WGPUTextureImpl_ptr,
+    descriptor: WGPUTextureViewDescriptor_ptr
+) -> WGPUTextureViewImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuTextureCreateView, abi: c }
-function wgpuTextureCreateView(texture: WGPUTextureImpl_ptr, descriptor: WGPUTextureViewDescriptor_ptr) -> WGPUTextureViewImpl_ptr
+function wgpuTextureCreateView(
+    texture: WGPUTextureImpl_ptr,
+    descriptor: WGPUTextureViewDescriptor_ptr
+) -> WGPUTextureViewImpl_ptr
 
 @FFI.Extern { library: dawn, symbol: wgpuTextureDestroy, abi: c }
 function wgpuTextureDestroy(texture: WGPUTextureImpl_ptr) -> Void
@@ -2808,7 +3420,10 @@ function wgpuTextureViewAddRef(textureView: WGPUTextureViewImpl_ptr) -> Void
 function wgpuTextureViewRelease(textureView: WGPUTextureViewImpl_ptr) -> Void
 
 @FFI.Extern { library: dawn, symbol: wgpuTextureViewSetLabel, abi: c }
-function wgpuTextureViewSetLabel(textureView: WGPUTextureViewImpl_ptr, label: WGPUStringView) -> Void
+function wgpuTextureViewSetLabel(
+    textureView: WGPUTextureViewImpl_ptr,
+    label: WGPUStringView
+) -> Void
 
 let WGPUAdapterType_CPU: Int = 3
 

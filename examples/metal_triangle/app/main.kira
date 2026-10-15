@@ -7,146 +7,100 @@ import Foundation
 // drawable; the backend reads the center pixel back so the run proves the triangle
 // rasterized (center = triangle color, not the clear color).
 
-struct TriangleState {
-    var shader: EMGraphicsShader
+// What the frame draws with, made once at init.
+struct TriangleResources {
     var pipeline: RenderPipeline
-    var vertices: EMGraphicsBuffer
+    var vertices: GraphicsBuffer
 }
 
-function triangleVertices() -> [F32] {
-    return [
-        0.0, 0.7,
-        0.7, -0.7,
-        -0.7, -0.7
-    ]
+// None until init has made the resources, and None for good when it could not:
+// a frame then clears and draws nothing.
+struct TriangleState {
+    var resources: TriangleResources? = .None
+}
+
+namespace Triangle {
+    let vertexCount: UN32 = 3
+    // Two floats a vertex.
+    let stride: UN32 = 8
+}
+
+function triangleVertices() -> [Number] {
+    return [0.0, 0.7, 0.7, -0.7, -0.7, -0.7]
 }
 
 function triangleSource() -> String {
     return "#include <metal_stdlib>\nusing namespace metal;\nstruct VOut { float4 pos [[position]]; };\nvertex VOut v_main(uint vid [[vertex_id]], constant float2* verts [[buffer(0)]]) { VOut o; o.pos = float4(verts[vid], 0.0, 1.0); return o; }\nfragment float4 f_main() { return float4(1.0, 0.4, 0.1, 1.0); }\n"
 }
 
-function triangleLayout() -> VertexLayout {
-    return VertexLayout {
-        stride: 8
-        attributes: [
-            VertexAttribute {
-                name: "position"
-                location: 0
-                format: VertexFormat.Float2
-                offset: 0
-            }
-        ]
+function trianglePipeline(shader: GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "metal-triangle-pipeline",
+        shader: shader,
+        vertexLayout: VertexLayout {
+            stride: Triangle.stride,
+            attributes: [VertexAttribute { name: "position", format: .Float2 }]
+        },
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
     }
 }
 
-function trianglePass() -> RenderPassDescriptor {
-    return RenderPassDescriptor {
-        label: "metal-triangle-pass"
-        colorAttachments: [
-            ColorAttachment {
-                target: swapchainRenderTarget()
-                loadAction: LoadAction.Clear
-                storeAction: StoreAction.Store
-                clearColor: Color {
-                    r: 0.05
-                    g: 0.05
-                    b: 0.10
-                    a: 1.0
-                }
-                resolveTarget: emptyRenderTarget()
-                hasResolveTarget: false
-            }
-        ]
-        primaryColorAttachment: ColorAttachment {
-            target: swapchainRenderTarget()
-            loadAction: LoadAction.Clear
-            storeAction: StoreAction.Store
-            clearColor: Color {
-                r: 0.05
-                g: 0.05
-                b: 0.10
-                a: 1.0
-            }
-            resolveTarget: emptyRenderTarget()
-            hasResolveTarget: false
-        }
-        hasPrimaryColorAttachment: true
-        depthAttachment: emptyDepthAttachment()
-        hasDepthAttachment: false
-        stencilAttachment: emptyStencilAttachment()
-        hasStencilAttachment: false
+function triangleResources(
+    graphics: borrow Graphics
+) -> Result<TriangleResources, ResourceFailure> {
+    let shader = match graphics.createShader(
+        ShaderDescriptor { label: "metal-triangle-shader", vertexSource: triangleSource() }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
     }
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "metal-triangle-vertices", data: triangleVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(trianglePipeline(move shader)) {
+        Ok(pipeline) -> .Ok(TriangleResources { pipeline: pipeline, vertices: vertices })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function triangleInit(graphics: Graphics) {
+    var state = nativeRecover<TriangleState>(graphics.userData)
+    match triangleResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the triangle", move failure)
+    }
+}
+
+function triangleFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<TriangleState>(frame.userData)
+    let encoder = frame.beginRenderPass(
+        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.05, b: 0.10 })
+    )
+    match state.resources {
+        Some(resources) -> {
+            encoder.setPipeline(resources.pipeline)
+            encoder.setVertexBuffer(resources.vertices)
+            encoder.draw(Triangle.vertexCount)
+        }
+        None -> {}
+    }
+    frame.endPass()
 }
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Metal Triangle"
-        width: 480
-        height: 480
-        sampleCount: 1
-        backend: RenderBackendKind.Metal
+    var app = GraphicsApplication {
+        title: "Ember Metal Triangle",
+        width: 480,
+        height: 480,
+        sampleCount: 1,
+        backend: .Metal,
+        initHandler: triangleInit,
+        frameHandler: triangleFrame
     }
-    let state = nativeState(TriangleState {
-        shader: emptyGraphicsShader()
-        pipeline: emptyRenderPipeline()
-        vertices: emptyGraphicsBuffer()
-    })
-
-    app.onInit { graphics in
-        var triangleState = nativeRecover<TriangleState>(graphics.userData)
-        triangleState.shader = shaderOrReport(graphics.createShader(ShaderDescriptor {
-            label: "metal-triangle-shader"
-            vertexSource: triangleSource()
-            fragmentSource: ""
-            vertexPath: ""
-            fragmentPath: ""
-        }), "shader")
-        triangleState.vertices = bufferOrReport(graphics.createBuffer(BufferDescriptor {
-            label: "metal-triangle-vertices"
-            usage: BufferUsage.Vertex
-            data: triangleVertices()
-        }), "vertices")
-        triangleState.pipeline = pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
-            label: "metal-triangle-pipeline"
-            shader: triangleState.shader
-            vertexLayout: triangleLayout()
-            colorTargets: [
-                ColorTargetDescriptor {
-                    format: TextureFormat.Swapchain
-                    blend: BlendState {
-                        enabled: false
-                        preset: BlendPreset.Replace
-                    }
-                }
-            ]
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: false
-                depthWriteEnabled: false
-                depthCompare: CompareFunction.Always
-                format: TextureFormat.None
-            }
-            rasterization: RasterizationDescriptor {
-                cullMode: CullMode.None
-                frontFace: FrontFace.CounterClockwise
-            }
-            primitive: PrimitiveDescriptor {
-                topology: PrimitiveTopology.TriangleList
-            }
-        }), "pipeline")
-        return
-    }
-
-    app.onFrame { frame in
-        var triangleState = nativeRecover<TriangleState>(frame.userData)
-        let encoder = frame.beginRenderPass(trianglePass())
-        encoder.setPipeline(triangleState.pipeline)
-        encoder.setVertexBuffer(triangleState.vertices)
-        encoder.draw(3)
-        frame.endPass()
-        return
-    }
-
-    app.run(nativeUserData(state))
-    return
+    app.run(nativeUserData(nativeState(TriangleState())))
 }

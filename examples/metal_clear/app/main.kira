@@ -1,5 +1,6 @@
 import Ember
 import Foundation
+import Heap
 
 // Offscreen Metal clear through the real Ember public API.
 // Selects the from-scratch Metal backend (CAMetalLayer-class path, no Sokol);
@@ -7,26 +8,18 @@ import Foundation
 // real Kira-owned Metal rendering headlessly.
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Metal Clear"
-        width: 64
-        height: 64
-        sampleCount: 1
-        backend: RenderBackendKind.Metal
+    var app = GraphicsApplication {
+        title: "Ember Metal Clear" width: 64 height: 64 sampleCount: 1 backend: .Metal
     }
 
-    app.onFrame { frame in
-        frame.pass(Color {
-            r: 0.08
-            g: 0.12
-            b: 0.16
-            a: 1.0
-        }) { encoder in
+    app.onFrame {
+        frame in
+        frame.pass(RGBAColor { r: 0.08 g: 0.12 b: 0.16 a: 1.0 }) {
+            encoder in
             return
         }
         return
     }
 
     app.run(nullPointer())
-    return
 }

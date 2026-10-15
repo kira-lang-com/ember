@@ -1,15 +1,16 @@
 import Foundation
+import Heap
 // The Dawn backend's per-run state, and how a device and a surface come to
 // exist.
 //
-// `DawnState` sits on `EMGraphicsAppRuntimeState`, which is the blob the run loop,
+// `DawnState` sits on `GraphicsRuntimeState`, which is the blob the run loop,
 // a frame and a draw all already recover — the same place the Sokol backend's
 // pass state and lifetime peaks live. Every member of `DawnRenderBackend` is
 // handed that blob as its `context` and reads its state out of here.
 //
 // # The object table
 //
-// Kira's public handles are `U32` ids (`EMGraphicsBuffer.id`, `EMGraphicsTexture
+// Kira's public handles are `U32` ids (`GraphicsBuffer.id`, `GraphicsTexture
 // .viewId`, `RenderPipeline.drawPipelineId`, …) and WebGPU's are pointers, so
 // something has to map between them. One flat table does it for every kind: a
 // WebGPU handle is a WebGPU handle, an id is its slot plus one, and zero stays
@@ -18,7 +19,7 @@ import Foundation
 // table without bound.
 //
 // A texture's slot also remembers its WebGPU format. That is the one fact about
-// a texture that Kira's `EMGraphicsTexture` does not carry and that both a view
+// a texture that Kira's `GraphicsTexture` does not carry and that both a view
 // and a pipeline's color target need.
 
 public struct DawnState {
@@ -34,10 +35,7 @@ public struct DawnState {
     // Whether a frame is being recorded right now. Read by the window
     // procedure, which Windows may call from inside one.
     var inFrame: Bool = false
-    var focused: Bool = true
-    var pointerX: Float = 0.0
-    var pointerY: Float = 0.0
-    var hasPointer: Bool = false
+    var input: WindowInput = WindowInput()
     // The Wayland seat's pointer, once the seat has said it has one. Null on
     // Windows, and null on a seat with no mouse behind it. See
     // `DawnWaylandInput.kira`.
@@ -49,22 +47,25 @@ public struct DawnState {
     var pointerEnterSerial: U32 = 0
     var cursorShape: U32 = 0
     var pointerResizeEdge: U32 = 0
-    var pointerSurfaceOffsetX: Float = 0.0
-    var pointerSurfaceOffsetY: Float = 0.0
+    var pointerSurfaceOffsetX: Number = 0
+    var pointerSurfaceOffsetY: Number = 0
     // Reflected from xdg_toplevel.configure, rather than guessed from the last
     // request: the compositor owns whether a maximize request is accepted.
     var maximized: Bool = false
 
     // --- the device ------------------------------------------------------
     var instance: RawPtr
+    // Which trace areas this backend prints. Read from the environment as the
+    // state is built, so a trace site needs no second parameter.
+    var tracing: TraceGates = traceGatesFromEnvironment()
     var adapter: RawPtr
     var device: RawPtr
     var queue: RawPtr
     var surface: RawPtr
     var adapterResolved: Bool = false
     var surfaceFormat: I32 = 0
-    var surfaceWidth: Int = 0
-    var surfaceHeight: Int = 0
+    var surfaceWidth: UNumber = 0
+    var surfaceHeight: UNumber = 0
 
     // --- resources -------------------------------------------------------
     var objects: [RawPtr] = []
@@ -73,7 +74,7 @@ public struct DawnState {
     // its WebGPU handle: a dynamic buffer's CPU block. Freed with the slot, so
     // the block does not outlive the buffer whose writes it staged.
     var objectExtra: [RawPtr] = []
-    // Shaders keep a table of their own: a `EMGraphicsShader` is one id and a
+    // Shaders keep a table of their own: a `GraphicsShader` is one id and a
     // WebGPU graphics shader is two modules and two entry names. See
     // `DawnShader.kira`.
     var shaders: [DawnShaderRecord] = []
@@ -82,12 +83,12 @@ public struct DawnState {
     // group per `@group(n)` and a Kira encoder carries four slots of one group.
     var pipelineBindings: [DawnPipelineBindings] = []
     var mergedGroups: [DawnMergedBindGroup] = []
-    var nextGroupIdentity: Int = 0
+    var nextGroupIdentity: UNumber = 0
     // Slots a destroy gave back, and how many of them are live. An array grows
     // and reads but never shrinks, so the count is what says where the stack of
     // free slots ends; the entries past it are the ones already handed out.
-    var freeSlots: [Int] = []
-    var freeCount: Int = 0
+    var freeSlots: [Number] = []
+    var freeCount: UNumber = 0
 
     // --- the frame in progress -------------------------------------------
     var frameTexture: RawPtr
@@ -95,8 +96,8 @@ public struct DawnState {
     var encoder: RawPtr
     var passEncoder: RawPtr
     var passActive: Bool = false
-    var passWidth: Int = 0
-    var passHeight: Int = 0
+    var passWidth: UN32 = 0
+    var passHeight: UN32 = 0
     // The color format the open pass writes, so a pipeline built with the
     // `Swapchain` sentinel resolves to what this pass actually has.
     var passFormat: I32 = 0
@@ -105,12 +106,9 @@ public struct DawnState {
     // The managed depth-stencil target, sized to whichever pass last asked for
     // depth without naming a texture. WebGPU has no implicit depth buffer, so a
     // swapchain pass that wants one gets this.
-    var depthTextureId: U32 = 0
-    var depthViewId: U32 = 0
-    var depthWidth: Int = 0
-    var depthHeight: Int = 0
+    var managedDepth: DawnManagedDepth? = .None
     // The two-word extent uniform the separable blur reads, kept for the run.
-    var blurExtentBufferId: U32 = 0
+    var blurExtentBufferId: U32? = .None
 
     // --- a buffer readback in progress -----------------------------------
     // `wgpuBufferMapAsync` answers through a callback, and the one caller that
@@ -124,8 +122,8 @@ public struct DawnState {
     // The GPU's own clock, read while the frame is presented rather than by
     // stopping it (see `DawnTimestamps.kira`).
     var clock: DawnGpuClock = DawnGpuClock {}
-    var allocatedBytes: U64 = 0
-    var resourceCount: Int = 0
+    var allocatedBytes: UNumber = 0
+    var resourceCount: UNumber = 0
 }
 
 // A state with nothing in it, for the run loop to fill.
@@ -156,7 +154,7 @@ public function dawnEmptyState() -> DawnState {
     }
 }
 
-// Every site below writes `nativeRecover<EMGraphicsAppRuntimeState>(context)` out
+// Every site below writes `nativeRecover<GraphicsRuntimeState>(context)` out
 // in full rather than reaching it through a helper, and that is load-bearing: a
 // helper *returns* the state, which copies it out of the native storage, and a
 // write to the copy lands nowhere. The failure is silent — an id is handed back,
@@ -167,10 +165,10 @@ public function dawnEmptyState() -> DawnState {
 // Every member that touches the device asks this first, so a call made outside
 // a run answers with a diagnostic rather than a null dereference.
 public function dawnHasDevice(context: RawPtr) -> Bool {
-    if pointerIsNull(context) {
+    if isNull(context) {
         return false
     }
-    return !pointerIsNull(nativeRecover<EMGraphicsAppRuntimeState>(context).dawn.device)
+    return !isNull(nativeRecover<GraphicsRuntimeState>(context).dawn.device)
 }
 
 // --- the object table ----------------------------------------------------
@@ -178,8 +176,12 @@ public function dawnHasDevice(context: RawPtr) -> Bool {
 // Records a WebGPU handle and answers the id Kira will carry it as. A null
 // handle is id 0, which is what every `*Result` lifter in this repo reads as
 // "the device refused it".
-public function dawnRegisterObject(state: borrow mut EMGraphicsAppRuntimeState, object: RawPtr, format: I32) -> U32 {
-    if pointerIsNull(object) {
+public function dawnRegisterObject(
+    state: borrow mut GraphicsRuntimeState,
+    object: RawPtr,
+    format: I32
+) -> U32 {
+    if isNull(object) {
         return U32(0)
     }
     state.dawn.resourceCount = state.dawn.resourceCount + 1
@@ -198,40 +200,38 @@ public function dawnRegisterObject(state: borrow mut EMGraphicsAppRuntimeState, 
 }
 
 // Gives a slot the CPU block that belongs to it, and takes it back.
-public function dawnAttachExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32, extra: RawPtr) {
-    let slot = Int(id) - 1
+public function dawnAttachExtra(state: borrow mut GraphicsRuntimeState, id: U32, extra: RawPtr) {
+    let slot = Number(id) - 1
     if slot < 0 || slot >= state.dawn.objectExtra.count {
         return
     }
     state.dawn.objectExtra[slot] = extra
-    return
 }
 
-public function dawnFreeExtra(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
-    let slot = Int(id) - 1
+public function dawnFreeExtra(state: borrow mut GraphicsRuntimeState, id: U32) {
+    let slot = Number(id) - 1
     if slot < 0 || slot >= state.dawn.objectExtra.count {
         return
     }
-    if pointerIsNull(state.dawn.objectExtra[slot]) {
+    if isNull(state.dawn.objectExtra[slot]) {
         return
     }
-    freeBytes(state.dawn.objectExtra[slot])
+    deallocate(state.dawn.objectExtra[slot])
     state.dawn.objectExtra[slot] = nullPointer()
-    return
 }
 
-public function dawnObject(state: borrow EMGraphicsAppRuntimeState, id: U32) -> RawPtr {
-    let slot = Int(id) - 1
+public function dawnObject(state: borrow GraphicsRuntimeState, id: U32) -> RawPtr {
+    let slot = Number(id) - 1
     if slot < 0 || slot >= state.dawn.objects.count {
         return nullPointer()
     }
     return state.dawn.objects[slot]
 }
 
-public function dawnObjectFormat(state: borrow EMGraphicsAppRuntimeState, id: U32) -> I32 {
-    let slot = Int(id) - 1
+public function dawnObjectFormat(state: borrow GraphicsRuntimeState, id: U32) -> I32 {
+    let slot = Number(id) - 1
     if slot < 0 || slot >= state.dawn.objectFormats.count {
-        return dawnFormatUndefined()
+        return DawnVocabulary.formatUndefined
     }
     return state.dawn.objectFormats[slot]
 }
@@ -239,16 +239,16 @@ public function dawnObjectFormat(state: borrow EMGraphicsAppRuntimeState, id: U3
 // Forgets a slot, so the id stops naming anything and the slot is reused. The
 // WebGPU handle itself is released by the caller, which is the side that knows
 // which `wgpu*Release` the object answers to.
-public function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id: U32) {
-    let slot = Int(id) - 1
+public function dawnForgetObject(state: borrow mut GraphicsRuntimeState, id: U32) {
+    let slot = Number(id) - 1
     if slot < 0 || slot >= state.dawn.objects.count {
         return
     }
-    if pointerIsNull(state.dawn.objects[slot]) {
+    if isNull(state.dawn.objects[slot]) {
         return
     }
     state.dawn.objects[slot] = nullPointer()
-    state.dawn.objectFormats[slot] = dawnFormatUndefined()
+    state.dawn.objectFormats[slot] = DawnVocabulary.formatUndefined
     if state.dawn.freeCount < state.dawn.freeSlots.count {
         state.dawn.freeSlots[state.dawn.freeCount] = slot
     } else {
@@ -256,7 +256,6 @@ public function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id
     }
     state.dawn.freeCount = state.dawn.freeCount + 1
     state.dawn.resourceCount = state.dawn.resourceCount - 1
-    return
 }
 
 // --- bring-up ------------------------------------------------------------
@@ -269,7 +268,7 @@ public function dawnForgetObject(state: borrow mut EMGraphicsAppRuntimeState, id
 // account of why a shader, a pipeline or a bind group was refused, so reading
 // them is not optional.
 public function dawnViewText(view: WGPUStringViewPointer) -> String {
-    return textFromBytes(pointerAt(view, U64(0)), Int(view.length))
+    return stringFromCBytes(heapLoad<RawPtr>(view, 0), Int(view.length))
 }
 
 // Dawn's answer to `wgpuInstanceRequestAdapter`.
@@ -277,23 +276,53 @@ public function dawnViewText(view: WGPUStringViewPointer) -> String {
 // Runs inside `wgpuInstanceProcessEvents`, which is what
 // `dawnCallbackOnProcessEvents` asked for: the spin below is the only place this
 // backend re-enters Kira from Dawn, and it happens before a frame exists.
-public function dawnAdapterReady(status: I32, adapter: WGPUAdapterImpl_ptr, message: WGPUStringViewPointer, userdata1: RawPtr, userdata2: RawPtr) -> Void {
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(userdata1)
+public function dawnAdapterReady(
+    status: I32,
+    adapter: WGPUAdapterImpl_ptr,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
     state.dawn.adapterResolved = true
-    if status != dawnRequestAdapterSucceeded() {
-        graphicsFail(.Device, "refused an adapter — " + dawnViewText(message))
+    if status != DawnVocabulary.requestAdapterSucceeded {
+        log fault("refused an adapter", view: dawnViewText(message))
         return
     }
     state.dawn.adapter = adapter
-    return
+}
+
+// The descriptor and its two callback blocks, as the value
+// `wgpuAdapterCreateDevice` takes a pointer to.
+//
+// Every field but the feature list is fixed, which is why it is a function
+// rather than a constant: the list is a parameter, so the block cannot be.
+public function dawnDeviceDescriptor(features: borrow[I32]) -> WGPUDeviceDescriptor {
+    return WGPUDeviceDescriptor {
+        label: dawnText("ember-device"),
+        requiredFeatureCount: U64(features.count),
+        requiredFeatures: features,
+        deviceLostCallbackInfo: WGPUDeviceLostCallbackInfo {
+            mode: DawnVocabulary.callbackOnProcessEvents,
+            callback: dawnDeviceLost
+        },
+        uncapturedErrorCallbackInfo: WGPUUncapturedErrorCallbackInfo {
+            callback: dawnUncapturedError
+        }
+    }
 }
 
 // A device Dawn lost after it was created — a removed GPU, a driver reset, a
 // TDR. Nothing can be recorded on the runtime state from here: the callback
 // carries no user data this backend can trust past shutdown, so it reports.
-public function dawnDeviceLost(device: RawPtr, reason: I32, message: WGPUStringViewPointer, userdata1: RawPtr, userdata2: RawPtr) -> Void {
-    graphicsFail(.Device, "the Dawn device was lost — " + dawnViewText(message))
-    return
+public function dawnDeviceLost(
+    device: WGPUDeviceImpl_ptr_ptr,
+    reason: I32,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    log fault("the Dawn device was lost", view: dawnViewText(message))
 }
 
 // Every validation failure Dawn does not hand back through a return value.
@@ -303,111 +332,143 @@ public function dawnDeviceLost(device: RawPtr, reason: I32, message: WGPUStringV
 // not match its layout still encodes; a pipeline whose color format differs
 // from the pass's is refused at the draw. All three arrive here and nowhere
 // else.
-public function dawnUncapturedError(device: RawPtr, kind: I32, message: WGPUStringViewPointer, userdata1: RawPtr, userdata2: RawPtr) -> Void {
-    graphicsFail(.Device, "reported a " + dawnErrorText(kind) + " error — " + dawnViewText(message))
-    return
+public function dawnUncapturedError(
+    device: WGPUDeviceImpl_ptr_ptr,
+    kind: I32,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    log fault(
+        "the Dawn device reported an error",
+        error: dawnErrorText(kind),
+        view: dawnViewText(message)
+    )
+}
+
+// Why Dawn could not bring a device up.
+public enum DawnSetupFailure {
+    NoInstance
+    AdapterNeverAnswered
+    NoAdapter
+    DeviceRefused
+    NoQueue
+    NoSurface
+    SurfaceRefused
+}
+
+namespace DawnSetup {
+    // How many times the instance's events are processed while waiting for
+    // the adapter. An adapter request that never completes is a driver that
+    // will never answer, and the run ends with a failure instead of hanging
+    // before it draws anything.
+    let adapterPolls: UNumber = 100000
 }
 
 // Creates the instance, drives the adapter request to completion, and creates
-// the device synchronously. Answers whether a device exists afterwards.
-public function dawnCreateDeviceAndQueue(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) -> Bool {
+// the device and its queue.
+public function dawnCreateDeviceAndQueue(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) -> Result<Void, DawnSetupFailure> {
     state.dawn.instance = wgpuCreateInstance(WGPUInstanceDescriptor {})
-    if pointerIsNull(state.dawn.instance) {
-        graphicsFail(.Device, "could not create a WebGPU instance")
-        return false
+    if isNull(state.dawn.instance) {
+        return .Error(.NoInstance)
     }
+    return match dawnRequestAdapter(state, runtimeUserData) {
+        Ok -> dawnCreateDevice(state)
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function dawnRequestAdapter(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) -> Result<Void, DawnSetupFailure> {
     state.dawn.adapterResolved = false
-    wgpuInstanceRequestAdapter(state.dawn.instance, WGPURequestAdapterOptions {
-        featureLevel: dawnFeatureLevelCore(),
-        powerPreference: dawnPowerPreferenceHighPerformance()
-    }, WGPURequestAdapterCallbackInfo {
-        mode: dawnCallbackOnProcessEvents(),
-        callback: dawnAdapterReady,
-        userdata1: runtimeUserData
-    })
-    // Bounded rather than open: an adapter request that never completes is a
-    // driver that will never answer, and spinning on it forever would hang the
-    // program before it drew anything, with nothing on the log.
-    var spins = 0
-    while !state.dawn.adapterResolved && spins < 100000 {
-        wgpuInstanceProcessEvents(state.dawn.instance)
-        spins = spins + 1
+    if state.tracing.device {
+        log debug("Ember asking Dawn for an adapter", instance: state.dawn.instance)
     }
-    if pointerIsNull(state.dawn.adapter) {
-        graphicsFail(.Device, "found no adapter for this machine")
-        return false
-    }
-    // A device gets the optional features it asked for and no others, so timing
-    // a frame is a decision taken here: the adapter is asked whether it can, and
-    // the feature is requested where it can. A machine whose adapter cannot
-    // leaves `hasGpuSeconds` false rather than reporting a zero.
-    state.dawn.clock.supported = dawnAdapterTimesFrames(state.dawn.adapter)
-    // Sharing a texture with another process is the same kind of decision: the
-    // adapter is asked whether it can, and the feature is requested where it
-    // can. A machine whose adapter cannot leaves every shared surface invalid,
-    // and a compositor copies pixels instead of failing to start.
-    let sharesTextures = dawnAdapterSharesTextures(state.dawn.adapter)
-    var features: [I32] = []
-    if state.dawn.clock.supported {
-        features.append(dawnFeatureTimestampQuery())
-    }
-    if sharesTextures {
-        // Prefer the Vulkan opaque-fd path when the adapter exposes it. Venus
-        // supports this exact feature pair end to end; requesting the
-        // dma-buf import feature alongside it makes Dawn reject the imported
-        // SharedTextureMemory before a texture can be created.
-        if wgpuAdapterHasFeature(state.dawn.adapter, dawnFeatureSharedTextureMemoryOpaqueFD()) != U32(0) {
-            features.append(dawnFeatureSharedTextureMemoryOpaqueFD())
-        } else if wgpuAdapterHasFeature(state.dawn.adapter, dawnFeatureSharedTextureMemoryDmaBuf()) != U32(0) {
-            features.append(dawnFeatureSharedTextureMemoryDmaBuf())
-        }
-        let sharedFence = dawnAdapterFenceFeature(state.dawn.adapter)
-        if sharedFence != I32(0) {
-            features.append(sharedFence)
-        }
-    }
-    state.dawn.device = dawnCreateDevice(state.dawn.adapter, DawnDeviceDescriptor {
-        label: dawnText("ember-device"),
-        requiredFeatureCount: U64(features.count),
-        requiredFeatures: features,
-        deviceLostCallbackInfo: DawnDeviceLostCallbackInfo {
-            mode: dawnCallbackOnProcessEvents(),
-            callback: dawnDeviceLost
+    wgpuInstanceRequestAdapter(
+        state.dawn.instance,
+        WGPURequestAdapterOptions {
+            featureLevel: DawnVocabulary.featureLevelCore,
+            powerPreference: DawnVocabulary.powerPreferenceHighPerformance
         },
-        uncapturedErrorCallbackInfo: DawnUncapturedErrorCallbackInfo {
-            callback: dawnUncapturedError
+        WGPURequestAdapterCallbackInfo {
+            mode: DawnVocabulary.callbackOnProcessEvents,
+            callback: dawnAdapterReady,
+            userdata1: runtimeUserData
         }
-    })
-    if pointerIsNull(state.dawn.device) {
-        graphicsFail(.Device, "refused a device on the adapter it chose")
-        return false
+    )
+    for _ in 0..DawnSetup.adapterPolls {
+        if state.dawn.adapterResolved { break }
+        wgpuInstanceProcessEvents(state.dawn.instance)
+    }
+    if !state.dawn.adapterResolved {
+        return .Error(.AdapterNeverAnswered)
+    }
+    if isNull(state.dawn.adapter) {
+        return .Error(.NoAdapter)
+    }
+    if state.tracing.device {
+        log debug("Ember chose an adapter", adapter: state.dawn.adapter)
+    }
+    return .Ok
+}
+
+// The features a device asks for: timestamp queries where the adapter can
+// time its own frames, so a frame's GPU cost can be reported.
+function dawnDeviceFeatures(state: borrow mut GraphicsRuntimeState) -> [I32] {
+    state.dawn.clock.supported = dawnAdapterTimesFrames(state.dawn.adapter)
+    if !state.dawn.clock.supported {
+        log warn("this adapter cannot time its own frames, so GPU frame time will not be reported")
+        return []
+    }
+    return [DawnTimestamps.featureTimestampQuery]
+}
+
+function dawnCreateDevice(
+    state: borrow mut GraphicsRuntimeState
+) -> Result<Void, DawnSetupFailure> {
+    let features = dawnDeviceFeatures(state)
+    if state.tracing.device {
+        log debug("Ember requested device features", requested: features.count)
+    }
+    state.dawn.device = wgpuAdapterCreateDevice(
+        WGPUAdapterImpl_ptr(state.dawn.adapter),
+        dawnDeviceDescriptor(features)
+    )
+    if isNull(state.dawn.device) {
+        return .Error(.DeviceRefused)
+    }
+    if state.tracing.device {
+        log debug("Ember created a device", device: state.dawn.device)
     }
     dawnReadGpuTimesKnob(state)
-    // The format the `Swapchain` sentinel resolves to, settled with the DEVICE
-    // rather than with a surface.
-    //
-    // BGRA8 is what every Windows swapchain presents and what Dawn's D3D12
-    // backend reports first in its capabilities, so naming it keeps a pipeline's
-    // `Swapchain` color target and the surface in agreement without a query per
-    // pipeline. Settling it here rather than in `dawnCreateWindowSurface` is what
-    // makes the sentinel mean anything to a device that has NO surface: a
-    // headless device resolved it to Undefined, which Dawn rejects a color
-    // target for -- so every offscreen pipeline it built was invalid, and every
-    // draw into a shared texture was dropped at validation with the texture left
-    // holding whatever it held.
-    state.dawn.surfaceFormat = dawnFormatBgra8Unorm()
+    // The format a `Swapchain` color target resolves to is settled with the
+    // device, not a surface, so a headless device's offscreen pipelines name a
+    // format Dawn accepts. BGRA8 is what every Windows swapchain presents and
+    // what Dawn's D3D12 backend reports first.
+    state.dawn.surfaceFormat = DawnVocabulary.formatBgra8Unorm
     state.dawn.queue = wgpuDeviceGetQueue(state.dawn.device)
-    return !pointerIsNull(state.dawn.queue)
+    if isNull(state.dawn.queue) {
+        return .Error(.NoQueue)
+    }
+    return .Ok
 }
 
 // Creates the surface for the window this run opened, chaining the HWND source
 // onto the descriptor.
-public function dawnCreateSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
+public function dawnCreateSurface(
+    state: borrow mut GraphicsRuntimeState,
+    width: Int,
+    height: Int
+) -> Result<Void, DawnSetupFailure> {
     let window = dawnWindowFor(dawnPlatformForHost())
     state.dawn.surface = window.createSurface(state.dawn.instance, state.dawn.window)
-    if pointerIsNull(state.dawn.surface) {
-        graphicsFail(.Device, "could not create a surface for the window")
-        return false
+    if isNull(state.dawn.surface) {
+        return .Error(.NoSurface)
     }
     // A window that measures itself is asked; one that does not is told. Win32
     // answers a client rectangle the moment the window exists, and its answer
@@ -421,13 +482,20 @@ public function dawnCreateSurface(state: borrow mut EMGraphicsAppRuntimeState, w
         configuredWidth = width
         configuredHeight = height
     }
-    return dawnConfigureSurface(state, configuredWidth, configuredHeight)
+    if !dawnConfigureSurface(state, configuredWidth, configuredHeight) {
+        return .Error(.SurfaceRefused)
+    }
+    return .Ok
 }
 
 // Sizes the surface to the window's client area. Called at startup and again
 // whenever the client area changes, because a surface configured for one size
 // answers `Outdated` for every texture after it.
-public function dawnConfigureSurface(state: borrow mut EMGraphicsAppRuntimeState, width: Int, height: Int) -> Bool {
+public function dawnConfigureSurface(
+    state: borrow mut GraphicsRuntimeState,
+    width: Int,
+    height: Int
+) -> Bool {
     // A window that does not measure itself reports nothing, which means
     // "unchanged" rather than "failed". Win32 answers a client rectangle
     // whenever it is asked; a Wayland surface is told its size by a configure
@@ -439,64 +507,72 @@ public function dawnConfigureSurface(state: borrow mut EMGraphicsAppRuntimeState
     if state.dawn.surfaceWidth == width && state.dawn.surfaceHeight == height {
         return true
     }
-    wgpuSurfaceConfigure(state.dawn.surface, WGPUSurfaceConfiguration {
-        device: state.dawn.device,
-        format: state.dawn.surfaceFormat,
-        // `CopySrc` beside the attachment bit, so a presented frame can be read
-        // back into a capture. That readback is what proves a frame contains
-        // anything; every other signal a run can emit is equally true of a
-        // frame that came out blank.
-        usage: dawnTextureUsageRenderAttachment() | dawnTextureUsageCopySource(),
-        width: U32(width),
-        height: U32(height),
-        alphaMode: dawnCompositeAlphaAuto(),
-        presentMode: dawnPresentModeFromEnvironment()
-    })
+    wgpuSurfaceConfigure(
+        state.dawn.surface,
+        WGPUSurfaceConfiguration {
+            device: state.dawn.device,
+            format: state.dawn.surfaceFormat,
+            // `CopySrc` beside the attachment bit, so a presented frame can be read
+            // back into a capture. That readback is what proves a frame contains
+            // anything; every other signal a run can emit is equally true of a
+            // frame that came out blank.
+            usage: DawnVocabulary.textureUsageRenderAttachment | DawnVocabulary.textureUsageCopySource,
+            width: U32(width),
+            height: U32(height),
+            alphaMode: DawnVocabulary.compositeAlphaAuto,
+            presentMode: dawnPresentModeFromEnvironment()
+        }
+    )
     state.dawn.surfaceWidth = width
     state.dawn.surfaceHeight = height
     return true
 }
 
-// Releases everything the run created, in the order WebGPU's ownership implies:
-// the resources a device made, then the surface, the device, the adapter and the
-// instance.
-public function dawnShutdown(state: borrow mut EMGraphicsAppRuntimeState) {
+// The device and everything it made, then the adapter and the instance, in the
+// order WebGPU's ownership implies.
+function dawnReleaseDevice(state: borrow mut GraphicsRuntimeState) {
     for slot in 0..state.dawn.objects.count {
         state.dawn.objects[slot] = nullPointer()
     }
     state.dawn.freeCount = 0
     state.dawn.mergedGroups = []
     state.dawn.pipelineBindings = []
-    if !pointerIsNull(state.dawn.surface) {
+    if !isNull(state.dawn.surface) {
         wgpuSurfaceUnconfigure(state.dawn.surface)
         wgpuSurfaceRelease(state.dawn.surface)
         state.dawn.surface = nullPointer()
     }
-    if !pointerIsNull(state.dawn.queue) {
+    if !isNull(state.dawn.queue) {
         wgpuQueueRelease(state.dawn.queue)
         state.dawn.queue = nullPointer()
     }
-    if !pointerIsNull(state.dawn.device) {
+    if !isNull(state.dawn.device) {
         wgpuDeviceRelease(state.dawn.device)
         state.dawn.device = nullPointer()
     }
-    if !pointerIsNull(state.dawn.adapter) {
+    if !isNull(state.dawn.adapter) {
         wgpuAdapterRelease(state.dawn.adapter)
         state.dawn.adapter = nullPointer()
     }
-    if !pointerIsNull(state.dawn.instance) {
+    if !isNull(state.dawn.instance) {
         wgpuInstanceRelease(state.dawn.instance)
         state.dawn.instance = nullPointer()
     }
-    if !pointerIsNull(state.dawn.messageBlock) {
-        freeBytes(state.dawn.messageBlock)
+}
+
+// Releases everything the run created: the device side first, then the blocks
+// the loop reads into, then the window.
+public function dawnShutdown(state: borrow mut GraphicsRuntimeState) {
+    dawnReleaseDevice(state)
+    if !isNull(state.dawn.messageBlock) {
+        deallocate(state.dawn.messageBlock)
         state.dawn.messageBlock = nullPointer()
     }
-    if !pointerIsNull(state.dawn.surfaceTextureBlock) {
-        freeBytes(state.dawn.surfaceTextureBlock)
+    if !isNull(state.dawn.surfaceTextureBlock) {
+        deallocate(state.dawn.surfaceTextureBlock)
         state.dawn.surfaceTextureBlock = nullPointer()
     }
-    if !pointerIsNull(state.dawn.window) {
+    if !isNull(state.dawn.window) {
         // Through the window family, like every other question the backend asks
         // a window. Calling `DestroyWindow` here directly was a Win32 call on
         // the teardown path of every platform: on a free desktop that pointer is
@@ -506,5 +582,4 @@ public function dawnShutdown(state: borrow mut EMGraphicsAppRuntimeState) {
         dawnWindowFor(dawnPlatformForHost()).close(state.dawn.window)
         state.dawn.window = nullPointer()
     }
-    return
 }

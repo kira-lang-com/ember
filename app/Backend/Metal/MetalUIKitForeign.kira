@@ -1,7 +1,6 @@
 comptime macro metalUsesUIKit {
     kind { function }
     expand(input: Syntax) -> Syntax {
-        let _ = input
         if Build.platform() == "ios" { return quote { true } }
         return quote { false }
     }
@@ -17,25 +16,55 @@ public @FFI.Callback { abi: c, params: [RawPtr, RawPtr, RawPtr, RawPtr], result:
 struct MetalUIKitTouchCallback {}
 
 public @FFI.Extern { library: kira_metal, symbol: class_addMethod, abi: c }
-function metalUIKitAddLaunchMethod(cls: RawPtr, name: RawPtr, callback: MetalUIKitLaunchCallback, types: CString) -> Bool
+function metalUIKitAddLaunchMethod(
+    cls: RawPtr,
+    name: RawPtr,
+    callback: MetalUIKitLaunchCallback,
+    types: CString
+) -> Bool
 
 public @FFI.Extern { library: kira_metal, symbol: class_addMethod, abi: c }
-function metalUIKitAddTouchMethod(cls: RawPtr, name: RawPtr, callback: MetalUIKitTouchCallback, types: CString) -> Bool
+function metalUIKitAddTouchMethod(
+    cls: RawPtr,
+    name: RawPtr,
+    callback: MetalUIKitTouchCallback,
+    types: CString
+) -> Bool
 
 public @FFI.Extern { library: kira_metal, symbol: objc_msgSend, abi: c }
-function metalMsgSend(object: RawPtr, selector: RawPtr, x: Float, y: Float, width: Float, height: Float) -> RawPtr
+function metalMsgSend(
+    object: RawPtr,
+    selector: RawPtr,
+    x: Float,
+    y: Float,
+    width: Float,
+    height: Float
+) -> RawPtr
 
 public @FFI.Extern { library: kira_metal, symbol: objc_msgSend, abi: c }
 function metalMsgSend(object: RawPtr, selector: RawPtr, view: RawPtr) -> MetalNSPoint
 
 public @FFI.Extern { library: kira_metal, symbol: objc_msgSend, abi: c }
-function metalMsgSend(object: RawPtr, selector: RawPtr, interval: Float, target: RawPtr, action: RawPtr, userInfo: RawPtr, repeats: Bool) -> RawPtr
+function metalMsgSend(
+    object: RawPtr,
+    selector: RawPtr,
+    interval: Float,
+    target: RawPtr,
+    action: RawPtr,
+    userInfo: RawPtr,
+    repeats: Bool
+) -> RawPtr
 
 public @FFI.Callback { abi: c, params: [RawPtr, RawPtr, RawPtr, RawPtr, RawPtr], result: Void }
 struct MetalUIKitSceneCallback {}
 
 public @FFI.Extern { library: kira_metal, symbol: class_addMethod, abi: c }
-function metalUIKitAddSceneMethod(cls: RawPtr, name: RawPtr, callback: MetalUIKitSceneCallback, types: CString) -> Bool
+function metalUIKitAddSceneMethod(
+    cls: RawPtr,
+    name: RawPtr,
+    callback: MetalUIKitSceneCallback,
+    types: CString
+) -> Bool
 
 public @FFI.Extern { library: kira_metal, symbol: objc_getProtocol, abi: c }
 function metalUIKitGetProtocol(name: CString) -> RawPtr

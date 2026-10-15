@@ -4,27 +4,27 @@
 // Dawn and Vulkan split the two — an image holds the pixels, and a view is what a bind
 // group, a UI draw and a pass attachment each take — so the ids it mints travel
 // here with the image rather than in a table keyed on it. A caller passes a
-// `EMGraphicsTexture` and never learns which of the two shapes it has.
-public struct EMGraphicsTexture {
-    var id: U32 = 0
+// `GraphicsTexture` and never learns which of the two shapes it has.
+public struct GraphicsTexture {
+    var id: TextureId = NoTextureId
     // The view a shader samples through, for a texture whose usage is sampled.
-    var viewId: U32 = 0
+    var viewId: ViewId = NoViewId
     // The view a pass writes color through, for a render target.
-    var colorViewId: U32 = 0
+    var colorViewId: ViewId = NoViewId
     // The view a pass writes depth and stencil through.
-    var depthViewId: U32 = 0
+    var depthViewId: ViewId = NoViewId
     // The view a compute kernel writes through, for a texture whose usage asks
     // for a storage image. Distinct from `colorViewId`: an image binding and a
     // color attachment are different view kinds even over the same pixels.
-    var storageViewId: U32 = 0
+    var storageViewId: ViewId = NoViewId
     // The extent the pixels cover, and how many samples each holds.
     //
     // Carried rather than asked for: a pass sized to this target, and a managed
     // depth buffer matched to it, both need the numbers, and the side that
     // created the texture is the side that knows them.
-    var width: Int = 0
-    var height: Int = 0
-    var sampleCount: Int = 1
+    var width: UN32 = 0
+    var height: UN32 = 0
+    var sampleCount: UN8 = 1
 }
 
 // A texture value that binds through `viewId`.
@@ -37,15 +37,10 @@ public struct EMGraphicsTexture {
 // Binding is all it is for. Uploading to a texture needs the image id, and
 // attaching a pass to one needs the attachment views; neither can be recovered
 // from a sampled view.
-public function sampledTextureFromViewId(viewId: U32) -> EMGraphicsTexture {
-    return EMGraphicsTexture {
-        id: viewId,
-        viewId: viewId
-    }
+public function sampledTextureFromViewId(viewId: ViewId) -> GraphicsTexture {
+    return GraphicsTexture { id: TextureId(viewId.raw), viewId: viewId }
 }
 
-public function emptyGraphicsTexture() -> EMGraphicsTexture {
-    return EMGraphicsTexture {
-        id: 0
-    }
+public function emptyGraphicsTexture() -> GraphicsTexture {
+    return GraphicsTexture { id: NoTextureId }
 }

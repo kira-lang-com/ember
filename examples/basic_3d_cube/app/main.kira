@@ -1,424 +1,355 @@
 import Ember
 import Foundation
 
-struct CubeState {
-    var shader: EMGraphicsShader
-    var pipeline: RenderPipeline
-    var edgePipeline: RenderPipeline
-    var vertices: EMGraphicsBuffer
-    var edges: EMGraphicsBuffer
-    var sceneUniform: EMUniform
-    var objectUniform: EMUniform
-    var edgeUniform: EMUniform
-    var sceneBindGroup: BindGroup
-    var objectBindGroup: BindGroup
-    var edgeBindGroup: BindGroup
-    var indexCount: Int
-    var edgeVertexCount: Int
+// A lit cube with its edges drawn over it: one shader, two pipelines (faces and
+// lines), and the scene and object uniforms each pipeline binds.
+
+namespace Cube {
+    let faceVertexCount: UN32 = 36
+    let edgeVertexCount: UN32 = 24
+    // A float3 position then a float3 normal, six floats a vertex.
+    let stride: UN32 = 24
+    let normalOffset: UN32 = 12
+    let windowWidth: UN32 = 640
+    let windowHeight: UN32 = 480
+    let fovYRadians: Number = 0.7853982
+    let ambient: Number = 0.25
+    let pitchRadians: Number = 0.52
+    let yawRadians: Number = 0.72
+    let scale: Number = 0.86
 }
 
-function cubeVertices() -> [F32] {
-    return [
-        -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-
-        1.0, -1.0, -1.0, 0.0, 0.0, -1.0,
-        -1.0, -1.0, -1.0, 0.0, 0.0, -1.0,
-        -1.0, 1.0, -1.0, 0.0, 0.0, -1.0,
-        1.0, -1.0, -1.0, 0.0, 0.0, -1.0,
-        -1.0, 1.0, -1.0, 0.0, 0.0, -1.0,
-        1.0, 1.0, -1.0, 0.0, 0.0, -1.0,
-
-        -1.0, -1.0, -1.0, -1.0, 0.0, 0.0,
-        -1.0, -1.0, 1.0, -1.0, 0.0, 0.0,
-        -1.0, 1.0, 1.0, -1.0, 0.0, 0.0,
-        -1.0, -1.0, -1.0, -1.0, 0.0, 0.0,
-        -1.0, 1.0, 1.0, -1.0, 0.0, 0.0,
-        -1.0, 1.0, -1.0, -1.0, 0.0, 0.0,
-
-        1.0, -1.0, 1.0, 1.0, 0.0, 0.0,
-        1.0, -1.0, -1.0, 1.0, 0.0, 0.0,
-        1.0, 1.0, -1.0, 1.0, 0.0, 0.0,
-        1.0, -1.0, 1.0, 1.0, 0.0, 0.0,
-        1.0, 1.0, -1.0, 1.0, 0.0, 0.0,
-        1.0, 1.0, 1.0, 1.0, 0.0, 0.0,
-
-        -1.0, 1.0, 1.0, 0.0, 1.0, 0.0,
-        1.0, 1.0, 1.0, 0.0, 1.0, 0.0,
-        1.0, 1.0, -1.0, 0.0, 1.0, 0.0,
-        -1.0, 1.0, 1.0, 0.0, 1.0, 0.0,
-        1.0, 1.0, -1.0, 0.0, 1.0, 0.0,
-        -1.0, 1.0, -1.0, 0.0, 1.0, 0.0,
-
-        -1.0, -1.0, -1.0, 0.0, -1.0, 0.0,
-        1.0, -1.0, -1.0, 0.0, -1.0, 0.0,
-        1.0, -1.0, 1.0, 0.0, -1.0, 0.0,
-        -1.0, -1.0, -1.0, 0.0, -1.0, 0.0,
-        1.0, -1.0, 1.0, 0.0, -1.0, 0.0,
-        -1.0, -1.0, 1.0, 0.0, -1.0, 0.0
-    ]
+function cubeVertices() -> [Number] {
+    return [-1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, -1.0, -1.0, 1.0, -1.0, 0.0, 0.0, -1.0, 1.0, -1.0, -1.0, 0.0, 0.0, -1.0, -1.0, 1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 1.0, -1.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, -1.0, -1.0, 1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 1.0, -1.0, 0.0, 0.0, -1.0, -1.0, -1.0, -1.0, 0.0, 0.0, -1.0, 1.0, 1.0, -1.0, 0.0, 0.0, -1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, -1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, 1.0, 0.0, 1.0, 0.0, 1.0, 1.0, -1.0, 0.0, 1.0, 0.0, -1.0, 1.0, -1.0, 0.0, 1.0, 0.0, -1.0, -1.0, -1.0, 0.0, -1.0, 0.0, 1.0, -1.0, -1.0, 0.0, -1.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 0.0, -1.0, -1.0, -1.0, 0.0, -1.0, 0.0, 1.0, -1.0, 1.0, 0.0, -1.0, 0.0, -1.0, -1.0, 1.0, 0.0, -1.0, 0.0]
 }
 
-function cubeIndices() -> [U32] {
-    return [
-        0, 1, 2,
-        0, 2, 3,
-
-        4, 5, 6,
-        4, 6, 7,
-
-        8, 9, 10,
-        8, 10, 11,
-
-        12, 13, 14,
-        12, 14, 15,
-
-        16, 17, 18,
-        16, 18, 19,
-
-        20, 21, 22,
-        20, 22, 23
-    ]
+function cubeIndices() -> [UN32] {
+    return [0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7, 8, 9, 10, 8, 10, 11, 12, 13, 14, 12, 14, 15, 16, 17, 18, 16, 18, 19, 20, 21, 22, 20, 22, 23]
 }
 
-function cubeEdgeVertices() -> [F32] {
-    return [
-        -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-
-        -1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, -1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, -1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, -1.0, 0.0, 0.0, 1.0,
-        -1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-
-        -1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, -1.0, -1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        1.0, 1.0, -1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, 1.0, 0.0, 0.0, 1.0,
-        -1.0, 1.0, -1.0, 0.0, 0.0, 1.0
-    ]
+function cubeEdgeVertices() -> [Number] {
+    return [-1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, -1.0, -1.0, 1.0, 0.0, 0.0, 1.0, -1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, -1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, -1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, -1.0, 0.0, 0.0, 1.0]
 }
 
 function cubeVertexLayout() -> VertexLayout {
     return VertexLayout {
-        stride: 24
-        attributes: [
-            VertexAttribute {
-                name: "position"
-                location: 0
-                format: VertexFormat.Float3
-                offset: 0
-            },
-            VertexAttribute {
-                name: "normal"
-                location: 1
-                format: VertexFormat.Float3
-                offset: 12
-            }
-        ]
+        stride: Cube.stride,
+        attributes: [VertexAttribute { name: "position", format: .Float3 }, VertexAttribute {
+            name: "normal",
+            location: 1,
+            format: .Float3,
+            offset: Cube.normalOffset
+        }]
     }
 }
 
-function cubeCamera(width: Float, height: Float) -> PerspectiveCamera {
-    let aspect = width / height
+function cubeCamera(width: Number, height: Number) -> PerspectiveCamera {
     return PerspectiveCamera {
-        position: Vec3 { x: 0.0 y: 0.0 z: 5.0 }
-        target: Vec3 { x: 0.0 y: 0.0 z: 0.0 }
-        up: Vec3 { x: 0.0 y: 1.0 z: 0.0 }
-        fovYRadians: 0.7853982
-        aspect: aspect
-        nearPlane: 0.1
+        position: Vec3 { z: 5.0 },
+        target: Vec3(),
+        up: Vec3 { y: 1.0 },
+        fovYRadians: Cube.fovYRadians,
+        aspect: width / height,
+        nearPlane: 0.1,
         farPlane: 100.0
     }
 }
 
 function cubeLight() -> DirectionalLight {
     return DirectionalLight {
-        direction: Vec3 { x: -0.35 y: -0.70 z: -0.55 }
-        color: Vec3 { x: 1.0 y: 0.96 z: 0.88 }
+        direction: Vec3 { x: -0.35, y: -0.70, z: -0.55 },
+        color: Vec3 { x: 1.0, y: 0.96, z: 0.88 },
         intensity: 0.85
     }
 }
 
 function cubeModelMatrix() -> Mat4 {
-    return mat4RotateY(0.72).multiply(
-        mat4RotateX(0.52).multiply(mat4Scale(Vec3 { x: 0.86 y: 0.86 z: 0.86 }))
+    let scale = Vec3 { x: Cube.scale, y: Cube.scale, z: Cube.scale }
+    return mat4RotateY(Cube.yawRadians).multiply(
+        mat4RotateX(Cube.pitchRadians).multiply(mat4Scale(scale))
     )
 }
 
-function cubeSceneUniformData(width: Float, height: Float) -> [F32] {
-    return sceneUniformData(sceneUniforms(cubeCamera(width, height), cubeLight(), 0.25))
+function cubeSceneUniformData(width: Number, height: Number) -> [Number] {
+    return sceneUniformData(sceneUniforms(cubeCamera(width, height), cubeLight(), Cube.ambient))
 }
 
-function cubeObjectUniformData() -> [F32] {
-    return objectUniformData(objectUniforms(
-        cubeModelMatrix(),
-        Vec4 { x: 0.42 y: 0.62 z: 0.95 w: 1.0 }
-    ))
+function cubeObjectUniformData() -> [Number] {
+    return objectUniformData(
+        objectUniforms(cubeModelMatrix(), Vec4 { x: 0.42, y: 0.62, z: 0.95, w: 1.0 })
+    )
 }
 
-function cubeEdgeUniformData() -> [F32] {
-    return objectUniformData(objectUniforms(
-        cubeModelMatrix(),
-        Vec4 { x: 1.0 y: 1.0 z: 1.0 w: 1.0 }
-    ))
+function cubeEdgeUniformData() -> [Number] {
+    return objectUniformData(
+        objectUniforms(cubeModelMatrix(), Vec4 { x: 1.0, y: 1.0, z: 1.0, w: 1.0 })
+    )
 }
 
 function cubeRenderPass() -> RenderPassDescriptor {
-    return RenderPassDescriptor {
-        label: "basic-3d-cube-pass"
+    var pass = clearSwapchainRenderPass(RGBAColor { r: 1.0, g: 1.0, b: 1.0 })
+    pass.label = "basic-3d-cube-pass"
+    pass.depthAttachment = swapchainDepthAttachment()
+    pass.hasDepthAttachment = true
+    return pass
+}
 
-        colorAttachments: [
-            ColorAttachment {
-                target: swapchainRenderTarget()
-                loadAction: LoadAction.Clear
-                storeAction: StoreAction.Store
-                clearColor: Color {
-                    r: 1.0
-                    g: 1.0
-                    b: 1.0
-                    a: 1.0
-                }
-                resolveTarget: emptyRenderTarget()
-                hasResolveTarget: false
-            }
-        ]
-
-        primaryColorAttachment: ColorAttachment {
-            target: swapchainRenderTarget()
-            loadAction: LoadAction.Clear
-            storeAction: StoreAction.Store
-            clearColor: Color {
-                r: 1.0
-                g: 1.0
-                b: 1.0
-                a: 1.0
-            }
-            resolveTarget: emptyRenderTarget()
-            hasResolveTarget: false
+// The faces' pipeline; the edges' differs only in its topology and in leaving
+// depth unwritten, so the lines sit on the faces without hiding each other.
+function cubeFacePipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "basic-3d-cube-pipeline",
+        shader: copy shader,
+        vertexLayout: cubeVertexLayout(),
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor {
+            depthEnabled: true,
+            depthWriteEnabled: true,
+            depthCompare: .LessEqual,
+            format: .Depth24Stencil8
         }
+    }
+}
 
-        hasPrimaryColorAttachment: true
+function cubeEdgePipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    var pipeline = cubeFacePipeline(shader)
+    pipeline.label = "basic-3d-cube-edge-pipeline"
+    pipeline.depthStencil.depthWriteEnabled = false
+    pipeline.primitive = PrimitiveDescriptor { topology: .LineList }
+    return pipeline
+}
 
-        depthAttachment: swapchainDepthAttachment()
-        hasDepthAttachment: true
+// A uniform and the bind group that binds it at one slot.
+struct CubeBinding {
+    var uniform: GraphicsUniform
+    var bindGroup: BindGroup
+}
 
-        stencilAttachment: emptyStencilAttachment()
-        hasStencilAttachment: false
+// What a binding is made from.
+struct CubeBindingSpec {
+    var label: String = ""
+    var slot: UN32 = 0
+    var floatCount: UN32 = 0
+    var data: [Number] = []
+}
+
+function cubeBinding(
+    graphics: borrow Graphics,
+    spec: borrow CubeBindingSpec
+) -> Result<CubeBinding, ResourceFailure> {
+    let uniform = match graphics.createUniform(
+        UniformDescriptor {
+            label: spec.label,
+            expectedFloatCount: spec.floatCount,
+            data: spec.data
+        }
+    ) {
+        Ok(uniform) -> uniform
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createUniformBindGroup(spec.label + "-bindings", spec.slot, uniform) {
+        Ok(bindGroup) -> .Ok(CubeBinding { uniform: uniform, bindGroup: bindGroup })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+// The scene's uniform, and one object uniform for the faces and one for the
+// edges: the two draws share a model matrix but not a color.
+struct CubeBindings {
+    var scene: CubeBinding
+    var object: CubeBinding
+    var edge: CubeBinding
+}
+
+function cubeBindings(graphics: borrow Graphics) -> Result<CubeBindings, ResourceFailure> {
+    let scene = match cubeBinding(
+        graphics,
+        CubeBindingSpec {
+            label: "SceneUniforms",
+            slot: UniformSlot.scene,
+            floatCount: sceneUniformFloatCount(),
+            data: cubeSceneUniformData(Cube.windowWidth, Cube.windowHeight)
+        }
+    ) {
+        Ok(binding) -> binding
+        Error(failure) -> return .Error(failure)
+    }
+    let object = match cubeBinding(
+        graphics,
+        CubeBindingSpec {
+            label: "ObjectUniforms",
+            slot: UniformSlot.object,
+            floatCount: objectUniformFloatCount(),
+            data: cubeObjectUniformData()
+        }
+    ) {
+        Ok(binding) -> binding
+        Error(failure) -> return .Error(failure)
+    }
+    return match cubeBinding(
+        graphics,
+        CubeBindingSpec {
+            label: "EdgeUniforms",
+            slot: UniformSlot.object,
+            floatCount: objectUniformFloatCount(),
+            data: cubeEdgeUniformData()
+        }
+    ) {
+        Ok(edge) -> .Ok(CubeBindings { scene: scene, object: object, edge: edge })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+// The shader, the two pipelines built from it, and the two meshes they draw.
+struct CubeGeometry {
+    var shader: GraphicsShader
+    var facePipeline: RenderPipeline
+    var edgePipeline: RenderPipeline
+    var faces: GraphicsBuffer
+    var edges: GraphicsBuffer
+}
+
+function cubeGeometry(graphics: borrow Graphics) -> Result<CubeGeometry, ResourceFailure> {
+    let shader = match graphics.createShader(
+        ShaderDescriptor {
+            label: "basic-3d-cube-shader",
+            vertexPath: "generated/shaders/BasicCube.vert.glsl",
+            fragmentPath: "generated/shaders/BasicCube.frag.glsl"
+        }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let faces = match graphics.createBuffer(
+        BufferDescriptor { label: "basic-3d-cube-vertices", data: cubeVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    let edges = match graphics.createBuffer(
+        BufferDescriptor { label: "basic-3d-cube-edges", data: cubeEdgeVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    let facePipeline = match graphics.createRenderPipeline(cubeFacePipeline(shader)) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(cubeEdgePipeline(shader)) {
+        Ok(edgePipeline) -> .Ok(
+            CubeGeometry {
+                shader: shader,
+                facePipeline: facePipeline,
+                edgePipeline: edgePipeline,
+                faces: faces,
+                edges: edges
+            }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+struct CubeResources {
+    var geometry: CubeGeometry
+    var bindings: CubeBindings
+}
+
+// None until init has made the resources, and None for good when it could not:
+// a frame then clears and draws nothing.
+struct CubeState {
+    var resources: CubeResources? = .None
+}
+
+function cubeResources(graphics: borrow Graphics) -> Result<CubeResources, ResourceFailure> {
+    let geometry = match cubeGeometry(graphics) {
+        Ok(geometry) -> geometry
+        Error(failure) -> return .Error(failure)
+    }
+    return match cubeBindings(graphics) {
+        Ok(bindings) -> .Ok(CubeResources { geometry: geometry, bindings: bindings })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function cubeInit(graphics: Graphics) {
+    var state = nativeRecover<CubeState>(graphics.userData)
+    match cubeResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the cube", move failure)
+    }
+}
+
+function cubeDraw(
+    frame: borrow RenderFrame,
+    encoder: borrow RenderEncoder,
+    resources: borrow CubeResources
+) {
+    setUniformValues(
+        resources.bindings.scene.uniform,
+        cubeSceneUniformData(frame.drawableWidth(), frame.drawableHeight())
+    )
+    setUniformValues(resources.bindings.object.uniform, cubeObjectUniformData())
+    encoder.setPipeline(resources.geometry.facePipeline)
+    encoder.setVertexBuffer(resources.geometry.faces)
+    encoder.setBindGroup(0, resources.bindings.scene.bindGroup)
+    encoder.setBindGroup(1, resources.bindings.object.bindGroup)
+    encoder.draw(Cube.faceVertexCount)
+    encoder.setPipeline(resources.geometry.edgePipeline)
+    encoder.setVertexBuffer(resources.geometry.edges)
+    encoder.setBindGroup(0, resources.bindings.scene.bindGroup)
+    encoder.setBindGroup(1, resources.bindings.edge.bindGroup)
+    encoder.draw(Cube.edgeVertexCount)
+}
+
+function cubeFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<CubeState>(frame.userData)
+    let encoder = frame.beginRenderPass(cubeRenderPass())
+    match state.resources {
+        Some(resources) -> cubeDraw(frame, encoder, resources)
+        None -> {}
+    }
+    frame.endPass()
+}
+
+function cubeDestroyBindings(graphics: borrow Graphics, bindings: borrow CubeBindings) {
+    graphics.destroyBindGroup(bindings.object.bindGroup)
+    graphics.destroyBindGroup(bindings.edge.bindGroup)
+    graphics.destroyBindGroup(bindings.scene.bindGroup)
+    graphics.destroyUniform(bindings.edge.uniform)
+    graphics.destroyUniform(bindings.object.uniform)
+    graphics.destroyUniform(bindings.scene.uniform)
+}
+
+function cubeDestroyGeometry(graphics: borrow Graphics, geometry: borrow CubeGeometry) {
+    graphics.destroyBuffer(geometry.edges)
+    graphics.destroyBuffer(geometry.faces)
+    graphics.destroyRenderPipeline(geometry.edgePipeline)
+    graphics.destroyRenderPipeline(geometry.facePipeline)
+    graphics.destroyShader(copy geometry.shader)
+}
+
+function cubeCleanup(graphics: Graphics) {
+    let state = nativeRecover<CubeState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            cubeDestroyBindings(graphics, resources.bindings)
+            cubeDestroyGeometry(graphics, resources.geometry)
+        }
+        None -> {}
     }
 }
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Basic 3D Cube"
-        width: 640
-        height: 480
-        sampleCount: 1
+    var app = GraphicsApplication {
+        title: "Ember Basic 3D Cube",
+        width: Cube.windowWidth,
+        height: Cube.windowHeight,
+        sampleCount: 1,
+        initHandler: cubeInit,
+        frameHandler: cubeFrame,
+        cleanupHandler: cubeCleanup
     }
-
-    let state = nativeState(CubeState {
-        shader: emptyGraphicsShader()
-        pipeline: emptyRenderPipeline()
-        edgePipeline: emptyRenderPipeline()
-        vertices: emptyGraphicsBuffer()
-        edges: emptyGraphicsBuffer()
-        sceneUniform: emptyUniform()
-        objectUniform: emptyUniform()
-        edgeUniform: emptyUniform()
-        sceneBindGroup: emptyBindGroup()
-        objectBindGroup: emptyBindGroup()
-        edgeBindGroup: emptyBindGroup()
-        indexCount: 0
-        edgeVertexCount: 0
-    })
-
-    app.onInit { graphics in
-        var cubeState = nativeRecover<CubeState>(graphics.userData)
-
-        cubeState.shader = shaderOrReport(graphics.createShader(ShaderDescriptor {
-            label: "basic-3d-cube-shader"
-            vertexSource: ""
-            fragmentSource: ""
-            vertexPath: "generated/shaders/BasicCube.vert.glsl"
-            fragmentPath: "generated/shaders/BasicCube.frag.glsl"
-        }), "shader")
-
-        cubeState.vertices = bufferOrReport(graphics.createBuffer(BufferDescriptor {
-            label: "basic-3d-cube-vertices"
-            usage: BufferUsage.Vertex
-            data: cubeVertices()
-        }), "vertices")
-
-        cubeState.edges = bufferOrReport(graphics.createBuffer(BufferDescriptor {
-            label: "basic-3d-cube-edges"
-            usage: BufferUsage.Vertex
-            data: cubeEdgeVertices()
-        }), "edges")
-
-        cubeState.sceneUniform = uniformOrReport(graphics.createUniform(UniformDescriptor {
-            label: "SceneUniforms"
-            expectedFloatCount: sceneUniformFloatCount()
-            data: cubeSceneUniformData(640.0, 480.0)
-        }), "scene uniform")
-
-        cubeState.objectUniform = uniformOrReport(graphics.createUniform(UniformDescriptor {
-            label: "ObjectUniforms"
-            expectedFloatCount: objectUniformFloatCount()
-            data: cubeObjectUniformData()
-        }), "object uniform")
-
-        cubeState.edgeUniform = uniformOrReport(graphics.createUniform(UniformDescriptor {
-            label: "EdgeUniforms"
-            expectedFloatCount: objectUniformFloatCount()
-            data: cubeEdgeUniformData()
-        }), "edge uniform")
-
-        cubeState.sceneBindGroup = bindGroupOrReport(graphics.createUniformBindGroup(
-            "basic-3d-cube-scene-bindings",
-            uniformSlotScene(),
-            cubeState.sceneUniform
-        ), "scene bind group")
-
-        cubeState.objectBindGroup = bindGroupOrReport(graphics.createUniformBindGroup(
-            "basic-3d-cube-object-bindings",
-            uniformSlotObject(),
-            cubeState.objectUniform
-        ), "object bind group")
-
-        cubeState.edgeBindGroup = bindGroupOrReport(graphics.createUniformBindGroup(
-            "basic-3d-cube-edge-bindings",
-            uniformSlotObject(),
-            cubeState.edgeUniform
-        ), "edge bind group")
-
-        cubeState.pipeline = pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
-            label: "basic-3d-cube-pipeline"
-            shader: cubeState.shader
-            vertexLayout: cubeVertexLayout()
-
-            colorTargets: [
-                ColorTargetDescriptor {
-                    format: TextureFormat.Swapchain
-                    blend: BlendState {
-                        enabled: false
-                        preset: BlendPreset.Replace
-                    }
-                }
-            ]
-
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: true
-                depthWriteEnabled: true
-                depthCompare: CompareFunction.LessEqual
-                format: TextureFormat.Depth24Stencil8
-            }
-
-            rasterization: RasterizationDescriptor {
-                cullMode: CullMode.None
-                frontFace: FrontFace.CounterClockwise
-            }
-
-            primitive: PrimitiveDescriptor {
-                topology: PrimitiveTopology.TriangleList
-            }
-        }), "pipeline")
-
-        cubeState.edgePipeline = pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
-            label: "basic-3d-cube-edge-pipeline"
-            shader: cubeState.shader
-            vertexLayout: cubeVertexLayout()
-
-            colorTargets: [
-                ColorTargetDescriptor {
-                    format: TextureFormat.Swapchain
-                    blend: BlendState {
-                        enabled: false
-                        preset: BlendPreset.Replace
-                    }
-                }
-            ]
-
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: true
-                depthWriteEnabled: false
-                depthCompare: CompareFunction.LessEqual
-                format: TextureFormat.Depth24Stencil8
-            }
-
-            rasterization: RasterizationDescriptor {
-                cullMode: CullMode.None
-                frontFace: FrontFace.CounterClockwise
-            }
-
-            primitive: PrimitiveDescriptor {
-                topology: PrimitiveTopology.LineList
-            }
-        }), "edge pipeline")
-
-        cubeState.indexCount = 36
-        cubeState.edgeVertexCount = 24
-        return
-    }
-
-    app.onFrame { frame in
-        var cubeState = nativeRecover<CubeState>(frame.userData)
-
-        let pass = cubeRenderPass()
-        let encoder = frame.beginRenderPass(pass)
-        setUniformValues(cubeState.sceneUniform, cubeSceneUniformData(Float(frame.drawableWidth()), Float(frame.drawableHeight())))
-        setUniformValues(cubeState.objectUniform, cubeObjectUniformData())
-        encoder.setPipeline(cubeState.pipeline)
-        encoder.setVertexBuffer(cubeState.vertices)
-        encoder.setBindGroup(0, cubeState.sceneBindGroup)
-        encoder.setBindGroup(1, cubeState.objectBindGroup)
-        encoder.draw(cubeState.indexCount)
-
-        encoder.setPipeline(cubeState.edgePipeline)
-        encoder.setVertexBuffer(cubeState.edges)
-        encoder.setBindGroup(0, cubeState.sceneBindGroup)
-        encoder.setBindGroup(1, cubeState.edgeBindGroup)
-        encoder.draw(cubeState.edgeVertexCount)
-        frame.endPass()
-
-        return
-    }
-
-    app.onCleanup { graphics in
-        var cubeState = nativeRecover<CubeState>(graphics.userData)
-
-        graphics.destroyBindGroup(cubeState.objectBindGroup)
-        graphics.destroyBindGroup(cubeState.edgeBindGroup)
-        graphics.destroyBindGroup(cubeState.sceneBindGroup)
-        graphics.destroyUniform(cubeState.edgeUniform)
-        graphics.destroyUniform(cubeState.objectUniform)
-        graphics.destroyUniform(cubeState.sceneUniform)
-        graphics.destroyBuffer(cubeState.edges)
-        graphics.destroyBuffer(cubeState.vertices)
-        graphics.destroyRenderPipeline(cubeState.edgePipeline)
-        graphics.destroyRenderPipeline(cubeState.pipeline)
-        graphics.destroyShader(cubeState.shader)
-
-        return
-    }
-
-    app.run(nativeUserData(state))
-    return
+    app.run(nativeUserData(nativeState(CubeState())))
 }

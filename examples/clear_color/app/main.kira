@@ -1,22 +1,17 @@
 import Ember
 import Foundation
+import Heap
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Clear Color"
-        width: 640
-        height: 480
-        sampleCount: 1
+    var app = GraphicsApplication {
+        title: "Ember Clear Color" width: 640 height: 480 sampleCount: 1
     }
 
-    app.onFrame { frame in
-        frame.pass(Color {
-            r: 0.08
-            g: 0.12
-            b: 0.16
-            a: 1.0
-        }) { encoder in
+    app.onFrame {
+        frame in
+        frame.pass(RGBAColor { r: 0.08 g: 0.12 b: 0.16 a: 1.0 }) {
+            encoder in
             return
         }
         frame.requestQuit()
@@ -24,5 +19,4 @@ function main() {
     }
 
     app.run(nullPointer())
-    return
 }

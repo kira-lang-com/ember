@@ -1,4 +1,5 @@
 import Foundation
+import Heap
 // The Dawn backend's run loop: open a window, bring a device up against it, and
 // drive frames until the program or the user asks to stop.
 //
@@ -9,92 +10,101 @@ import Foundation
 // runtime state is in hand, because a `WNDPROC` is handed no user pointer to
 // reach it through (see `DawnWindow.kira`).
 
-public function dawnRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) -> Void {
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
-    state.dawn = dawnEmptyState()
-    readHarnessKnobs(state)
-    dawnReadGpuTraceKnob(state)
-    // System-DPI awareness before the window exists: a process that declares it
-    // later has already been told a scaled size for a window it has not opened,
-    // and the client area it then measures is the virtualized one.
-    //
-    // Declared only for an application that asked for a full-resolution
-    // framebuffer, which is what `highDpi` asks for. Without it Windows renders
-    // the process at 96 DPI and upscales, every DPI query answers 96, and the
-    // window is sized in the logical pixels the application meant — the same
-    // split sokol-app makes for the same flag.
-    //
-    // Windows only: it is a Win32 call about a Win32 notion. A Wayland surface
-    // is told its scale by the output it appears on and has nothing to declare
-    // in advance.
-    if app.highDpi && hostPlatform() == .Windows {
-        markProcessDpiAware()
-    }
+// Why a Dawn run never reached its first frame.
+public enum DawnStartFailure {
+    Window(WindowFailure)
+    Setup(DawnSetupFailure)
+}
+
+// The window, the device and the surface, brought up in that order and wired to
+// the run state.
+function dawnStartRun(
+    state: borrow mut GraphicsRuntimeState,
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+) -> Result<Void, DawnStartFailure> {
     // Which window this is depends on the platform, and nothing below this line
     // knows which one it got.
-    let window = dawnWindowFor(dawnPlatformForHost())
-    state.dawn.window = window.open(
-        app.title,
-        app.width,
-        app.height,
-        app.windowMode,
-        app.transparent,
-        app.opacity,
+    state.dawn.window = match dawnWindowFor(dawnPlatformForHost()).open(app.windowRequest()) {
+        Ok(opened) -> opened
+        Error(failure) -> return .Error(.Window(failure))
+    }
+    state.dawn.messageBlock = allocateZeroed(
+        memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
     )
-    if pointerIsNull(state.dawn.window) {
-        // The window said why: registering a class, connecting to a display,
-        // binding a compositor. Repeating it here would name Windows on a host
-        // that is not one.
-        return
+    state.dawn.surfaceTextureBlock = allocateZeroed(
+        memoryLayout(sizeOf<WGPUSurfaceTexture>(), alignOf<WGPUSurfaceTexture>())
+    )
+    match dawnCreateDeviceAndQueue(state, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> return .Error(.Setup(failure))
     }
-    state.dawn.messageBlock = allocateBytes(U64(48))
-    state.dawn.surfaceTextureBlock = allocateBytes(U64(24))
-    if !dawnCreateDeviceAndQueue(state, runtimeUserData) || !dawnCreateSurface(state, app.width, app.height) {
-        dawnShutdown(state)
-        return
+    match dawnCreateSurface(state, app.width, app.height) {
+        Ok -> {}
+        Error(failure) -> return .Error(.Setup(failure))
     }
-    // What the window procedure draws with while Windows owns the loop during a
-    // resize; see `dawnWindowProcedure`. Attached after the device exists, so a
-    // `WM_SIZE` that arrives first finds nothing and falls through rather than
-    // driving a frame against a surface that is not there.
+    dawnAttachPlatformRuntime(state, runtimeUserData)
+    return .Ok
+}
+
+// What each platform's window needs handed the run state once the device
+// exists.
+function dawnAttachPlatformRuntime(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) {
     // Windows only. It hangs the runtime on the window so the window PROCEDURE
-    // can draw while Windows owns the loop during a resize -- a Win32 problem
-    // with a Win32 answer. A Wayland client is never called back into like that:
-    // a configure arrives on its own queue and is read by the pump.
-    if hostPlatform() == .Windows {
+    // can draw while Windows owns the loop during a resize (see
+    // `dawnWindowProcedure`) -- a Win32 problem with a Win32 answer. Attached
+    // after the device exists, so a `WM_SIZE` that arrives first finds nothing
+    // and falls through rather than driving a frame against a surface that is
+    // not there.
+    if targetPlatform!() == .Windows {
         dawnAttachWindowRuntime(state.dawn.window, runtimeUserData)
     }
     // The seat. A Wayland surface is shown by the compositor and touched
     // through a seat, and the two are bound separately -- so this is where the
     // window stops being a picture. Here rather than in `open` because the
     // handlers are handed the run state, which `open` does not have.
-    if hostPlatform() == .Linux {
+    if targetPlatform!() == .Linux {
         dawnWaylandAttachInput(state, runtimeUserData)
     }
+}
+
+public function dawnRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
+    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    state.dawn = dawnEmptyState()
+    readHarnessKnobs(state)
+    dawnReadGpuTraceKnob(state)
+    // System-DPI awareness before the window exists: a process that declares it
+    // later has already been told a scaled size for a window it has not opened.
+    // Declared only for an application that asked for a full-resolution
+    // framebuffer, which is what `highDpi` asks for; without it Windows renders
+    // the process at 96 DPI and upscales. Windows only: a Wayland surface is
+    // told its scale by the output it appears on.
+    if app.highDpi && targetPlatform!() == .Windows {
+        markProcessDpiAware()
+    }
+    match dawnStartRun(state, app, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not start the Dawn run", failure)
+            dawnShutdown(state)
+            return
+        }
+    }
     emberLiveBackendInitialized()
-
-    let graphics = EMGraphics {
-        userData: state.userData,
-        backend: .Dawn,
-        backendContext: runtimeUserData
-    }
-    let onInit: (EMGraphics) -> Void = state.app.initHandler
-    onInit(move graphics)
-
+    let onInit: (Graphics) -> Void = state.app.initHandler
+    onInit(Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData })
     dawnDriveFrames(state, runtimeUserData)
-
-    let cleanupGraphics = EMGraphics {
-        userData: state.userData,
-        backend: .Dawn,
-        backendContext: runtimeUserData
-    }
-    let onCleanup: (EMGraphics) -> Void = state.app.cleanupHandler
-    onCleanup(move cleanupGraphics)
+    let onCleanup: (Graphics) -> Void = state.app.cleanupHandler
+    onCleanup(
+        Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData }
+    )
     reportFrameCost(state)
     dawnReportGpuTrace(state)
     dawnReleaseDepthTarget(state)
     dawnShutdown(state)
-    return
 }
 
 // Moves the window's size on by a step, when a run asked to measure resizing.
@@ -104,33 +114,31 @@ public function dawnRunApplication(app: borrow EMGraphicsApplication, runtimeUse
 // frame takes the resize path — the same `WM_SIZE`, the same reconfigure, the
 // same relayout — and a frame-cost summary describes resizing rather than
 // idling.
-public function dawnSweepWindowSize(state: borrow mut EMGraphicsAppRuntimeState) {
-    if state.resizeSweep <= 0 {
+public function dawnSweepWindowSize(state: borrow mut GraphicsRuntimeState) {
+    if state.resizeSweep == 0 {
         return
     }
-    let span = 240
-    var step = state.frameIndex % (span * 2)
-    if step >= span {
-        step = span * 2 - step
-    }
-    let width = 1000 + step * state.resizeSweep
-    let height = 700 + step * state.resizeSweep / 2
-    dawnResizeWindow(state.dawn.window, width, height)
-    return
+    let step = Number(sweepStep(state.frameIndex))
+    let stride = Number(state.resizeSweep)
+    dawnResizeWindow(
+        state.dawn.window,
+        ResizeSweep.baseWidth + step * stride,
+        ResizeSweep.baseHeight + floor(step * stride / 2)
+    )
 }
 
 // One frame after another until the window closes, the application requests a
 // quit, or the harness's frame limit is reached.
-public function dawnDriveFrames(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnDriveFrames(state: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
     while !state.dawn.quitRequested {
         // Draining the platform's queue. The two window systems are least
         // alike here: Windows hands a client a message queue it peeks, and
         // Wayland hands it a socket whose events are dispatched to the
         // listeners already installed on each object.
-        if hostPlatform() == .Windows {
-            dawnPumpMessages(state, runtimeUserData)
+        if targetPlatform!() == .Windows {
+            dawnPumpMessages(state)
         }
-        if hostPlatform() == .Linux {
+        if targetPlatform!() == .Linux {
             dawnPumpWayland(state.dawn.window)
         }
         if state.dawn.quitRequested {
@@ -150,13 +158,12 @@ public function dawnDriveFrames(state: borrow mut EMGraphicsAppRuntimeState, run
             return
         }
     }
-    return
 }
 
 // One frame: hand the application a `RenderFrame`, then end whatever it left
 // open and present.
-public function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
-    let graphics = EMGraphics {
+public function dawnRunFrame(state: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
+    let graphics = Graphics {
         userData: state.userData,
         backend: .Dawn,
         backendContext: runtimeUserData
@@ -173,113 +180,20 @@ public function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtim
     dawnBeginFrameStats(state)
     dawnTraceBeginFrame(state)
 
-    // Drive UI through the same event handler a real pointer would, so a
-    // scripted run stays honest: Foundation still updates hover and press
-    // state, finds the hit region, invokes the callback and rebuilds before
-    // anything renders.
-    let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
-    let scriptFrame = state.frameIndex - 1
-    var clickIndex = 0
-    while clickIndex + 3 <= state.clickScript.count {
-        if state.clickScript[clickIndex] == scriptFrame {
-            let px = Float(state.clickScript[clickIndex + 1])
-            let py = Float(state.clickScript[clickIndex + 2])
-            onEvent(EMAppEvent {
-                kind: .PointerDown,
-                pointerButton: .Left,
-                pointerX: px,
-                pointerY: py
-            })
-            onEvent(EMAppEvent {
-                kind: .PointerUp,
-                pointerButton: .Left,
-                pointerX: px,
-                pointerY: py
-            })
-        }
-        clickIndex = clickIndex + 3
-    }
-    // Wheel turns, as (frame, x, y, deltaYTenths): the pointer is moved onto the
-    // region first, because a wheel goes to whatever is under the pointer.
-    var scrollIndex = 0
-    while scrollIndex + 4 <= state.scrollScript.count {
-        if state.scrollScript[scrollIndex] == scriptFrame {
-            let px = Float(state.scrollScript[scrollIndex + 1])
-            let py = Float(state.scrollScript[scrollIndex + 2])
-            onEvent(EMAppEvent {
-                kind: .PointerMoved,
-                pointerX: px,
-                pointerY: py
-            })
-            onEvent(EMAppEvent {
-                kind: .Scroll,
-                pointerX: px,
-                pointerY: py,
-                scrollY: Float(state.scrollScript[scrollIndex + 3]) / 10.0
-            })
-        }
-        scrollIndex = scrollIndex + 4
-    }
-    // Drags, as (startFrame, x, y, dx, dy, buttonRaw, steps): the press lands on
-    // the start frame, each following frame carries one step of the move, and
-    // the release lands on the frame after the last step. Spreading the moves
-    // over frames is what a hand does, and what the drag threshold measures.
-    var dragIndex = 0
-    while dragIndex + 7 <= state.dragScript.count {
-        let startFrame = state.dragScript[dragIndex]
-        let steps = state.dragScript[dragIndex + 6]
-        let px = Float(state.dragScript[dragIndex + 1])
-        let py = Float(state.dragScript[dragIndex + 2])
-        let dx = Float(state.dragScript[dragIndex + 3])
-        let dy = Float(state.dragScript[dragIndex + 4])
-        if scriptFrame == startFrame {
-            onEvent(EMAppEvent {
-                kind: .PointerMoved,
-                pointerX: px,
-                pointerY: py
-            })
-            onEvent(EMAppEvent {
-                kind: .PointerDown,
-                pointerButton: dawnScriptButton(state.dragScript[dragIndex + 5]),
-                pointerX: px,
-                pointerY: py
-            })
-        }
-        if steps > 0 && scriptFrame > startFrame && scriptFrame <= startFrame + steps {
-            let step = Float(scriptFrame - startFrame) / Float(steps)
-            onEvent(EMAppEvent {
-                kind: .PointerMoved,
-                pointerX: px + dx * step,
-                pointerY: py + dy * step
-            })
-        }
-        if scriptFrame == startFrame + steps + 1 {
-            onEvent(EMAppEvent {
-                kind: .PointerUp,
-                pointerButton: dawnScriptButton(state.dragScript[dragIndex + 5]),
-                pointerX: px + dx,
-                pointerY: py + dy
-            })
-        }
-        dragIndex = dragIndex + 7
-    }
-    // Keys and typed characters, which a click can only get as far as focusing.
-    driveTypingScripts(state, scriptFrame)
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    driveInputScript(state.inputScript, Number(state.frameIndex) - 1, onEvent)
 
     let onFrame: (borrow mut RenderFrame) -> Void = state.app.frameHandler
     onFrame(frame)
     if frame.shouldQuit {
         state.dawn.quitRequested = true
     }
-    var capturePath = ""
-    if state.captureAtFrame > 0 && state.frameIndex == state.captureAtFrame {
-        capturePath = state.capturePath
-    }
-    dawnPresentFrame(runtimeUserData, capturePath)
+    dawnPresentFrame(runtimeUserData, captureDue(state.capture, state.frameIndex))
     dawnEndFrameStats(state)
     dawnTraceEndFrame(state)
     dawnLogFrameRate(state)
-    return
 }
 
 // Reconfigures the surface when the client area has moved, and tells the
@@ -288,7 +202,10 @@ public function dawnRunFrame(state: borrow mut EMGraphicsAppRuntimeState, runtim
 // Polled rather than driven from `WM_SIZE`: a size message arrives while the
 // window is being dragged, several times a frame, and reconfiguring a surface
 // mid-drag costs more than measuring the rectangle once.
-public function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
+public function dawnResizeIfNeeded(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) {
     let width = dawnWindowFor(dawnPlatformForHost()).clientWidth(state.dawn.window)
     let height = dawnWindowFor(dawnPlatformForHost()).clientHeight(state.dawn.window)
     if width <= 0 || height <= 0 {
@@ -299,16 +216,22 @@ public function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, 
     }
     dawnConfigureSurface(state, width, height)
     let scale = dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
-    let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
-    onEvent(EMAppEvent {
-        kind: .Resized,
-        modifiers: dawnModifierState(),
-        windowWidth: Int(Float(width) / scale),
-        windowHeight: Int(Float(height) / scale),
-        framebufferWidth: width,
-        framebufferHeight: height
-    })
-    return
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    onEvent(
+        AppEvent {
+            kind: .Resized,
+            modifiers: dawnModifierState(),
+            // Points, not whole pixels: at a 1.25x scale a 1924-pixel client
+            // area is 1539.2 points, and an event that rounds it here is a
+            // layout that lays out one pixel out.
+            windowWidth: Number(width) / scale,
+            windowHeight: Number(height) / scale,
+            framebufferWidth: UN32(width),
+            framebufferHeight: UN32(height)
+        }
+    )
 }
 
 // One frame, driven from the window procedure while Windows owns the loop.
@@ -322,207 +245,25 @@ public function dawnResizeIfNeeded(state: borrow mut EMGraphicsAppRuntimeState, 
 // one against an encoder the first still holds. The dropped frame costs a
 // repeated size; running it would corrupt the one in flight.
 public function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
-    if state.dawn.inFrame || state.dawn.quitRequested || pointerIsNull(state.dawn.device) {
+    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    if state.dawn.inFrame || state.dawn.quitRequested || isNull(state.dawn.device) {
         return
     }
     state.dawn.inFrame = true
     dawnResizeIfNeeded(state, runtimeUserData)
     dawnRunFrame(state, runtimeUserData)
     state.dawn.inFrame = false
-    return
 }
 
 // Drains the message queue, turning what the application cares about into
-// `EMAppEvent`s and dispatching the rest.
-public function dawnPumpMessages(state: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
-    let messages: WindowMessagePointer = state.dawn.messageBlock
-    let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
-    while peekMessage(messages, nullPointer(), U32(0), U32(0), U32(1)) != 0 {
-        let message = messages.message
-        if message == dawnMessageQuit() {
-            state.dawn.quitRequested = true
-            onEvent(EMAppEvent {
-                kind: .QuitRequested,
-                modifiers: dawnModifierState()
-            })
-            return
-        }
-        dawnDeliverMessage(state, message, messages.wparam, messages.lparam)
-        translateMessage(messages)
-        dispatchMessage(messages)
-    }
-    return
-}
-
-// One queued message as an `EMAppEvent`, or nothing when the application has no
-// vocabulary for it.
-public function dawnDeliverMessage(state: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
-    let onEvent: (borrow EMAppEvent) -> Void = state.app.eventHandler
+// `AppEvent`s and dispatching the rest.
+public function dawnPumpMessages(state: borrow mut GraphicsRuntimeState) {
     let scale = dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
-    // A pointer message carries its position in the low and high halves of
-    // `lParam`, in CLIENT pixels. Layout and hit-testing are in points, so the
-    // backing scale divides out here rather than at every caller.
-    let rawX = Float(lparam & 65535)
-    let rawY = Float((lparam >> 16) & 65535)
-    let x = rawX / scale
-    let y = rawY / scale
-    if message == dawnMessagePointerMove() {
-        let deltaX = state.dawn.hasPointer ? x - state.dawn.pointerX : 0.0
-        let deltaY = state.dawn.hasPointer ? y - state.dawn.pointerY : 0.0
-        state.dawn.pointerX = x
-        state.dawn.pointerY = y
-        state.dawn.hasPointer = true
-        onEvent(EMAppEvent {
-            kind: .PointerMoved,
-            modifiers: dawnModifierState(),
-            pointerX: x,
-            pointerY: y,
-            pointerDeltaX: deltaX,
-            pointerDeltaY: deltaY
-        })
-        return
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    match win32DrainMessages(state.dawn.messageBlock, scale, state.dawn.input, onEvent) {
+        QuitPosted -> state.dawn.quitRequested = true
+        Empty -> {}
     }
-    if dawnMessageIsPointerButton(message) {
-        state.dawn.pointerX = x
-        state.dawn.pointerY = y
-        state.dawn.hasPointer = true
-        onEvent(EMAppEvent {
-            kind: dawnMessageIsPointerDown(message) ? .PointerDown : .PointerUp,
-            modifiers: dawnModifierState(),
-            pointerButton: dawnPointerButton(message),
-            pointerX: x,
-            pointerY: y
-        })
-        return
-    }
-    if message == dawnMessageWheel() {
-        // The wheel reports its position in SCREEN pixels and its notches in
-        // the high half of `wParam`, signed, in units of 120.
-        onEvent(EMAppEvent {
-            kind: .Scroll,
-            modifiers: dawnModifierState(),
-            pointerX: state.dawn.pointerX,
-            pointerY: state.dawn.pointerY,
-            scrollY: Float(dawnWheelNotches(wparam)) / 120.0
-        })
-        return
-    }
-    if message == dawnMessageKeyDown() || message == dawnMessageSystemKeyDown() {
-        onEvent(EMAppEvent {
-            kind: .KeyDown,
-            modifiers: dawnModifierState(),
-            keyCode: dawnKeyCode(Int(wparam)),
-            // Bit 30 of `lParam` is "the key was already down", which is what a
-            // repeat is.
-            keyRepeat: ((lparam >> 30) & 1) == 1
-        })
-        return
-    }
-    if message == dawnMessageKeyUp() || message == dawnMessageSystemKeyUp() {
-        onEvent(EMAppEvent {
-            kind: .KeyUp,
-            modifiers: dawnModifierState(),
-            keyCode: dawnKeyCode(Int(wparam))
-        })
-        return
-    }
-    if message == dawnMessageChar() {
-        let codepoint = Int(wparam)
-        // Surrogates and the control range are not text a field should insert.
-        if codepoint >= 32 && (codepoint < 55296 || codepoint > 57343) {
-            onEvent(EMAppEvent {
-                kind: .TextInput,
-                modifiers: dawnModifierState(),
-                textCodepoint: codepoint
-            })
-        }
-        return
-    }
-    if message == dawnMessageSetFocus() {
-        state.dawn.focused = true
-        onEvent(EMAppEvent { kind: .Focused })
-        return
-    }
-    if message == dawnMessageKillFocus() {
-        state.dawn.focused = false
-        onEvent(EMAppEvent { kind: .Unfocused })
-        return
-    }
-    return
-}
-
-public function dawnMessageIsPointerButton(message: U32) -> Bool {
-    return message == dawnMessageLeftDown()
-        || message == dawnMessageLeftUp()
-        || message == dawnMessageRightDown()
-        || message == dawnMessageRightUp()
-        || message == dawnMessageMiddleDown()
-        || message == dawnMessageMiddleUp()
-}
-
-public function dawnMessageIsPointerDown(message: U32) -> Bool {
-    return message == dawnMessageLeftDown()
-        || message == dawnMessageRightDown()
-        || message == dawnMessageMiddleDown()
-}
-
-public function dawnPointerButton(message: U32) -> EMPointerButton {
-    if message == dawnMessageLeftDown() || message == dawnMessageLeftUp() {
-        return .Left
-    }
-    if message == dawnMessageRightDown() || message == dawnMessageRightUp() {
-        return .Right
-    }
-    return .Middle
-}
-
-// The wheel delta out of `wParam`'s high half, as a signed number of 120ths.
-public function dawnWheelNotches(wparam: U64) -> Int {
-    let high = Int(wparam >> U64(16)) & 65535
-    if high >= 32768 {
-        return high - 65536
-    }
-    return high
-}
-
-// A Windows virtual key as the code every other backend reports.
-//
-// The portable vocabulary in this repo is sokol's, which is GLFW's: printable
-// keys are their ASCII uppercase, and the rest are numbered from 256. Windows
-// agrees on letters and digits and disagrees on everything else, so only the
-// disagreements are listed.
-public function dawnKeyCode(virtualKey: Int) -> Int {
-    if virtualKey == 8 { return 259 }
-    if virtualKey == 9 { return 258 }
-    if virtualKey == 13 { return 257 }
-    if virtualKey == 27 { return 256 }
-    if virtualKey == 32 { return 32 }
-    if virtualKey == 33 { return 266 }
-    if virtualKey == 34 { return 267 }
-    if virtualKey == 35 { return 269 }
-    if virtualKey == 36 { return 268 }
-    if virtualKey == 37 { return 263 }
-    if virtualKey == 38 { return 265 }
-    if virtualKey == 39 { return 262 }
-    if virtualKey == 40 { return 264 }
-    if virtualKey == 45 { return 260 }
-    if virtualKey == 46 { return 261 }
-    if virtualKey == 16 { return 340 }
-    if virtualKey == 17 { return 341 }
-    if virtualKey == 18 { return 342 }
-    if virtualKey >= 112 && virtualKey <= 123 { return 290 + virtualKey - 112 }
-    return virtualKey
-}
-
-// The button a script names: 0 left, 1 right, 2 middle — the spelling the drag
-// scripts on every backend already use.
-public function dawnScriptButton(raw: Int) -> EMPointerButton {
-    if raw == 1 {
-        return .Right
-    }
-    if raw == 2 {
-        return .Middle
-    }
-    return .Left
 }

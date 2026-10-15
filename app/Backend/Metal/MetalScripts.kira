@@ -1,0 +1,109 @@
+import Foundation
+
+// The scripts only the Metal loops honor: a trackpad swipe and a window resize.
+// Both drive a path that exists only on AppKit -- a scroll with phases and
+// momentum, and the live-resize delegate -- so neither belongs to the
+// `InputScript` every backend replays.
+
+// Two fingers on a trackpad at (x, y), moved (deltaX, deltaY) over `steps`
+// frames: a scroll that begins, changes a frame at a time, and ends, its deltas
+// following the fingers.
+public struct ScriptedSwipe {
+    var frame: Number = 0
+    var x: Number = 0
+    var y: Number = 0
+    var deltaX: Number = 0
+    var deltaY: Number = 0
+    var steps: Number = 1
+}
+
+// The window, or the offscreen target, set to `width` by `height` on `frame`.
+public struct ScriptedResize {
+    var frame: Number = 0
+    var width: Number = 0
+    var height: Number = 0
+}
+
+namespace MetalScriptRecord {
+    // (frame, x, y, dx, dy, steps)
+    let swipe: UNumber = 6
+    // (frame, width, height)
+    let resize: UNumber = 3
+}
+
+// The swipes `KIRA_UI_SWIPE_SCRIPT` carries.
+public function metalScriptedSwipes() -> [ScriptedSwipe] {
+    var swipes: [ScriptedSwipe] = []
+    for record in scriptRecords(metalEnvNumbers("KIRA_UI_SWIPE_SCRIPT"), MetalScriptRecord.swipe) {
+        swipes.append(
+            ScriptedSwipe {
+                frame: record[0],
+                x: record[1],
+                y: record[2],
+                deltaX: record[3],
+                deltaY: record[4],
+                steps: record[5] > 1 ? record[5] : 1
+            }
+        )
+    }
+    return swipes
+}
+
+// The resizes `KIRA_UI_RESIZE_SCRIPT` carries.
+public function metalScriptedResizes() -> [ScriptedResize] {
+    var resizes: [ScriptedResize] = []
+    for record in scriptRecords(
+        metalEnvNumbers("KIRA_UI_RESIZE_SCRIPT"),
+        MetalScriptRecord.resize
+    ) {
+        resizes.append(ScriptedResize { frame: record[0], width: record[1], height: record[2] })
+    }
+    return resizes
+}
+
+// The scroll `swipe` produces on `frame`, or nothing when the frame is outside
+// it. The first frame begins the gesture and the frame after the last step ends
+// it, both without movement, as a trackpad reports them.
+public function metalSwipeEvent(swipe: borrow ScriptedSwipe, frame: Number) -> AppEvent? {
+    let last = swipe.frame + swipe.steps + 1
+    if frame < swipe.frame || frame > last {
+        return .None
+    }
+    var phase: ScrollPhase = .Changed
+    var share = 1 / swipe.steps
+    if frame == swipe.frame {
+        phase = .Began
+        share = 0
+    }
+    if frame == last {
+        phase = .Ended
+        share = 0
+    }
+    return .Some(
+        AppEvent {
+            kind: .Scroll,
+            pointerX: swipe.x,
+            pointerY: swipe.y,
+            scrollX: swipe.deltaX * share,
+            scrollY: swipe.deltaY * share,
+            scrollPhase: phase,
+            scrollPrecise: true,
+            scrollInverted: true,
+            timestamp: secondsFromNanoseconds(Number(metalClockNs(MetalForeign.clockUptimeRaw)))
+        }
+    )
+}
+
+// Every scripted swipe that lands on `frame`, delivered through `onEvent`.
+public function metalDriveSwipes(
+    swipes: borrow [ScriptedSwipe],
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    for swipe in swipes {
+        match metalSwipeEvent(swipe, frame) {
+            Some(event) -> onEvent(event)
+            None -> {}
+        }
+    }
+}

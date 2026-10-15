@@ -1,0 +1,42 @@
+import Foundation
+
+// What a compute dispatch reads and writes, handed to a backend whole.
+
+// The separable two-kernel texture filter: the horizontal kernel reads the two
+// sources, blends them by `blend` as it filters, and writes the two temps; the
+// vertical kernel reads the temps and writes the two outputs. Both levels come
+// out of one dispatch per axis rather than one per level.
+//
+// A blur is linear, so filtering the blend costs what filtering one image costs
+// and saves the caller compositing a crossfade into a third texture first. One
+// image is the same dispatch with it as both sources and `blend` 0.
+//
+// Textures rather than ids, because the backends bind different things: Metal
+// binds the texture object, while Dawn and Vulkan bind a *view* — a sampled one
+// for what a kernel reads and a storage one for what it writes, and neither can
+// be recovered from an image id.
+public struct TextureComputePair {
+    var horizontalPipeline: ComputePipelineId = NoComputePipelineId
+    var verticalPipeline: ComputePipelineId = NoComputePipelineId
+    var source: GraphicsTexture = GraphicsTexture()
+    var secondSource: GraphicsTexture = GraphicsTexture()
+    var blend: Number = 0
+    var tempNear: GraphicsTexture = GraphicsTexture()
+    var tempFar: GraphicsTexture = GraphicsTexture()
+    var outputNear: GraphicsTexture = GraphicsTexture()
+    var outputFar: GraphicsTexture = GraphicsTexture()
+    // The kernels sample through this rather than declaring a sampler inline,
+    // which is not something a compute stage can express.
+    var sampler: GraphicsSampler = GraphicsSampler()
+    var width: UN32 = 0
+    var height: UN32 = 0
+}
+
+// A kernel over buffers: the ids bind in order at `buffer(0)`, `buffer(1)`, …
+// which is how a KSL kernel numbers its own storage arguments.
+public struct BufferDispatch {
+    var pipeline: ComputePipelineId = NoComputePipelineId
+    var bufferIds: [BufferId] = []
+    var threadCount: UN32 = 0
+    var threadsPerGroup: UN32 = 0
+}

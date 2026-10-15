@@ -1,7 +1,13 @@
-public struct EMGraphicsAppRuntimeState {
-    var app: EMGraphicsApplication
+public struct GraphicsRuntimeState {
+    // Which trace areas this run prints, resolved once from the environment.
+    //
+    // A field rather than a lookup at each site: an area is checked on paths
+    // as hot as a draw, and every one of them would otherwise scan the
+    // environment.
+    var tracing: TraceGates = TraceGates {}
+    var app: GraphicsApplication
     var userData: RawPtr
-    var frameIndex: Int = 0
+    var frameIndex: UNumber = 0
     // The Dawn and Vulkan backends' window, device, resource table and pass
     // state. The one state blob is what the run loop, a frame and a draw all
     // already recover.
@@ -21,45 +27,34 @@ public struct EMGraphicsAppRuntimeState {
     // interval, at which point it looks like a cliff. Both backends measure the
     // same span: the application's own frame callback, with the wait for a
     // drawable outside it.
-    var frameCostCount: Int = 0
-    var frameCostTotalSeconds: Float = 0.0
-    var frameCostWorstSeconds: Float = 0.0
+    var frameCostCount: UNumber = 0
+    var frameCostTotalSeconds: UNumber = 0
+    var frameCostWorstSeconds: UNumber = 0
     // Which frame the worst one was, counting from the first after start-up. A
     // maximum at frame 3 is start-up leaking past the first frame; one at 250 of
     // 300 is the shape of the run.
-    var frameCostWorstIndex: Int = 0
+    var frameCostWorstIndex: UNumber = 0
     // Every frame's cost, for the percentiles `reportFrameCost` prints. A budget
     // is written against the worst frame, and a maximum alone cannot tell one
     // hitch from a distribution.
-    var frameCostSamples: [Float] = []
-    var frameCostFirstSeconds: Float = 0.0
-    var frameCostPasses: Int = 0
-    var frameCostDraws: Int = 0
+    var frameCostSamples: [Number] = []
+    var frameCostFirstSeconds: UNumber = 0
+    var frameCostPasses: UNumber = 0
+    var frameCostDraws: UNumber = 0
     // The harness knobs, read once at init rather than per frame.
     //
     // They are launch settings — nothing changes them while a process runs — and
     // asking the environment for one costs a linear scan and a fresh string on
     // every frame, in a callback whose whole job is not to allocate. Read once,
     // the frame callback only compares two integers.
-    var quitAfterFrames: Int = 0
+    var quitAfterFrames: UNumber = 0
     // Points the window's size sweeps by each frame; zero resizes nothing.
-    var resizeSweep: Int = 0
-    var captureAtFrame: Int = 0
-    var capturePath: String = ""
-    // The UI driving scripts, parsed once at init and injected through the
-    // normal EMAppEvent handler before a frame draws: clicks as (frame, x, y)
-    // triples, wheel turns as (frame, x, y, deltaYTenths) quadruples. A wheel
-    // delta is in tenths because an environment script carries integers and a
-    // notch is not one.
-    var clickScript: [Int] = []
-    var scrollScript: [Int] = []
-    // Drags as (startFrame, x, y, dx, dy, buttonRaw, steps): a press at the
-    // point, a run of moves along the delta, a release at the end of it.
-    var dragScript: [Int] = []
-    // Keys as (frame, keyCode, downFlag) triples and typed characters as
-    // (frame, codepoint) pairs. A field is driven with both: the characters are
-    // what lands in it, and the keys are what a caret and a commit are made of
-    // — Enter is a key, not a character.
-    var keyScript: [Int] = []
-    var textScript: [Int] = []
+    var resizeSweep: UNumber = 0
+    // Pixels per point the run fixes for its window; zero leaves them to the
+    // display.
+    var scale: UNumber = 0
+    var capture: FrameCapture? = .None
+    // The scripted input, read once at init and injected through the normal
+    // AppEvent handler before a frame draws.
+    var inputScript: InputScript = InputScript()
 }

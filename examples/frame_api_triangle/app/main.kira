@@ -1,10 +1,22 @@
 import Ember
 import Foundation
 
-struct FrameTriangleState {
-    var shader: EMGraphicsShader
+// What the frame draws with, made once at init and destroyed at cleanup.
+struct FrameTriangleResources {
+    var shader: GraphicsShader
     var pipeline: RenderPipeline
-    var vertices: EMGraphicsBuffer
+    var vertices: GraphicsBuffer
+}
+
+// None until init has made the resources, and None for good when it could not.
+struct FrameTriangleState {
+    var resources: FrameTriangleResources? = .None
+}
+
+namespace FrameTriangle {
+    let vertexCount: UN32 = 3
+    // Two floats a vertex.
+    let stride: UN32 = 8
 }
 
 function frameTriangleVertexSource() -> String {
@@ -15,113 +27,98 @@ function frameTriangleFragmentSource() -> String {
     return "#version 330 core\nin vec4 color;\nout vec4 frag_color;\nvoid main() {\n    frag_color = color;\n}\n"
 }
 
-function frameTriangleVertices() -> [F32] {
-    return [
-        0.0, 0.55,
-        0.55, -0.55,
-        -0.55, -0.55
-    ]
+function frameTriangleVertices() -> [Number] {
+    return [0.0, 0.55, 0.55, -0.55, -0.55, -0.55]
+}
+
+function frameTrianglePipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "frame-api-triangle-pipeline",
+        shader: copy shader,
+        vertexLayout: VertexLayout {
+            stride: FrameTriangle.stride,
+            attributes: [VertexAttribute { name: "position", format: .Float2 }]
+        },
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+    }
+}
+
+function frameTriangleResources(
+    graphics: borrow Graphics
+) -> Result<FrameTriangleResources, ResourceFailure> {
+    let shader = match graphics.createShader(
+        ShaderDescriptor {
+            label: "frame-api-triangle-shader",
+            vertexSource: frameTriangleVertexSource(),
+            fragmentSource: frameTriangleFragmentSource()
+        }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "frame-api-triangle-vertices", data: frameTriangleVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(frameTrianglePipeline(shader)) {
+        Ok(pipeline) -> .Ok(
+            FrameTriangleResources { shader: shader, pipeline: pipeline, vertices: vertices }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function frameTriangleInit(graphics: Graphics) {
+    var state = nativeRecover<FrameTriangleState>(graphics.userData)
+    match frameTriangleResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the triangle", move failure)
+    }
+}
+
+// One frame, then quit: the run exists to prove the frame API draws.
+function frameTriangleFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<FrameTriangleState>(frame.userData)
+    let encoder = frame.beginRenderPass(
+        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.07, b: 0.10 })
+    )
+    match state.resources {
+        Some(resources) -> {
+            encoder.setPipeline(resources.pipeline)
+            encoder.setVertexBuffer(resources.vertices)
+            encoder.draw(FrameTriangle.vertexCount)
+        }
+        None -> {}
+    }
+    frame.endPass()
+    frame.requestQuit()
+}
+
+function frameTriangleCleanup(graphics: Graphics) {
+    let state = nativeRecover<FrameTriangleState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            graphics.destroyBuffer(resources.vertices)
+            graphics.destroyRenderPipeline(resources.pipeline)
+            graphics.destroyShader(copy resources.shader)
+        }
+        None -> {}
+    }
 }
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Frame API Triangle"
-        width: 640
-        height: 480
-        sampleCount: 1
+    var app = GraphicsApplication {
+        title: "Ember Frame API Triangle",
+        width: 640,
+        height: 480,
+        sampleCount: 1,
+        initHandler: frameTriangleInit,
+        frameHandler: frameTriangleFrame,
+        cleanupHandler: frameTriangleCleanup
     }
-    let state = nativeState(FrameTriangleState {
-        shader: emptyGraphicsShader()
-        pipeline: emptyRenderPipeline()
-        vertices: emptyGraphicsBuffer()
-    })
-
-    app.onInit { graphics in
-        var triangleState = nativeRecover<FrameTriangleState>(graphics.userData)
-
-        triangleState.shader = shaderOrReport(graphics.createShader(ShaderDescriptor {
-            label: "frame-api-triangle-shader"
-            vertexSource: frameTriangleVertexSource()
-            fragmentSource: frameTriangleFragmentSource()
-            vertexPath: ""
-            fragmentPath: ""
-        }), "shader")
-
-        triangleState.vertices = bufferOrReport(graphics.createBuffer(BufferDescriptor {
-            label: "frame-api-triangle-vertices"
-            usage: BufferUsage.Vertex
-            data: frameTriangleVertices()
-        }), "vertices")
-
-        triangleState.pipeline = pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
-            label: "frame-api-triangle-pipeline"
-            shader: triangleState.shader
-            vertexLayout: VertexLayout {
-                stride: 8
-                attributes: [
-                    VertexAttribute {
-                        name: "position"
-                        location: 0
-                        format: VertexFormat.Float2
-                        offset: 0
-                    }
-                ]
-            }
-            colorTargets: [
-                ColorTargetDescriptor {
-                    format: TextureFormat.Swapchain
-                    blend: BlendState {
-                        enabled: false
-                        preset: BlendPreset.Replace
-                    }
-                }
-            ]
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: false
-                depthWriteEnabled: false
-                depthCompare: CompareFunction.Always
-                format: TextureFormat.None
-            }
-            rasterization: RasterizationDescriptor {
-                cullMode: CullMode.None
-                frontFace: FrontFace.CounterClockwise
-            }
-            primitive: PrimitiveDescriptor {
-                topology: PrimitiveTopology.TriangleList
-            }
-        }), "pipeline")
-        return
-    }
-
-    app.onFrame { frame in
-        var triangleState = nativeRecover<FrameTriangleState>(frame.userData)
-        let pass = clearSwapchainRenderPass(Color {
-            r: 0.05
-            g: 0.07
-            b: 0.10
-            a: 1.0
-        })
-        let pipeline = triangleState.pipeline
-        let vertices = triangleState.vertices
-
-        let encoder = frame.beginRenderPass(pass)
-        encoder.setPipeline(pipeline)
-        encoder.setVertexBuffer(vertices)
-        encoder.draw(3)
-        frame.endPass()
-        frame.requestQuit()
-        return
-    }
-
-    app.onCleanup { graphics in
-        var triangleState = nativeRecover<FrameTriangleState>(graphics.userData)
-        graphics.destroyBuffer(triangleState.vertices)
-        graphics.destroyRenderPipeline(triangleState.pipeline)
-        graphics.destroyShader(triangleState.shader)
-        return
-    }
-
-    app.run(nativeUserData(state))
-    return
+    app.run(nativeUserData(nativeState(FrameTriangleState())))
 }

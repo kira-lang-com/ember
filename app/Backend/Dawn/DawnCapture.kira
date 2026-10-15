@@ -1,4 +1,5 @@
 import Foundation
+import Heap
 // Reading a presented frame back into a file.
 //
 // This is the instrument every claim about what a frame CONTAINS rests on.
@@ -12,84 +13,119 @@ import Foundation
 // this. The copy's rows are padded to the 256-byte multiple WebGPU requires of
 // `bytesPerRow`, so the reader walks rows rather than one flat run.
 
-public function dawnCopyRowAlignment() -> Int { return 256 }
+public namespace DawnCapture {
+    let copyRowAlignment: UNumber = 256
+    let bytesPerPixel: UNumber = 4
+    // How many times the device is ticked waiting for the readback's map to
+    // answer before the capture gives up on it.
+    let mapPolls: UNumber = 1000000
+}
+
+// The order a mapped 8-bit texture of `format` holds its channels in. A BGRA8
+// swapchain, which is what every Windows swapchain is, stores blue first.
+function dawnPixelOrder(format: I32) -> PixelOrder {
+    if format == DawnVocabulary.formatBgra8Unorm {
+        return .Bgra
+    }
+    return .Rgba
+}
 
 // The presented frame as a binary PPM at `path`, taken before the present so the
 // texture is still this frame's.
-public function dawnCaptureFrame(context: RawPtr, path: borrow String) {
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
+public function dawnCaptureFrame(
+    context: RawPtr,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
     let width = state.dawn.surfaceWidth
     let height = state.dawn.surfaceHeight
-    if width <= 0 || height <= 0 || pointerIsNull(state.dawn.frameTexture) {
-        graphicsFail(.Capture, "Ember could not read the Dawn swapchain back into " + path)
-        return
+    if width <= 0 || height <= 0 || isNull(state.dawn.frameTexture) {
+        return .Error(.NoImage)
     }
-    let _ = dawnCaptureTextureHandle(
+    return dawnCaptureTextureHandle(
         context,
-        state.dawn.frameTexture,
-        width,
-        height,
-        state.dawn.surfaceFormat,
-        path,
+        DawnCaptureSource {
+            texture: state.dawn.frameTexture,
+            width: width,
+            height: height,
+            format: state.dawn.surfaceFormat
+        },
+        path
     )
-    return
 }
 
 // An explicit texture as a binary PPM. Headless renderers have no swapchain, so
 // this is the same readback instrument pointed at the texture they own.
-public function dawnCaptureTexture(context: RawPtr, texture: borrow EMGraphicsTexture, path: borrow String) -> Bool {
-    if !dawnHasDevice(context) || texture.id == U32(0) || texture.width <= 0 || texture.height <= 0 {
-        return false
+public function dawnCaptureTexture(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    if !dawnHasDevice(context) {
+        return .Error(.NoDevice)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let handle = dawnObject(state, texture.id)
-    if pointerIsNull(handle) {
-        return false
+    if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
+        return .Error(.NoTexture)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let handle = dawnObject(state, texture.id.raw)
+    if isNull(handle) {
+        return .Error(.NoTexture)
     }
     return dawnCaptureTextureHandle(
         context,
-        handle,
-        texture.width,
-        texture.height,
-        dawnObjectFormat(state, texture.id),
-        path,
+        DawnCaptureSource {
+            texture: handle,
+            width: texture.width,
+            height: texture.height,
+            format: dawnObjectFormat(state, texture.id.raw)
+        },
+        path
     )
 }
 
-public function dawnCaptureTextureHandle(context: RawPtr, texture: RawPtr, width: Int, height: Int, format: I32, path: borrow String) -> Bool {
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let bytesPerRow = (width * 4 + dawnCopyRowAlignment() - 1) / dawnCopyRowAlignment() * dawnCopyRowAlignment()
-    let byteCount = bytesPerRow * height
-    let readback = wgpuDeviceCreateBuffer(state.dawn.device, WGPUBufferDescriptor {
-        label: dawnText("kira-frame-capture"),
-        usage: dawnBufferUsageMapRead() | dawnBufferUsageCopyDestination(),
-        size: U64(byteCount)
-    })
-    if pointerIsNull(readback) {
-        graphicsFail(.Capture, "Ember could not allocate a capture buffer for " + path)
-        return false
-    }
-    let encoder = wgpuDeviceCreateCommandEncoder(state.dawn.device, WGPUCommandEncoderDescriptor {
-        label: dawnText("kira-frame-capture-encoder")
-    })
+// A texture a capture reads, and what it needs to know to read it.
+struct DawnCaptureSource {
+    let texture: RawPtr
+    let width: UNumber
+    let height: UNumber
+    let format: I32
+}
+
+// The copy's rows, padded to the 256-byte multiple WebGPU requires of
+// `bytesPerRow`.
+function dawnCaptureRowBytes(width: UNumber) -> UNumber {
+    return alignedUp(width * DawnCapture.bytesPerPixel, DawnCapture.copyRowAlignment)
+}
+
+function dawnCopyTextureToReadback(
+    state: borrow GraphicsRuntimeState,
+    source: borrow DawnCaptureSource,
+    readback: RawPtr,
+    bytesPerRow: UNumber
+) {
+    let encoder = wgpuDeviceCreateCommandEncoder(
+        state.dawn.device,
+        WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-capture-encoder") }
+    )
     wgpuCommandEncoderCopyTextureToBuffer(
         encoder,
         WGPUTexelCopyTextureInfo {
-            texture: texture,
+            texture: source.texture,
             mipLevel: U32(0),
-            aspect: dawnTextureAspectAll()
+            aspect: DawnVocabulary.textureAspectAll
         },
         WGPUTexelCopyBufferInfo {
             layout: WGPUTexelCopyBufferLayout {
                 offset: U64(0),
                 bytesPerRow: U32(bytesPerRow),
-                rowsPerImage: U32(height)
+                rowsPerImage: U32(source.height)
             },
             buffer: readback
         },
         WGPUExtent3D {
-            width: U32(width),
-            height: U32(height),
+            width: U32(source.width),
+            height: U32(source.height),
             depthOrArrayLayers: U32(1)
         },
     )
@@ -98,79 +134,82 @@ public function dawnCaptureTextureHandle(context: RawPtr, texture: RawPtr, width
     wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
     wgpuCommandBufferRelease(commands)
     wgpuCommandEncoderRelease(encoder)
+}
 
+// The readback mapped for reading, ticking the device until the map answers.
+function dawnMapReadback(
+    context: RawPtr,
+    state: borrow mut GraphicsRuntimeState,
+    readback: RawPtr,
+    byteCount: UNumber
+) -> Result<Void, CaptureFailure> {
     state.dawn.mapResolved = false
     state.dawn.mapSucceeded = false
-    wgpuBufferMapAsync(readback, dawnMapModeRead(), U64(0), U64(byteCount), WGPUBufferMapCallbackInfo {
-        mode: dawnCallbackOnProcessEvents(),
-        callback: dawnBufferMapped,
-        userdata1: context
-    })
-    var spins = 0
-    while !state.dawn.mapResolved && spins < 1000000 {
+    wgpuBufferMapAsync(
+        readback,
+        DawnVocabulary.mapModeRead,
+        U64(0),
+        U64(byteCount),
+        WGPUBufferMapCallbackInfo {
+            mode: DawnVocabulary.callbackOnProcessEvents,
+            callback: dawnBufferMapped,
+            userdata1: context
+        }
+    )
+    for _ in 0..DawnCapture.mapPolls {
+        if state.dawn.mapResolved { break }
         wgpuDeviceTick(state.dawn.device)
         wgpuInstanceProcessEvents(state.dawn.instance)
-        spins = spins + 1
     }
     if !state.dawn.mapSucceeded {
-        graphicsFail(.Capture, "Ember could not map the Dawn capture buffer for " + path)
-        wgpuBufferDestroy(readback)
-        wgpuBufferRelease(readback)
-        return false
+        return .Error(.MapFailed)
     }
-    let mapped = wgpuBufferGetConstMappedRange(readback, U64(0), U64(byteCount))
-    let wrote = writeBytesFile(path, dawnPortablePixmap(mapped, width, height, bytesPerRow, format))
-    wgpuBufferUnmap(readback)
+    return .Ok
+}
+
+function dawnReleaseReadback(readback: RawPtr) {
     wgpuBufferDestroy(readback)
     wgpuBufferRelease(readback)
-    if wrote {
-        graphicsTrace(.Capture, "Ember wrote the captured texture to " + path)
-    } else {
-        graphicsFail(.Capture, "Ember could not write the captured texture to " + path)
-    }
-    return wrote
 }
 
-// A binary PPM (`P6`) over the mapped rows.
-//
-// The channel order is the surface's: a BGRA8 swapchain — which is what every
-// Windows swapchain is — stores blue first, and a PPM stores red first, so the
-// two outer channels swap. Writing the bytes in the wrong order would produce a
-// picture that looks plausible and compares as different everywhere, which is
-// the worst possible answer from an instrument.
-public function dawnPortablePixmap(mapped: RawPtr, width: Int, height: Int, bytesPerRow: Int, format: I32) -> [U8] {
-    let blueFirst = format == dawnFormatBgra8Unorm()
-    var bytes: [U8] = []
-    for byte in dawnAsciiBytes("P6\n" + String(width) + " " + String(height) + "\n255\n") {
-        bytes.append(byte)
-    }
-    var row = 0
-    while row < height {
-        let base = U64(row * bytesPerRow)
-        var column = 0
-        while column < width {
-            let pixel = base + U64(column * 4)
-            let first = rawByteAt(mapped, pixel)
-            let green = rawByteAt(mapped, pixel + U64(1))
-            let third = rawByteAt(mapped, pixel + U64(2))
-            bytes.append(blueFirst ? third : first)
-            bytes.append(green)
-            bytes.append(blueFirst ? first : third)
-            column = column + 1
+// `source` copied into a buffer, mapped, and written to `path`. The copy's rows
+// are padded, so the writer walks rows rather than one flat run.
+function dawnCaptureTextureHandle(
+    context: RawPtr,
+    source: borrow DawnCaptureSource,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let bytesPerRow = dawnCaptureRowBytes(source.width)
+    let byteCount = bytesPerRow * source.height
+    let readback = wgpuDeviceCreateBuffer(
+        state.dawn.device,
+        WGPUBufferDescriptor {
+            label: dawnText("kira-frame-capture"),
+            usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+            size: U64(byteCount)
         }
-        row = row + 1
+    )
+    if isNull(readback) {
+        return .Error(.StagingRefused)
     }
-    return bytes
-}
-
-// The bytes of a header line. The header is ASCII by the format's own
-// definition, so one byte per scalar.
-public function dawnAsciiBytes(text: borrow String) -> [U8] {
-    var bytes: [U8] = []
-    var index = 0
-    while index < text.count {
-        bytes.append(U8(text.charAt(index)))
-        index = index + 1
+    dawnCopyTextureToReadback(state, source, readback, bytesPerRow)
+    match dawnMapReadback(context, state, readback, byteCount) {
+        Ok -> {}
+        Error(failure) -> {
+            dawnReleaseReadback(readback)
+            return .Error(failure)
+        }
     }
-    return bytes
+    let pixels = MappedPixels {
+        start: wgpuBufferGetConstMappedRange(readback, U64(0), U64(byteCount)),
+        width: source.width,
+        height: source.height,
+        bytesPerRow: bytesPerRow,
+        order: dawnPixelOrder(source.format)
+    }
+    let written = writeCapture(pixels, path)
+    wgpuBufferUnmap(readback)
+    dawnReleaseReadback(readback)
+    return written
 }

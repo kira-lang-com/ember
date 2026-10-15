@@ -1,3 +1,5 @@
+import Heap
+
 // Ember Metal backend — application lifecycle.
 //
 // This backend talks to Metal, QuartzCore and AppKit/UIKit DIRECTLY through
@@ -12,12 +14,21 @@
 // verification (the kik Test harness asserts pixels through the same paths via the
 // MetalSelfTest entry points).
 
-public function metalRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr): Void {
+public function metalRunApplication(
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+): Void {
     // Become a foreground GUI app BEFORE creating the Metal device. The device
     // (MTLCreateSystemDefaultDevice) and the window both need a WindowServer
     // connection; establishing the app up front keeps the ordering explicit.
     if metalUsesUIKit!() {
-        if metalUIKitLaunchApplication(app, runtimeUserData) { return }
+        match metalUIKitLaunchApplication(app, runtimeUserData) {
+            Ok -> return
+            Error(failure) -> {
+                log fault("UIKit could not launch the application", trace: traceText(failure))
+                return
+            }
+        }
     }
     metalActivateApp()
     // One autorelease pool around the whole run; per-frame pools drain inside the
@@ -31,436 +42,121 @@ public function metalRunApplication(app: borrow EMGraphicsApplication, runtimeUs
     // come directly from the borrowed application (closures captured in the app do
     // not survive the nativeState round-trip on the hybrid backend, but the borrowed
     // `app` retains them intact).
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
+    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
     let userData = state.userData
 
-    let offscreenEnv = metalGetEnv("KIRA_METAL_OFFSCREEN")
-    if !pointerIsNull(offscreenEnv) {
+    if metalEnvIsSet("KIRA_METAL_OFFSCREEN") {
         metalRunOffscreenApplication(app, ctxPtr, userData, pool)
         return
     }
 
-    // On-screen: create a window + CAMetalLayer, run the frame loop until the app
-    // requests quit or the window is closed.
-    let view = metalCreateWindow(app.width, app.height, app.title, app.windowMode, app.titlebar)
-    metalContextSetHighDpi(ctxPtr, app.highDpi)
-    // Launch harness: capture destination, the frame to take it on, and how many
-    // frames the run lasts — the same knobs the sokol and Dawn loops resolve, so
-    // `--capture` means the same thing on every backend rather than nothing on
-    // this one.
-    var harness = metalHarnessKnobs(app)
-    metalContextAttachLayerToView(ctxPtr, view, app.width, app.height, harness.capturePath.count > 0)
+    metalRunWindow(app, ctxPtr, runtimeUserData, pool)
+}
+
+// The window `app` asks for, with the context's layer attached to its view. A
+// layer that will be captured keeps its drawables readable.
+function metalShowWindow(app: borrow GraphicsApplication, ctx: RawPtr, readable: Bool) -> RawPtr {
+    let view = metalCreateWindow(app)
+    metalContextSetHighDpi(ctx, app.highDpi)
+    metalContextAttachLayerToView(ctx, view, app, readable)
     metalWindowApplyCornerRadius(view, app.cornerRadius)
-    let nsApp = metalSharedApp()
+    return view
+}
+
+// The on-screen run: a window and its CAMetalLayer, and the frame loop until
+// the app requests quit or the window is closed.
+function metalRunWindow(
+    app: borrow GraphicsApplication,
+    ctxPtr: RawPtr,
+    runtimeUserData: RawPtr,
+    pool: RawPtr
+) {
+    let userData = nativeRecover<GraphicsRuntimeState>(runtimeUserData).userData
+    // Launch harness: capture destination, the frame to take it on, and how many
+    // frames the run lasts — the same knobs the Dawn and Vulkan loops resolve,
+    // so `--capture` means the same thing on every backend rather than nothing
+    // on this one.
+    let knobs = harnessKnobs(app)
+    let view = metalShowWindow(app, ctxPtr, knobs.capture != .None)
     emberLiveBackendInitialized()
+    let onInit: (Graphics) -> Void = app.initHandler
+    onInit(Graphics { userData: userData, backend: .Metal, backendContext: ctxPtr })
 
-    let onInit: (EMGraphics) -> Void = app.initHandler
-    let initGraphics = EMGraphics {
-        userData: userData,
-        backend: .Metal,
-        backendContext: ctxPtr
+    let live = MetalLiveState { ctx: ctxPtr, userData: userData, runtimeUserData: runtimeUserData }
+    let liveStorage = nativeState(move live)
+    var run = metalWindowRunFor(app, move knobs)
+    run.ctx = ctxPtr
+    run.view = view
+    run.nsApp = metalSharedApp()
+    run.hostWindow = metalMsgSend(view, metalSel("window"))
+    run.liveHandle = nativeUserDataBorrow(liveStorage)
+    run.userData = userData
+    run.pool = pool
+    // A window-resize delegate that renders during a drag. AppKit runs a modal
+    // resize-tracking loop inside -sendEvent:, so the main loop cannot update
+    // layout until the delegate re-enters the frame handler.
+    if !isNull(run.hostWindow) {
+        run.resizeDelegate = metalInstallResizeDelegate(run.hostWindow, run.liveHandle)
     }
-    onInit(move initGraphics)
+    metalDriveWindow(app, move run, move liveStorage)
+}
 
-    // Install a window-resize delegate that renders during a drag. AppKit runs a
-    // modal resize-tracking loop inside -sendEvent:, so this main loop cannot
-    // update layout until the delegate re-enters the frame handler.
-    let liveStorage = nativeState(MetalLiveState {
-        ctx: ctxPtr,
-        userData: userData,
-        runtimeUserData: runtimeUserData,
-        closed: false
-    })
-    let liveHandle = nativeUserDataBorrow(liveStorage)
-    let hostWindow: RawPtr = metalMsgSend(view, metalSel("window"))
-    var resizeDelegate = nullPointer()
-    if !pointerIsNull(hostWindow) {
-        resizeDelegate = metalInstallResizeDelegate(hostWindow, liveHandle)
+// The parts of a window run the launch environment decides: the scripted
+// input, how long the run lasts, and what it measures and dumps.
+function metalWindowRunFor(app: borrow GraphicsApplication, knobs: HarnessKnobs) -> MetalWindowRun {
+    let bench = MetalOnScreenBench { frames: metalEnvNumber("KIRA_METAL_ONSCREEN_BENCH", 0) }
+    return MetalWindowRun {
+        swipes: metalScriptedSwipes(),
+        resizes: metalScriptedResizes(),
+        frameLimit: metalOnScreenFrameLimit(
+            metalEnvNumber("KIRA_METAL_ONSCREEN_FRAMES", knobs.quitAfterFrames),
+            bench
+        ),
+        // Paced, a frame that costs 1.5 ms and one that costs 16 ms both read as
+        // 16.7 ms, so measuring the work takes KIRA_METAL_UNCAPPED=1.
+        framePacingNs: app.targetFrameDurationNs,
+        dumpPath: metalEnv("KIRA_METAL_ONSCREEN_DUMP"),
+        traced: metalEnv("KIRA_METAL_ONSCREEN_TRACE") != .None,
+        bench: bench,
+        windowStateOverride: windowStateFromCode(metalEnvNumber("KIRA_METAL_WINDOW_STATE", 0)),
+        knobs: move knobs
     }
+}
 
+// The frame loop over an open window: on AppKit a `while` here, on UIKit the
+// display link's ticks.
+function metalDriveWindow(
+    app: borrow GraphicsApplication,
+    opened: MetalWindowRun,
+    liveStorage: NativeState<MetalLiveState>
+) {
+    var run = move opened
+    // Bound ONCE for the whole loop: calling a closure does not consume it, but
+    // re-taking it from the app each frame would move its captured environment
+    // out and leave later fetches dangling.
     let onFrame: (borrow mut RenderFrame) -> Void = app.frameHandler
-
-    // Bound ONCE for the whole loop (like onFrame): calling a closure does not
-    // consume it, but re-taking it from the app each frame would move its
-    // captured environment out and leave later fetches dangling.
-    let onWindowEvent: (borrow EMAppEvent) -> Void = app.eventHandler
-    let windowDragRegion: (Float, Float) -> Bool = app.windowDragRegion
-    // Same synthetic-event scripts the offscreen harness honors, so on-screen
-    // crashes reproduce deterministically under a debugger.
-    var onClicks: [Int] = []
-    let onClickEnv = metalGetEnv("KIRA_UI_CLICK_SCRIPT")
-    if !pointerIsNull(onClickEnv) {
-        onClicks = metalEnvInts(onClickEnv)
+    let onWindowEvent: (borrow AppEvent) -> Void = app.eventHandler
+    let windowDragRegion: (Number, Number) -> Bool = app.windowDragRegion
+    let renderNextFrame: () -> Bool = {
+        in
+        return metalRenderWindowFrame(run, onFrame, onWindowEvent, windowDragRegion)
     }
-    // Drag script (startFrame, x, y, dx, dy, buttonRaw, steps), the same tuples
-    // the offscreen harness honors: press at (x,y), walk the delta over `steps`
-    // frames, release after. A slider, a scrubber and a camera gesture are all
-    // drags, and a click script reaches none of them — an on-screen loop that can
-    // only be clicked leaves everything drag-driven untestable on the path that
-    // actually runs.
-    var onDrags: [Int] = []
-    let onDragEnv = metalGetEnv("KIRA_UI_DRAG_SCRIPT")
-    if !pointerIsNull(onDragEnv) {
-        onDrags = metalEnvInts(onDragEnv)
-    }
-    // Key script (frame, keyCode, downFlag) and text script (frame, codepoint),
-    // the same tuples the offscreen harness honors: a click can only focus a
-    // field, and these are what type into it.
-    var onKeys: [Int] = []
-    let onKeyEnv = metalGetEnv("KIRA_UI_KEY_SCRIPT")
-    if !pointerIsNull(onKeyEnv) {
-        onKeys = metalEnvInts(onKeyEnv)
-    }
-    var onTexts: [Int] = []
-    let onTextEnv = metalGetEnv("KIRA_UI_TEXT_SCRIPT")
-    if !pointerIsNull(onTextEnv) {
-        onTexts = metalEnvInts(onTextEnv)
-    }
-    // Swipe script (frame, x, y, dx, dy, steps): two fingers on a trackpad at
-    // (x, y), moved (dx, dy) over `steps` frames -- a scroll that begins, changes
-    // a frame at a time, and ends, its deltas following the fingers.
-    var onSwipes: [Int] = []
-    let onSwipeEnv = metalGetEnv("KIRA_UI_SWIPE_SCRIPT")
-    if !pointerIsNull(onSwipeEnv) {
-        onSwipes = metalEnvInts(onSwipeEnv)
-    }
-    // Programmatic window resize (frame, w, h triples) — drives the REAL AppKit
-    // resize path (windowDidResize, drawable sync) for deterministic testing.
-    var onResizes: [Int] = []
-    let onResizeEnv = metalGetEnv("KIRA_UI_RESIZE_SCRIPT")
-    if !pointerIsNull(onResizeEnv) {
-        onResizes = metalEnvInts(onResizeEnv)
-    }
-    var onFrameIndex = 0
-    // Deterministic shutdown for the real AppKit/CAMetalLayer path. This keeps
-    // on-screen dump and leak probes bounded instead of leaving an orphaned
-    // `main` process rendering forever after its launching shell exits.
-    var onScreenFrameLimit = harness.quitAfterFrames
-    let onScreenFramesEnv = metalGetEnv("KIRA_METAL_ONSCREEN_FRAMES")
-    if !pointerIsNull(onScreenFramesEnv) {
-        let parsedOnScreenFrames = metalEnvInt(onScreenFramesEnv)
-        if parsedOnScreenFrames > 0 {
-            onScreenFrameLimit = parsedOnScreenFrames
+    let onCleanup: (Graphics) -> Void = app.cleanupHandler
+    let cleanup: () -> Void = {
+        in
+        metalEndWindowRun(run)
+        onCleanup(Graphics { userData: run.userData, backend: .Metal, backendContext: run.ctx })
+        metalContextFree(run.ctx)
+        if !metalUsesUIKit!() {
+            metalAutoreleasePoolPop(run.pool)
         }
-    }
-    var running = true
-    var liveFramePresented = false
-    var nextFrameDeadlineNs: U64 = 0
-    // A visible window is paced by its layer, which presents on the display's
-    // beat (see `metalContextAttachLayer`); the loop adds no limiter of its
-    // own. Paced, a frame that costs 1.5 ms and one that costs 16 ms both read
-    // as 16.7 ms, so measuring the work takes KIRA_METAL_UNCAPPED=1.
-    //
-    // An app that genuinely wants a cadence sets `targetFrameDurationNs`.
-    let framePacingNs = app.targetFrameDurationNs
-    // On-screen visual proof: the env VALUE is the destination path for the raw
-    // BGRA8 bytes of the drawable this loop presented. A window's own pixels are
-    // the only thing that settles "it renders" for a session that cannot look at
-    // the screen — an offscreen dump proves the renderer, not the window. Each
-    // frame overwrites the last, so the file holds whatever was on screen when the
-    // run ended. Requires the layer to have opted out of framebufferOnly, which
-    // the same variable does at attach time.
-    let onScreenDumpEnv = metalGetEnv("KIRA_METAL_ONSCREEN_DUMP")
-    // Per-frame trace for the ON-SCREEN loop, the counterpart of the benchmark's
-    // KIRA_METAL_BENCH_DETAIL. The offscreen benchmark measures a compositor with
-    // nothing to present to, so it cannot see the presentation path at all; only
-    // this measures what a window does. A frame rate that swings has to be read
-    // frame by frame — the HUD's own readout is one frame's delta, which shows
-    // the swing without saying what it is made of.
-    let onScreenTraceEnv = metalGetEnv("KIRA_METAL_ONSCREEN_TRACE")
-    // KIRA_METAL_ONSCREEN_BENCH=N: the real-window percentile bench. N frames
-    // are measured after a short warmup, on this same visible, presenting
-    // loop; the summary prints at exit (metalBenchReport). Sets its own frame
-    // limit so a bench run is bounded by construction.
-    var benchFrames = 0
-    let onScreenBenchEnv = metalGetEnv("KIRA_METAL_ONSCREEN_BENCH")
-    if !pointerIsNull(onScreenBenchEnv) {
-        let parsedBench = metalEnvInt(onScreenBenchEnv)
-        if parsedBench > 0 {
-            benchFrames = parsedBench
-        }
-    }
-    let benchWarmup = 30
-    if benchFrames > 0 && onScreenFrameLimit == 0 {
-        onScreenFrameLimit = benchWarmup + benchFrames
-    }
-    var benchFrameNs: [Int] = []
-    var benchCpuNs: [Int] = []
-    var benchGpuNs: [Int] = []
-    // Deterministic scheduler verification. Production leaves this unset and uses
-    // AppKit visibility/occlusion; tests can force 1/2/3 without automating Finder.
-    var windowStateOverride = 0
-    let windowStateEnv = metalGetEnv("KIRA_METAL_WINDOW_STATE")
-    if !pointerIsNull(windowStateEnv) {
-        let parsedWindowState = metalEnvInt(windowStateEnv)
-        if parsedWindowState >= 1 && parsedWindowState <= 3 {
-            windowStateOverride = parsedWindowState
-        }
-    }
-    let renderNextFrame: () -> Bool = { in
-        if metalUsesUIKit!() && onFrameIndex == 0 { graphicsFail(.Device, "UIKit rendering its first frame") }
-        let frameStartNs = metalClockNs(metalClockUptimeRaw())
-        let framePool = metalAutoreleasePoolPush()
-        var oci = 0
-        while oci + 3 <= onClicks.count {
-            if onClicks[oci] == onFrameIndex {
-                let opx = Float(onClicks[oci + 1])
-                let opy = Float(onClicks[oci + 2])
-                let odown = EMAppEvent {
-                    kind: .PointerDown,
-                    pointerX: opx,
-                    pointerY: opy
-                }
-                onWindowEvent(odown)
-                let oup = EMAppEvent {
-                    kind: .PointerUp,
-                    pointerX: opx,
-                    pointerY: opy
-                }
-                onWindowEvent(oup)
-            }
-            oci = oci + 3
-        }
-        // One drag, walked a frame at a time: down on the start frame, a move per
-        // frame after it, then up. Reported as absolute positions, exactly like a
-        // real pointer — the UI derives the distance from its own press point.
-        var odi = 0
-        while odi + 7 <= onDrags.count {
-            let dragStart = onDrags[odi]
-            let dragSteps = onDrags[odi + 6]
-            if onFrameIndex >= dragStart && onFrameIndex <= dragStart + dragSteps + 1 {
-                let obx = Float(onDrags[odi + 1])
-                let oby = Float(onDrags[odi + 2])
-                let obutton = graphicsPointerButtonFromRaw(onDrags[odi + 5])
-                if onFrameIndex == dragStart {
-                    onWindowEvent(EMAppEvent {
-                        kind: .PointerDown,
-                        pointerButton: obutton,
-                        pointerX: obx,
-                        pointerY: oby
-                    })
-                } else {
-                    let ostepped = onFrameIndex - dragStart
-                    var ot = Float(ostepped) / Float(dragSteps)
-                    if ot > 1.0 {
-                        ot = 1.0
-                    }
-                    let omx = obx + Float(onDrags[odi + 3]) * ot
-                    let omy = oby + Float(onDrags[odi + 4]) * ot
-                    if onFrameIndex <= dragStart + dragSteps {
-                        onWindowEvent(EMAppEvent {
-                            kind: .PointerMoved,
-                            pointerButton: obutton,
-                            pointerX: omx,
-                            pointerY: omy
-                        })
-                    } else {
-                        onWindowEvent(EMAppEvent {
-                            kind: .PointerUp,
-                            pointerButton: obutton,
-                            pointerX: omx,
-                            pointerY: omy
-                        })
-                    }
-                }
-            }
-            odi = odi + 7
-        }
-        var oki = 0
-        while oki + 3 <= onKeys.count {
-            if onKeys[oki] == onFrameIndex {
-                onWindowEvent(EMAppEvent {
-                    kind: onKeys[oki + 2] == 1 ? .KeyDown : .KeyUp,
-                    keyCode: onKeys[oki + 1]
-                })
-            }
-            oki = oki + 3
-        }
-        var oti = 0
-        while oti + 2 <= onTexts.count {
-            if onTexts[oti] == onFrameIndex {
-                onWindowEvent(EMAppEvent {
-                    kind: .TextInput,
-                    textCodepoint: onTexts[oti + 1]
-                })
-            }
-            oti = oti + 2
-        }
-        var osi = 0
-        while osi + 6 <= onSwipes.count {
-            let swipeStart = onSwipes[osi]
-            let swipeSteps = onSwipes[osi + 5] > 1 ? onSwipes[osi + 5] : 1
-            if onFrameIndex >= swipeStart && onFrameIndex <= swipeStart + swipeSteps + 1 {
-                var phase: EMScrollPhase = .Changed
-                var sdx = Float(onSwipes[osi + 3]) / Float(swipeSteps)
-                var sdy = Float(onSwipes[osi + 4]) / Float(swipeSteps)
-                if onFrameIndex == swipeStart {
-                    phase = .Began
-                    sdx = 0.0
-                    sdy = 0.0
-                }
-                if onFrameIndex == swipeStart + swipeSteps + 1 {
-                    phase = .Ended
-                    sdx = 0.0
-                    sdy = 0.0
-                }
-                onWindowEvent(EMAppEvent {
-                    kind: .Scroll,
-                    pointerX: Float(onSwipes[osi + 1]),
-                    pointerY: Float(onSwipes[osi + 2]),
-                    scrollX: sdx,
-                    scrollY: sdy,
-                    scrollPhase: phase,
-                    scrollPrecise: true,
-                    scrollInverted: true,
-                    timestamp: Float(metalClockNs(metalClockUptimeRaw())) / 1000000000.0
-                })
-            }
-            osi = osi + 6
-        }
-        var ori = 0
-        while ori + 3 <= onResizes.count {
-            if onResizes[ori] == onFrameIndex {
-                if !pointerIsNull(hostWindow) {
-                    metalMsgSend(hostWindow, metalSel("setFrame:display:"), 60.0, 60.0, Float(onResizes[ori + 1]), Float(onResizes[ori + 2]), true)
-                }
-            }
-            ori = ori + 3
-        }
-        onFrameIndex = onFrameIndex + 1
-        // Dispatch queued window/input events first (activation, title-bar buttons,
-        // live resize); translated AppEvents come back for the app handler.
-        let windowEvents = metalPumpEvents(nsApp, view, ctxPtr, windowDragRegion)
-        for wei in 0..windowEvents.count {
-            onWindowEvent(windowEvents[wei])
-        }
-        var windowState = metalViewWindowState(view)
-        if windowStateOverride > 0 {
-            windowState = windowStateOverride
-        }
-        metalContextSetWindowState(ctxPtr, windowState)
-        metalContextBeginFrameTiming(ctxPtr)
-        metalContextSyncViewportFromView(ctxPtr)
-        let frameGraphics = EMGraphics {
-            userData: userData,
-            backend: .Metal,
-            backendContext: ctxPtr
-        }
-        var frame = frameGraphics.frame()
-        onFrame(frame)
-        // The drawable this frame drew into, taken while the context still holds
-        // it: submitting presents it and hands it back to Core Animation.
-        var capturedTexture = nullPointer()
-        if harness.capturePath.count > 0 && onFrameIndex == harness.captureAtFrame {
-            capturedTexture = metalContextDrawableTexture(ctxPtr)
-        }
-        // Whether the frame drew anything: an app with nothing new to show
-        // records no pass, and then nothing is presented.
-        let presenting = !pointerIsNull(metalMemReadPtr(ctxPtr, metalOffsetActiveCommandBuffer()))
-        graphicsSubmitFrame(frame)
-        if !pointerIsNull(capturedTexture) {
-            let captureW = metalContextPhysicalWidth(ctxPtr)
-            let captureH = metalContextPhysicalHeight(ctxPtr)
-            if metalCapturePpm(ctxPtr, capturedTexture, captureW, captureH, harness.capturePath) {
-                graphicsFail(.Device, "Ember wrote the presented frame to " + harness.capturePath)
-            } else {
-                graphicsFail(.Device, "Ember could not read the drawable back into " + harness.capturePath)
-            }
-        }
-        metalContextEndFrameTiming(ctxPtr)
-        if !pointerIsNull(onScreenTraceEnv) {
-            metalReportBenchFrame(ctxPtr, onFrameIndex)
-        }
-        if benchFrames > 0 && onFrameIndex > benchWarmup && benchFrameNs.count < benchFrames {
-            metalBenchCollect(ctxPtr, benchFrameNs, benchCpuNs, benchGpuNs)
-        }
-        // The frame's passes ended+committed inside graphicsSubmitFrame ->
-        // metalContextEndAndCommit, which presented a real on-screen drawable.
-        // Signal the live supervisor once (the sokol backend does the same from
-        // its frame callback); without this a macOS live session never sees
-        // `live.frame.presented` and fails with KCL038.
-        if !liveFramePresented {
-            liveFramePresented = true
-            emberLiveFramePresented()
-        }
-        if !pointerIsNull(onScreenDumpEnv) {
-            let onScreenW = metalContextPhysicalWidth(ctxPtr)
-            let onScreenH = metalContextPhysicalHeight(ctxPtr)
-            metalContextImageDump(ctxPtr, onScreenW, onScreenH, onScreenDumpEnv)
-        }
-        if frame.shouldQuit {
-            running = false
-        }
-        if onScreenFrameLimit > 0 && onFrameIndex >= onScreenFrameLimit {
-            running = false
-        }
-        if metalLiveStateClosed(liveHandle) {
-            running = false
-        }
-        metalAutoreleasePoolPop(framePool)
-        if !metalUsesUIKit!() && windowState == 3 {
-            let remainingInterval = metalWindowRemainingInterval(frameStartNs, windowState, metalViewMaximumFramesPerSecond(view))
-            if remainingInterval > 0.0 {
-                metalSpinRunLoop(remainingInterval)
-            }
-            nextFrameDeadlineNs = 0
-        } else if !metalUsesUIKit!() && framePacingNs > 0 {
-            if nextFrameDeadlineNs == 0 {
-                nextFrameDeadlineNs = frameStartNs + U64(framePacingNs)
-            }
-            metalContextWaitUntilNs(ctxPtr, nextFrameDeadlineNs)
-            // Advance the beat rather than restarting it from now: a wait
-            // overshoots its deadline by a little, and folding that overshoot
-            // into the next period makes every frame late by it, which is a
-            // cadence that drifts — 17.5 ms against a 16.7 ms display.
-            //
-            // A deadline already in the past is a real miss, and there the
-            // cadence does restart: we deliberately never submit catch-up frames
-            // against deadlines that have gone.
-            let pacedNow = metalClockNs(metalClockUptimeRaw())
-            nextFrameDeadlineNs = nextFrameDeadlineNs + U64(framePacingNs)
-            if nextFrameDeadlineNs < pacedNow {
-                nextFrameDeadlineNs = pacedNow + U64(framePacingNs)
-            }
-        } else if !metalUsesUIKit!() && !presenting {
-            // A frame that presented nothing never waited on a drawable, which
-            // is what holds the loop to the display. It waits out the rest of
-            // the display's frame itself, pumping events meanwhile, instead of
-            // asking an idle app for its next frame at once.
-            let refresh = Float(metalViewMaximumFramesPerSecond(view))
-            let spent = Float(metalClockNs(metalClockUptimeRaw()) - frameStartNs) / 1000000000.0
-            let remaining = 1.0 / refresh - spent
-            if remaining > 0.0 {
-                metalSpinRunLoop(remaining)
-            }
-        }
-        return running
-    }
-
-    let onCleanup: (EMGraphics) -> Void = app.cleanupHandler
-    let cleanup: () -> Void = { in
-        if benchFrames > 0 {
-            metalBenchReport(ctxPtr, benchFrameNs, benchCpuNs, benchGpuNs)
-        }
-        if !pointerIsNull(hostWindow) {
-            metalRemoveResizeDelegate(hostWindow, resizeDelegate)
-        }
-        let cleanupGraphics = EMGraphics {
-            userData: userData,
-            backend: .Metal,
-            backendContext: ctxPtr
-        }
-        onCleanup(move cleanupGraphics)
-        metalContextFree(ctxPtr)
-        if !metalUsesUIKit!() { metalAutoreleasePoolPop(pool) }
         return
     }
     if metalUsesUIKit!() {
-        metalAutoreleasePoolPop(pool)
+        metalAutoreleasePoolPop(run.pool)
         metalUIKitStartFrames(move renderNextFrame, move cleanup, move liveStorage)
         return
     }
     while renderNextFrame() {}
     cleanup()
-    return
 }

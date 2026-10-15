@@ -1,4 +1,5 @@
 import Foundation
+import Heap
 // What each segment of a frame costs the GPU, on the Dawn backend.
 //
 // `KIRA_GRAPHICS_GPU_TRACE=1` turns it on. While it is on, every pass and every
@@ -24,62 +25,75 @@ public struct DawnGpuTrace {
     var enabled: Bool = false
     var workDone: Bool = false
     // The tick the last drained segment ended on.
-    var markTicks: U64 = 0
+    var markTicks: UNumber = 0
     // The frame being measured.
     var line: String = ""
-    var prepMilliseconds: Float = 0.0
-    var frameMilliseconds: Float = 0.0
+    var prepMilliseconds: UNumber = 0
+    var frameMilliseconds: UNumber = 0
     // Across the run, once past the first frame.
-    var frames: Int = 0
-    var prepTotal: Float = 0.0
-    var prepWorst: Float = 0.0
-    var totalTotal: Float = 0.0
-    var totalWorst: Float = 0.0
+    var frames: UNumber = 0
+    var prepTotal: UNumber = 0
+    var prepWorst: UNumber = 0
+    var totalTotal: UNumber = 0
+    var totalWorst: UNumber = 0
 }
 
-public function dawnReadGpuTraceKnob(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnReadGpuTraceKnob(state: borrow mut GraphicsRuntimeState) {
     let value = environmentValue("KIRA_GRAPHICS_GPU_TRACE")
     state.dawn.trace.enabled = value.count > 0 && value != "0"
-    return
 }
 
-public function dawnWorkDone(status: I32, message: WGPUStringViewPointer, userdata1: RawPtr, userdata2: RawPtr) -> Void {
-    if pointerIsNull(userdata1) {
+public function dawnWorkDone(
+    status: I32,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    if isNull(userdata1) {
         return
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(userdata1)
+    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
     state.dawn.trace.workDone = true
-    return
+}
+
+namespace DawnGpuTrace {
+    // How many device ticks a drain waits for the queue. A queue that never
+    // reports its work done is a device that has stopped, and a trace must not
+    // hang the run it is measuring.
+    let drainTicks: UNumber = 100000000
 }
 
 // Submits whatever the frame has recorded and waits for the queue to finish it.
-public function dawnDrainQueue(context: RawPtr, state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnDrainQueue(context: RawPtr, state: borrow mut GraphicsRuntimeState) {
     dawnSubmitEncoder(state)
     state.dawn.trace.workDone = false
-    wgpuQueueOnSubmittedWorkDone(state.dawn.queue, WGPUQueueWorkDoneCallbackInfo {
-        mode: dawnCallbackOnProcessEvents(),
-        callback: dawnWorkDone,
-        userdata1: context
-    })
-    var spins = 0
-    while !state.dawn.trace.workDone && spins < 100000000 {
+    wgpuQueueOnSubmittedWorkDone(
+        state.dawn.queue,
+        WGPUQueueWorkDoneCallbackInfo {
+            mode: DawnVocabulary.callbackOnProcessEvents,
+            callback: dawnWorkDone,
+            userdata1: context
+        }
+    )
+    for tick in 0..DawnGpuTrace.drainTicks {
+        if state.dawn.trace.workDone {
+            return
+        }
         wgpuDeviceTick(state.dawn.device)
         wgpuInstanceProcessEvents(state.dawn.instance)
-        spins = spins + 1
     }
-    return
+    log warn("the queue never reported its work done", ticks: DawnGpuTrace.drainTicks)
 }
 
 // Opens a frame's trace: nothing recorded yet, and the clock starts here.
-public function dawnTraceBeginFrame(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnTraceBeginFrame(state: borrow mut GraphicsRuntimeState) {
     if !state.dawn.trace.enabled {
         return
     }
     state.dawn.trace.line = ""
-    state.dawn.trace.prepMilliseconds = 0.0
-    state.dawn.trace.frameMilliseconds = 0.0
+    state.dawn.trace.prepMilliseconds = 0
+    state.dawn.trace.frameMilliseconds = 0
     state.dawn.trace.markTicks = dawnPerformanceTicks()
-    return
 }
 
 // Starts one segment, at the moment its commands begin being recorded.
@@ -90,12 +104,11 @@ public function dawnTraceBeginFrame(state: borrow mut EMGraphicsAppRuntimeState)
 // what it reports is not the GPU time it claims to be. The segment a caller
 // reads should be the recorded work, so the mark moves to where the recording
 // starts.
-public function dawnTraceOpenSegment(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnTraceOpenSegment(state: borrow mut GraphicsRuntimeState) {
     if !state.dawn.trace.enabled {
         return
     }
     state.dawn.trace.markTicks = dawnPerformanceTicks()
-    return
 }
 
 // Closes one segment: drain, measure, and name it in the frame's line.
@@ -103,33 +116,40 @@ public function dawnTraceOpenSegment(state: borrow mut EMGraphicsAppRuntimeState
 // `isComposite` separates the swapchain pass — where the glass surfaces are
 // actually shaded — from everything the effect does to prepare its backdrop, so
 // a reader can see which of the two owns the frame.
-public function dawnTraceSegment(context: RawPtr, state: borrow mut EMGraphicsAppRuntimeState, name: borrow String, isComposite: Bool) {
+public function dawnTraceSegment(
+    context: RawPtr,
+    state: borrow mut GraphicsRuntimeState,
+    name: borrow String,
+    isComposite: Bool
+) {
     if !state.dawn.trace.enabled {
         return
     }
     dawnDrainQueue(context, state)
     let now = dawnPerformanceTicks()
-    let milliseconds = Float(Int(now - state.dawn.trace.markTicks))
-        / Float(Int(dawnPerformanceTicksPerSecond())) * 1000.0
+    let milliseconds = Number(now - state.dawn.trace.markTicks)
+        / Number(dawnPerformanceTicksPerSecond()) * 1000
     state.dawn.trace.markTicks = now
-    state.dawn.trace.line = state.dawn.trace.line + " " + name + "=" + graphicsHundredths(milliseconds)
+    state.dawn.trace.line = state.dawn.trace.line + " " + name + "=" + graphicsHundredths(
+        milliseconds
+    )
     state.dawn.trace.frameMilliseconds = state.dawn.trace.frameMilliseconds + milliseconds
     if !isComposite {
         state.dawn.trace.prepMilliseconds = state.dawn.trace.prepMilliseconds + milliseconds
     }
-    return
 }
 
 // Reports the frame and folds it into the run's totals.
-public function dawnTraceEndFrame(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnTraceEndFrame(state: borrow mut GraphicsRuntimeState) {
     if !state.dawn.trace.enabled || state.dawn.trace.line.count == 0 {
         return
     }
-    graphicsFail(.Frame, 
-        "Ember: gpu frame=" + String(state.dawn.stats.frameSerial)
-            + state.dawn.trace.line
-            + " prep=" + graphicsHundredths(state.dawn.trace.prepMilliseconds)
-            + " total=" + graphicsHundredths(state.dawn.trace.frameMilliseconds)
+    log info(
+        "timed a GPU frame",
+        frameSerial: state.dawn.stats.frameSerial,
+        line: state.dawn.trace.line,
+        prepMilliseconds: state.dawn.trace.prepMilliseconds,
+        frameMilliseconds: state.dawn.trace.frameMilliseconds
     )
     // The first frame builds every pipeline and uploads every texture, so it
     // measures start-up rather than drawing.
@@ -145,20 +165,19 @@ public function dawnTraceEndFrame(state: borrow mut EMGraphicsAppRuntimeState) {
     if state.dawn.trace.frameMilliseconds > state.dawn.trace.totalWorst {
         state.dawn.trace.totalWorst = state.dawn.trace.frameMilliseconds
     }
-    return
 }
 
-public function dawnReportGpuTrace(state: borrow EMGraphicsAppRuntimeState) {
+public function dawnReportGpuTrace(state: borrow GraphicsRuntimeState) {
     if !state.dawn.trace.enabled || state.dawn.trace.frames == 0 {
         return
     }
-    let frames = Float(state.dawn.trace.frames)
-    graphicsFail(.Frame, 
-        "Ember: gpu frames=" + String(state.dawn.trace.frames)
-            + " prepMean=" + graphicsHundredths(state.dawn.trace.prepTotal / frames) + "ms"
-            + " prepWorst=" + graphicsHundredths(state.dawn.trace.prepWorst) + "ms"
-            + " totalMean=" + graphicsHundredths(state.dawn.trace.totalTotal / frames) + "ms"
-            + " totalWorst=" + graphicsHundredths(state.dawn.trace.totalWorst) + "ms"
+    let frames = Number(state.dawn.trace.frames)
+    log info(
+        "timed the GPU frames of a run",
+        frames: state.dawn.trace.frames,
+        prepMeanMilliseconds: state.dawn.trace.prepTotal / frames,
+        prepWorstMilliseconds: state.dawn.trace.prepWorst,
+        totalMeanMilliseconds: state.dawn.trace.totalTotal / frames,
+        totalWorstMilliseconds: state.dawn.trace.totalWorst
     )
-    return
 }

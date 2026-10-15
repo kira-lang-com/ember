@@ -24,12 +24,22 @@ public class RenderFrame {
         return renderBackendFor(self.backend, self.backendContext)
     }
 
+    // The graphics the frame is drawn with, as `Graphics.frame()` made it:
+    // what a host's frame hook creates its textures and buffers on.
+    function graphics() -> Graphics {
+        return Graphics {
+            userData: self.userData,
+            backend: self.backend,
+            backendContext: self.backendContext
+        }
+    }
+
     // Nanoseconds on a monotonic clock — what a host times its own frame with.
     //
     // Asked of the frame for the same reason `framesInFlight` is: reading a
     // clock is a platform call, and a host that named one platform's clock
     // directly would refuse to start on every other.
-    function monotonicNanoseconds() -> U64 {
+    function monotonicNanoseconds() -> Number {
         return self.renderBackend().monotonicNanoseconds()
     }
 
@@ -39,22 +49,22 @@ public class RenderFrame {
     // Asked of the frame rather than imported from a backend's own module, so a
     // caller that only wants the number does not have to name the backend that
     // happens to answer it.
-    function framesInFlight() -> Int {
+    function framesInFlight() -> Number {
         return self.renderBackend().framesInFlight()
     }
 
     // The live viewport in logical points — what a UI lays out and hit-tests
     // against. Both backends answer; neither is named at the call site.
-    function viewportWidth() -> Float {
+    function viewportWidth() -> Number {
         return self.renderBackend().viewportWidth()
     }
 
-    function viewportHeight() -> Float {
+    function viewportHeight() -> Number {
         return self.renderBackend().viewportHeight()
     }
 
-    // EMViewport edges reserved for system controls, in logical points.
-    function safeAreaInsets() -> EMViewportInsets {
+    // Viewport edges reserved for system controls, in logical points.
+    function safeAreaInsets() -> ViewportInsets {
         return self.renderBackend().safeAreaInsets()
     }
 
@@ -63,15 +73,15 @@ public class RenderFrame {
     // A viewport in points already divides one by the other, so a caller that
     // wants to divide them differently — anything rendering at a scale other
     // than the display's — needs both numbers rather than their quotient.
-    function drawableWidth() -> Int {
+    function drawableWidth() -> Number {
         return self.renderBackend().contextWidth()
     }
 
-    function drawableHeight() -> Int {
+    function drawableHeight() -> Number {
         return self.renderBackend().contextHeight()
     }
 
-    function backingScale() -> Float {
+    function backingScale() -> Number {
         return self.renderBackend().backingScale()
     }
 
@@ -82,29 +92,26 @@ public class RenderFrame {
     // Read rather than remembered — a user can leave fullscreen through the
     // window manager without the program hearing about it — so this is also the
     // way to find out whether a `setWindowMode` request was honored.
-    function windowMode() -> EMWindowMode {
+    function windowMode() -> WindowMode {
         return self.renderBackend().windowMode()
     }
 
-    function setWindowMode(mode: borrow EMWindowMode) -> Void {
+    function setWindowMode(mode: borrow WindowMode) -> Void {
         self.renderBackend().setWindowMode(mode)
-        return
     }
 
     function minimizeWindow() -> Void {
         self.renderBackend().minimizeWindow()
-        return
     }
 
     function toggleMaximizeWindow() -> Void {
         self.renderBackend().toggleMaximizeWindow()
-        return
     }
 
     // What the frame BEFORE this one cost. An application lays its HUD out
     // while the frame the HUD will appear in is still being built, so the last
     // completed frame is what there is to report.
-    function statistics() -> EMFrameStatistics {
+    function statistics() -> FrameStatistics {
         return self.renderBackend().statistics()
     }
 
@@ -130,7 +137,7 @@ public class RenderFrame {
         self.renderPassActive = self.renderBackend().beginRenderPass(self)
 
         if (!self.renderPassActive) {
-            graphicsFail(.Frame, "Ember skipped render pass because the backend could not begin it")
+            log fault("skipped render pass because the backend could not begin it")
         }
 
         // The pass encoder has a single owner: the caller that draws with it,
@@ -145,68 +152,34 @@ public class RenderFrame {
             self.renderBackend().endPassAndCommit(self)
         }
         self.renderPassActive = false
-        return
     }
 
     // Run a two-axis separable blur over `mix(source, secondSource, blend)`, one
-    // dispatch per axis.
-    //
-    // Both kernels produce two levels at once — near and far read the same
-    // input and write their own target — so the pyramid costs one dispatch per
-    // axis rather than one per level. The horizontal half writes the two temps;
-    // the vertical half reads them and writes the two outputs.
-    //
-    // The horizontal half reads two images and blends them as it filters. A blur
-    // is linear, so filtering the blend costs what filtering one image costs and
-    // saves the caller compositing a crossfade into a third full-resolution
-    // texture the filter would then read at a quarter of that resolution. One
-    // image is the same call with the texture passed twice and `blend` 0.
-    //
-    // Textures rather than ids, because the two backends bind different things:
-    // Metal binds the texture object, while Dawn/Vulkan bind a *view* — a sampled one
-    // for what the kernel reads and a storage-image one for what it writes, and
-    // neither can be recovered from an image id.
-    function dispatchTextureComputePair(
-        horizontalPipeline: Int,
-        verticalPipeline: Int,
-        source: borrow EMGraphicsTexture,
-        secondSource: borrow EMGraphicsTexture,
-        blend: Float,
-        tempNear: borrow EMGraphicsTexture,
-        tempFar: borrow EMGraphicsTexture,
-        outputNear: borrow EMGraphicsTexture,
-        outputFar: borrow EMGraphicsTexture,
-        // The kernels sample through this rather than declaring a sampler
-        // inline, which is not something a compute stage can express.
-        sampler: borrow EMGraphicsSampler,
-        width: Int,
-        height: Int,
-    ) {
-        self.renderBackend().dispatchTextureComputePair(
-            horizontalPipeline,
-            verticalPipeline,
-            source,
-            secondSource,
-            blend,
-            tempNear,
-            tempFar,
-            outputNear,
-            outputFar,
-            sampler,
-            width,
-            height,
-        )
-        return
+    // dispatch per axis, encoded on this frame's command buffer. See
+    // `TextureComputePair` for what each half reads and writes.
+    function dispatchTextureComputePair(pair: borrow TextureComputePair) {
+        self.renderBackend().dispatchTextureComputePair(pair)
     }
 
     // One dispatch over buffers, encoded on this frame's command buffer.
     //
-    // On the frame rather than on `EMGraphics` when the step belongs to a frame's
+    // On the frame rather than on `Graphics` when the step belongs to a frame's
     // ordering: a step that has to land between two passes needs the frame, and
     // the frame is what a caller holds at that point.
-    function dispatchComputeBuffers(pipeline: Int, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
-        self.renderBackend().dispatchComputeBuffers(pipeline, bufferIds, threadCount, threadsPerGroup)
-        return
+    function dispatchComputeBuffers(
+        pipeline: ComputePipelineId,
+        bufferIds: borrow[BufferId],
+        threadCount: UN32,
+        threadsPerGroup: UN32
+    ) {
+        self.renderBackend().dispatchComputeBuffers(
+            BufferDispatch {
+                pipeline: pipeline,
+                bufferIds: bufferIds,
+                threadCount: threadCount,
+                threadsPerGroup: threadsPerGroup
+            }
+        )
     }
 
     // The same dispatch with this pass's DEPTH attachment bound ahead of the
@@ -216,21 +189,27 @@ public class RenderFrame {
     // The texture comes from the frame's own attachments rather than from an
     // argument, because the depth such a kernel wants is the depth the pass
     // wrote, and a caller passing it separately can only get that wrong.
-    function dispatchDepthComputeBuffers(pipeline: Int, bufferIds: borrow [U32], threadCount: Int, threadsPerGroup: Int) {
+    function dispatchDepthComputeBuffers(
+        pipeline: ComputePipelineId,
+        bufferIds: borrow[BufferId],
+        threadCount: UN32,
+        threadsPerGroup: UN32
+    ) {
         self.renderBackend().dispatchDepthComputeBuffers(
-            pipeline,
             self.attachments.depth.texture,
-            bufferIds,
-            threadCount,
-            threadsPerGroup,
+            BufferDispatch {
+                pipeline: pipeline,
+                bufferIds: bufferIds,
+                threadCount: threadCount,
+                threadsPerGroup: threadsPerGroup
+            }
         )
-        return
     }
 
     // One 32-bit word out of a buffer a kernel dispatched on this frame has
-    // written — what a gate checks after stepping. A backend that cannot read a
-    // buffer back answers 0 and says so.
-    function readStorageU32(buffer: borrow EMGraphicsBuffer, index: Int) -> U32 {
+    // written — what a gate checks after stepping — or why it could not be
+    // read.
+    function readStorageU32(buffer: borrow GraphicsBuffer, index: UN32) -> BufferReadResult {
         return self.renderBackend().readBufferU32(buffer, index)
     }
 
@@ -239,9 +218,8 @@ public class RenderFrame {
     // Called on the outputs of `dispatchTextureComputePair`, which are the
     // textures it exists to repair. What that costs is the backend's answer:
     // a blit on Metal, nothing under GL, and each says so in its own body.
-    function optimizeTexture(textureId: Int) {
+    function optimizeTexture(textureId: UN32) {
         self.renderBackend().optimizeTexture(textureId)
-        return
     }
 
     function renderPass(descriptor: borrow RenderPassDescriptor, body: (RenderEncoder) -> Void) {
@@ -249,40 +227,17 @@ public class RenderFrame {
         let callbackEncoder = encoder
         body(move callbackEncoder)
         endPass()
-        return
     }
 
-    function beginPass(clearColor: borrow Color) -> RenderEncoder {
+    function beginPass(clearColor: borrow RGBAColor) -> RenderEncoder {
         return beginRenderPass(clearSwapchainRenderPass(clearColor))
     }
 
-    function pass(clearColor: borrow Color, body: (RenderEncoder) -> Void) {
+    function pass(clearColor: borrow RGBAColor, body: (RenderEncoder) -> Void) {
         renderPass(clearSwapchainRenderPass(clearColor), move body)
-        return
     }
 
     function requestQuit() {
         self.shouldQuit = true
-        return
     }
-}
-
-public function drawPass(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow EMGraphicsBuffer, vertexCount: Int) {
-    var encoder = frame.beginRenderPass(descriptor)
-    encoder.setPipeline(pipeline)
-    encoder.setVertexBuffer(vertexBuffer)
-    encoder.draw(vertexCount)
-    frame.endPass()
-    return
-}
-
-public function drawPassWithBindGroups(frame: borrow mut RenderFrame, descriptor: borrow RenderPassDescriptor, pipeline: borrow RenderPipeline, vertexBuffer: borrow EMGraphicsBuffer, bindGroup0: borrow BindGroup, bindGroup1: borrow BindGroup, vertexCount: Int) {
-    var encoder = frame.beginRenderPass(descriptor)
-    encoder.setPipeline(pipeline)
-    encoder.setVertexBuffer(vertexBuffer)
-    encoder.setBindGroup(0, bindGroup0)
-    encoder.setBindGroup(1, bindGroup1)
-    encoder.draw(vertexCount)
-    frame.endPass()
-    return
 }

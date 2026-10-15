@@ -1,0 +1,10 @@
+import Foundation
+
+// `value` rounded up to the next multiple of `alignment`.
+//
+// Kira's `/` divides exactly, so the integer idiom `(value + a - 1) / a * a`
+// rounds nothing: it hands back `value + a - 1`. A 640-pixel capture row came
+// out 2815 bytes that way, where WebGPU requires a multiple of 256.
+public function alignedUp(value: Number, alignment: Number) -> Number {
+    return ceil(value / alignment) * alignment
+}

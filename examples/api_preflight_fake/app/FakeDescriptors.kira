@@ -109,26 +109,26 @@ struct FakePrimitiveDescriptor {
 struct FakeBufferDescriptor {
     var label: String = ""
     var usage: FakeBufferUsage = FakeBufferUsage.vertex
-    var floatData: [F32] = []
-    var uint16Data: [U16] = []
-    var uint32Data: [U32] = []
-    var stride: Int = 0
+    var floatData: [Number] = []
+    var uint16Data: [UN16] = []
+    var uint32Data: [UN32] = []
+    var stride: Number = 0
 }
 
 struct FakeVertexAttribute {
     var name: String = ""
-    var location: Int = 0
+    var location: Number = 0
     var format: FakeVertexFormat = FakeVertexFormat.float2
-    var offset: Int = 0
+    var offset: Number = 0
 }
 
 struct FakeVertexLayout {
-    var stride: Int = 0
+    var stride: Number = 0
     var attributes: [FakeVertexAttribute] = []
 }
 
 struct FakeVertexLayoutFixed {
-    var stride: Int = 0
+    var stride: Number = 0
     var attribute0: FakeVertexAttribute = FakeVertexAttribute {}
     var hasAttribute0: Bool = false
     var attribute1: FakeVertexAttribute = FakeVertexAttribute {}
@@ -141,11 +141,11 @@ struct FakeVertexLayoutFixed {
 
 struct FakeTextureDescriptor {
     var label: String = ""
-    var width: Int = 1
-    var height: Int = 1
+    var width: Number = 1
+    var height: Number = 1
     var format: FakeTextureFormat = FakeTextureFormat.rgba8Unorm
     var usage: FakeTextureUsage = FakeTextureUsage.sampled
-    var sampleCount: Int = 1
+    var sampleCount: Number = 1
     var storageMode: FakeAttachmentStorageMode = FakeAttachmentStorageMode.persistent
 }
 
@@ -197,11 +197,6 @@ struct FakeKslShaderDescriptor {
     var directory: String = "generated/shaders"
 }
 
-function fakeTriangleVertices() -> [F32] {
-    return [
-        0.0, 0.55,
-        0.55, -0.55,
-        -0.55, -0.55
-    ]
+function fakeTriangleVertices() -> [Number] {
+    return[0.0, 0.55, 0.55, -0.55, -0.55, -0.55]
 }
-

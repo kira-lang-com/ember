@@ -1,6 +1,11 @@
-public struct EMViewport {
-    var x: Int = 0
-    var y: Int = 0
-    var width: Int = 0
-    var height: Int = 0
+// A rectangle of the drawable, in physical pixels.
+//
+// `Number` because an extent is a measure, not an index: a caller rounds it to
+// a whole pixel where it draws, and truncating it here would lose the fraction
+// a layout computed.
+public struct Viewport {
+    var x: Number = 0
+    var y: Number = 0
+    var width: UNumber = 0
+    var height: UNumber = 0
 }

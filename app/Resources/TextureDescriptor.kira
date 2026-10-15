@@ -1,10 +1,10 @@
 public struct TextureDescriptor {
     var label: String = ""
-    var width: Int = 1
-    var height: Int = 1
+    var width: UN32 = 1
+    var height: UN32 = 1
     var format: TextureFormat = .Rgba8Unorm
     var usage: TextureUsage = .Sampled
-    var sampleCount: Int = 1
+    var sampleCount: UN8 = 1
     var storage: AttachmentStorage = .Persistent
 }
 

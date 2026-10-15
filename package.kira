@@ -1,66 +1,13 @@
-Package Ember {
-    let version = "0.1.0"
-    let kira = "0.1.0"
-    let kind = PackageKind.Library
-    let moduleRoot = "Ember"
-    let defaults = Defaults { executionMode: Backend.Llvm, buildTarget: BuildTarget.Host }
-    let allowThinFfiShim = true
-    let nativeLibraries = [
+construct Ember extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .Library
+    let nativeLibraries: [NativeLibrary] = [
         NativeLibrary {
             name: "kira_uikit",
             availability: Availability.Optional,
             nativeTargets: [
                 NativeTarget { triple: "aarch64-ios-none", frameworks: ["UIKit"] },
                 NativeTarget { triple: "aarch64-ios-sim", frameworks: ["UIKit"] }
-            ]
-        },
-        NativeLibrary {
-            // Memory two processes can both render from and sample.
-            //
-            // Dawn imports shared memory and cannot allocate any, so the buffer
-            // comes from the platform first -- a dmabuf from GBM on Linux, a
-            // DXGI resource on Windows, an IOSurface on macOS -- and is handed
-            // to Dawn on both sides afterwards.
-            //
-            // Nothing it needs is linked. GBM and Dawn are both opened by name
-            // at first use, so a build runs on a machine that has neither and
-            // answers "cannot share" instead of failing to start.
-            name: "kira_shared_surface",
-            linkMode: LinkMode.Static,
-            headers: Headers { entrypoint: "NativeLibs/SharedSurface/kira_shared_surface.h", includeDirs: ["NativeLibs/SharedSurface", "NativeLibs/Dawn/x86_64-linux-gnu/include", "NativeLibs/Dawn/aarch64-macos-none/include", "NativeLibs/Vulkan/include"] },
-            sources: [
-                "NativeLibs/SharedSurface/kira_shared_surface.c",
-                "NativeLibs/SharedSurface/kira_shared_texture.c"
-            ],
-            autobind: Autobind { module: "sharedsurface", headers: ["NativeLibs/SharedSurface/kira_shared_surface.h"], mode: AutobindMode.AllPublic },
-            nativeTargets: [
-                NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["dl", "vulkan"] },
-                NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["dl", "vulkan"] },
-                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["kernel32"] },
-                NativeTarget { triple: "aarch64-macos-none" },
-                NativeTarget { triple: "x86_64-macos-none" },
-                NativeTarget { triple: "aarch64-ios-none" },
-                NativeTarget { triple: "aarch64-ios-sim" }
-            ]
-        },
-        NativeLibrary {
-            // The backend-neutral C the library needs and Kira cannot express:
-            // a monotonic clock, and the weak live-reload hooks. This was
-            // It remains backend-neutral because every renderer needs the same
-            // clock and live-reload hooks.
-            name: "graphics_support",
-            linkMode: LinkMode.Static,
-            headers: Headers { entrypoint: "NativeLibs/Support/kira_graphics_support.h", includeDirs: ["NativeLibs/Support"] },
-            sources: ["NativeLibs/Support/kira_graphics_support.c"],
-            nativeTargets: [
-                NativeTarget { triple: "x86_64-linux-gnu" },
-                NativeTarget { triple: "aarch64-linux-gnu" },
-                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["kernel32"] },
-                NativeTarget { triple: "aarch64-macos-none" },
-                NativeTarget { triple: "x86_64-macos-none" },
-                NativeTarget { triple: "aarch64-ios-none" },
-                NativeTarget { triple: "aarch64-ios-sim" },
-                NativeTarget { triple: "wasm32-emscripten-unknown" }
             ]
         },
         NativeLibrary {
@@ -80,7 +27,10 @@ Package Ember {
             name: "waylandprotocols",
             linkMode: LinkMode.Static,
             availability: Availability.Optional,
-            headers: Headers { entrypoint: "NativeLibs/Wayland/kira_wayland.h", includeDirs: ["NativeLibs/Wayland"] },
+            headers: Headers {
+                entrypoint: "NativeLibs/Wayland/kira_wayland.h",
+                includeDirs: ["NativeLibs/Wayland"]
+            },
             sources: [
                 "NativeLibs/Wayland/kira_wayland.c",
                 "NativeLibs/Wayland/xdg-shell-protocol.c",
@@ -89,11 +39,15 @@ Package Ember {
                 "NativeLibs/Wayland/tablet-unstable-v2-protocol.c",
                 "NativeLibs/Wayland/viewporter-protocol.c"
             ],
-            autobind: Autobind { module: "wayland", headers: ["NativeLibs/Wayland/kira_wayland.h"], mode: AutobindMode.AllPublic },
+            autobind: Autobind {
+                module: "wayland",
+                headers: ["NativeLibs/Wayland/kira_wayland.h"],
+                mode: AutobindMode.AllPublic
+            },
             nativeTargets: [
                 NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["wayland-client"] },
                 NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["wayland-client"] }
-            ],
+            ]
         },
         NativeLibrary {
             // Dawn, consumed as the binaries kira-lang-com/dawn publishes
@@ -120,20 +74,40 @@ Package Ember {
             // `emscripten_webgpu_get_device`, the one declaration in the header
             // that no desktop build of Dawn exports. Binding it would put an
             // unresolved symbol on every Windows link line.
-            headers: Headers { entrypoint: "NativeLibs/Dawn/x86_64-linux-gnu/include/webgpu/webgpu.h", includeDirs: ["NativeLibs/Dawn/x86_64-linux-gnu/include"], defines: ["WGPU_SKIP_PROCS"] },
-            autobind: Autobind { module: "webgpu", headers: ["NativeLibs/Dawn/x86_64-linux-gnu/include/dawn/webgpu.h"], mode: AutobindMode.AllPublic },
+            headers: Headers {
+                entrypoint: "NativeLibs/Dawn/x86_64-linux-gnu/include/webgpu/webgpu.h",
+                includeDirs: ["NativeLibs/Dawn/x86_64-linux-gnu/include"],
+                defines: ["WGPU_SKIP_PROCS"]
+            },
+            autobind: Autobind {
+                module: "webgpu",
+                headers: ["NativeLibs/Dawn/x86_64-linux-gnu/include/dawn/webgpu.h"],
+                mode: AutobindMode.AllPublic
+            },
             nativeTargets: [
                 // `runtimeFiles` is the payload's `bin/`: `webgpu_dawn.dll`
                 // beside the executable so the loader finds it, and
                 // `dxcompiler.dll`/`dxil.dll` beside that because Dawn opens the
                 // first by name when it compiles a shader for D3D12.
-                NativeTarget { triple: "x86_64-windows-msvc", dynamicLib: "NativeLibs/Dawn/x86_64-windows-msvc/lib/webgpu_dawn.lib", runtimeFiles: ["NativeLibs/Dawn/x86_64-windows-msvc/bin"] },
+                NativeTarget {
+                    triple: "x86_64-windows-msvc",
+                    dynamicLib: "NativeLibs/Dawn/x86_64-windows-msvc/lib/webgpu_dawn.lib",
+                    runtimeFiles: ["NativeLibs/Dawn/x86_64-windows-msvc/bin"]
+                },
                 // The Linux slice is one shared object and no loader-name
                 // sidecars: Dawn reaches the GPU through the Vulkan loader,
                 // which the system provides.
-                NativeTarget { triple: "x86_64-linux-gnu", dynamicLib: "NativeLibs/Dawn/x86_64-linux-gnu/lib/libwebgpu_dawn.so", runtimeFiles: ["NativeLibs/Dawn/x86_64-linux-gnu/lib"] },
+                NativeTarget {
+                    triple: "x86_64-linux-gnu",
+                    dynamicLib: "NativeLibs/Dawn/x86_64-linux-gnu/lib/libwebgpu_dawn.so",
+                    runtimeFiles: ["NativeLibs/Dawn/x86_64-linux-gnu/lib"]
+                },
                 // The same slice for 64-bit Arm Linux, from the same Dawn release.
-                NativeTarget { triple: "aarch64-linux-gnu", dynamicLib: "NativeLibs/Dawn/aarch64-linux-gnu/lib/libwebgpu_dawn.so", runtimeFiles: ["NativeLibs/Dawn/aarch64-linux-gnu/lib"] },
+                NativeTarget {
+                    triple: "aarch64-linux-gnu",
+                    dynamicLib: "NativeLibs/Dawn/aarch64-linux-gnu/lib/libwebgpu_dawn.so",
+                    runtimeFiles: ["NativeLibs/Dawn/aarch64-linux-gnu/lib"]
+                },
                 // Apple publishes Dawn only as a static archive — no dylib in
                 // either the desktop tarball or the xcframework — so the macOS
                 // slice hands the linker `libwebgpu_dawn.a` directly (ld links
@@ -141,14 +115,32 @@ Package Ember {
                 // at run time). Dawn's Metal backend pulls in the graphics and
                 // surface frameworks below; the C++ runtime it is built against
                 // comes in through `c++`.
-                NativeTarget { triple: "aarch64-macos-none", dynamicLib: "NativeLibs/Dawn/aarch64-macos-none/lib/libwebgpu_dawn.a", frameworks: ["Metal", "QuartzCore", "Foundation", "IOKit", "IOSurface", "CoreFoundation", "CoreGraphics"], systemLibs: ["c++", "objc"] },
+                NativeTarget {
+                    triple: "aarch64-macos-none",
+                    dynamicLib: "NativeLibs/Dawn/aarch64-macos-none/lib/libwebgpu_dawn.a",
+                    frameworks: [
+                        "Metal",
+                        "QuartzCore",
+                        "Foundation",
+                        "IOKit",
+                        "IOSurface",
+                        "CoreFoundation",
+                        "CoreGraphics"
+                    ],
+                    systemLibs: ["c++", "objc"]
+                },
                 // The Web, through emscripten's own Dawn port rather than a
                 // shipped binary: `--use-port=emdawnwebgpu` builds WebGPU into
                 // the module against the browser's implementation, so there is
                 // no library to name. This is the backend the browser sandbox
                 // resolves to, and the only one wasm32 has.
-                NativeTarget { triple: "wasm32-emscripten-unknown", dynamicLib: "", compilerFlags: ["--use-port=emdawnwebgpu"], linkerFlags: ["--use-port=emdawnwebgpu"] }
-            ],
+                NativeTarget {
+                    triple: "wasm32-emscripten-unknown",
+                    dynamicLib: "",
+                    compilerFlags: ["--use-port=emdawnwebgpu"],
+                    linkerFlags: ["--use-port=emdawnwebgpu"]
+                }
+            ]
         },
         NativeLibrary {
             // The Vulkan loader, for the from-scratch Vulkan backend that owns
@@ -187,29 +179,24 @@ Package Ember {
             name: "vulkan",
             linkMode: LinkMode.Dynamic,
             availability: Availability.Optional,
-            headers: Headers { entrypoint: "NativeLibs/Vulkan/include/vulkan/vulkan_core.h", includeDirs: ["NativeLibs/Vulkan/include"] },
-            autobind: Autobind { module: "vulkan", headers: ["NativeLibs/Vulkan/include/vulkan/vulkan_core.h"], mode: AutobindMode.AllPublic },
+            headers: Headers {
+                entrypoint: "NativeLibs/Vulkan/include/vulkan/vulkan_core.h",
+                includeDirs: ["NativeLibs/Vulkan/include"]
+            },
+            autobind: Autobind {
+                module: "vulkan",
+                headers: ["NativeLibs/Vulkan/include/vulkan/vulkan_core.h"],
+                mode: AutobindMode.AllPublic
+            },
+            // Tessera's loader is the one C library a Tessera program links. Its
+            // SDK carries no C, so the link finds it in the build's sysroot.
             nativeTargets: [
                 NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["vulkan"] },
                 NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["vulkan"] },
+                NativeTarget { triple: "x86_64-unknown-tessera", systemLibs: ["vulkan"] },
+                NativeTarget { triple: "aarch64-unknown-tessera", systemLibs: ["vulkan"] },
                 NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["vulkan-1"] }
-            ],
-        },
-        NativeLibrary {
-            // EMPlatform surface creation is the one part of Vulkan that cannot
-            // use the neutral core header: Win32 needs HWND/HINSTANCE and
-            // Wayland needs wl_display/wl_surface. Keep that ABI in one tiny C
-            // seam while the renderer uses the generated core declarations.
-            name: "kira_vulkan_surface",
-            linkMode: LinkMode.Static,
-            availability: Availability.Optional,
-            headers: Headers { entrypoint: "NativeLibs/Vulkan/kira_vulkan_surface.h", includeDirs: ["NativeLibs/Vulkan/include", "NativeLibs/Vulkan"] },
-            sources: ["NativeLibs/Vulkan/kira_vulkan_surface.c"],
-            nativeTargets: [
-                NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["vulkan", "wayland-client"] },
-                NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["vulkan", "wayland-client"] },
-                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["vulkan-1"] }
-            ],
+            ]
         },
         NativeLibrary {
             // The window the Dawn backend draws into. Dawn renders and does not
@@ -230,9 +217,7 @@ Package Ember {
             name: "user32",
             linkMode: LinkMode.Dynamic,
             availability: Availability.Optional,
-            nativeTargets: [
-                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["user32"] }
-            ],
+            nativeTargets: [NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["user32"] }]
         },
         NativeLibrary {
             name: "kernel32",
@@ -240,7 +225,7 @@ Package Ember {
             availability: Availability.Optional,
             nativeTargets: [
                 NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["kernel32"] }
-            ],
+            ]
         },
         NativeLibrary {
             // The desktop compositor. A window asks it for the backdrop it keeps
@@ -250,9 +235,7 @@ Package Ember {
             name: "dwmapi",
             linkMode: LinkMode.Dynamic,
             availability: Availability.Optional,
-            nativeTargets: [
-                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["dwmapi"] }
-            ],
+            nativeTargets: [NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["dwmapi"] }]
         },
         NativeLibrary {
             // Kira's own runtime archive, already on every native link line.
@@ -274,9 +257,11 @@ Package Ember {
                 NativeTarget { triple: "aarch64-ios-sim", dynamicLib: "" },
                 NativeTarget { triple: "x86_64-linux-gnu", dynamicLib: "" },
                 NativeTarget { triple: "aarch64-linux-gnu", dynamicLib: "" },
+                NativeTarget { triple: "x86_64-unknown-tessera", dynamicLib: "" },
+                NativeTarget { triple: "aarch64-unknown-tessera", dynamicLib: "" },
                 NativeTarget { triple: "x86_64-windows-msvc", dynamicLib: "" },
                 NativeTarget { triple: "wasm32-emscripten-unknown", dynamicLib: "" }
-            ],
+            ]
         },
         NativeLibrary {
             // Apple's own frameworks, so a target row exists only where they do.
@@ -291,11 +276,27 @@ Package Ember {
             linkMode: LinkMode.Dynamic,
             availability: Availability.Optional,
             nativeTargets: [
-                NativeTarget { triple: "aarch64-macos-none", frameworks: ["Foundation", "QuartzCore", "Metal", "AppKit"], systemLibs: ["objc"] },
-                NativeTarget { triple: "aarch64-ios-none", frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit"], systemLibs: ["objc"] },
-                NativeTarget { triple: "aarch64-ios-sim", frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit"], systemLibs: ["objc"] },
-                NativeTarget { triple: "wasm32-emscripten-unknown", dynamicLib: "", linkerFlags: ["-sERROR_ON_UNDEFINED_SYMBOLS=0"] }
-            ],
+                NativeTarget {
+                    triple: "aarch64-macos-none",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "AppKit", "IOSurface"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "aarch64-ios-none",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit", "IOSurface"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "aarch64-ios-sim",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit", "IOSurface"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "wasm32-emscripten-unknown",
+                    dynamicLib: "",
+                    linkerFlags: ["-sERROR_ON_UNDEFINED_SYMBOLS=0"]
+                }
+            ]
         }
     ]
 }

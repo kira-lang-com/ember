@@ -66,6 +66,8 @@ void *kira_wayland_display_bind_cursor_shape_manager(void *display);
 // configure; until that event is read, what a caller asked for is what it got,
 // and reporting that is what lets the client area be a number rather than zero.
 void kira_wayland_surface_note_size(void *surface, int32_t width, int32_t height);
+void kira_wayland_surface_set_scale(void *surface, int32_t scale);
+int32_t kira_wayland_surface_scale(void *surface);
 int32_t kira_wayland_surface_width(void *surface);
 int32_t kira_wayland_surface_height(void *surface);
 

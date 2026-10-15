@@ -1,0 +1,47 @@
+// What a Vulkan call answered.
+//
+// `VkResult` crosses as a C `int`; it is decoded here, once, where each call
+// returns, so everything above compares and logs cases rather than codes. A
+// code this list does not name keeps its value in `Unlisted`, because drivers
+// and extensions add codes this backend has no reason to know.
+public enum VulkanResult {
+    Success
+    NotReady
+    Timeout
+    Incomplete
+    Suboptimal
+    OutOfHostMemory
+    OutOfDeviceMemory
+    InitializationFailed
+    DeviceLost
+    ExtensionNotPresent
+    FeatureNotPresent
+    IncompatibleDriver
+    FormatNotSupported
+    SurfaceLost
+    OutOfDate
+    Unlisted(I32)
+}
+
+// The case a `VkResult` code names, from the Vulkan 1.2 specification's
+// `VkResult` table.
+public function vulkanResultOf(code: I32) -> VulkanResult {
+    return match code {
+        0 -> .Success
+        1 -> .NotReady
+        2 -> .Timeout
+        5 -> .Incomplete
+        1000001003 -> .Suboptimal
+            - 1 -> .OutOfHostMemory
+            - 2 -> .OutOfDeviceMemory
+            - 3 -> .InitializationFailed
+            - 4 -> .DeviceLost
+            - 7 -> .ExtensionNotPresent
+            - 8 -> .FeatureNotPresent
+            - 9 -> .IncompatibleDriver
+            - 11 -> .FormatNotSupported
+            - 1000000000 -> .SurfaceLost
+            - 1000001004 -> .OutOfDate
+        else -> .Unlisted(code)
+    }
+}

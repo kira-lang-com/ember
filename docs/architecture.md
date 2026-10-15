@@ -6,7 +6,7 @@ Ember is organized around a stable public facade, explicit descriptor data, a ru
 
 `app/Public/`
 
-- user-facing API objects and handles such as `EMGraphicsApplication`, `EMGraphics`, `RenderFrame`, `RenderEncoder`, `EMGraphicsBuffer`, `EMGraphicsTexture`, `EMGraphicsShader`, and `RenderPipeline`
+- user-facing API objects and handles such as `GraphicsApplication`, `Graphics`, `RenderFrame`, `RenderEncoder`, `GraphicsBuffer`, `GraphicsTexture`, `GraphicsShader`, and `RenderPipeline`
 - typed enum values for formats, usage, topology, blending, and depth
 - lifecycle callback surface that examples import directly through `Ember`
 
@@ -51,7 +51,10 @@ The implementation pass follows `docs/api-preflight-report.md` directly. The imp
 - descriptor values are typed enums; backend wire codes stay at the FFI edge
 - typed empty array defaults are not reliable, so descriptor arrays are always explicitly populated
 - array-of-struct literals require commas between elements
-- `[Int]` is used for public index data instead of `[U16]` or `[U32]`
+- the public surface uses `Number`, `UNumber` and the sized aliases: vertex and
+  uniform data are `[Number]`, index and storage words are `[UN32]`, pixels are
+  `[UN8]`, and each backend narrows them to the device's width when it writes
+  the bytes
 - trailing render-pass callbacks are viable only when captured state members are first hoisted into local aliases
 
 The local-alias rule is the public guidance today:
@@ -122,9 +125,9 @@ The context is a small raw heap block threaded as a `RawPtr` handle. It owns the
 `MTLDevice`/`MTLCommandQueue`, the current color target (an offscreen `MTLTexture`
 for headless tests, or a `CAMetalLayer` drawable on screen), the in-flight command
 buffer + encoder, an optional `Depth32Float` target + depth-stencil state, and a
-small id→pointer registry that maps the public U32 resource handles to live Metal
+small id→pointer registry that maps the public `UN32` resource ids to live Metal
 objects. Resource creation and draw encoding are dispatched by backend from the
-public `EMGraphics`/`RenderEncoder` facade; the encoder selects Metal mode by the
+public `Graphics`/`RenderEncoder` facade; the encoder selects Metal mode by the
 presence of a non-null context handle.
 
 Implemented and verified (via the `tests/metal_kik` Test harness, which renders

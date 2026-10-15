@@ -3,35 +3,25 @@
 //
 // These were environment variables read once at init — KIRA_GRAPHICS_CAPTURE_FRAME,
 // KIRA_GRAPHICS_CAPTURE_AT, KIRA_GRAPHICS_QUIT_AFTER_FRAMES, KIRA_GRAPHICS_RESIZE_SWEEP,
-// KIRA_GRAPHICS_LOG_FPS, and the KIRA_UI_*_SCRIPT family. A caller that builds one
+// KIRA_GRAPHICS_LOG_FPS, KIRA_GRAPHICS_SCALE, and the KIRA_UI_*_SCRIPT family. A caller that builds one
 // hands the run its settings directly; a run given none reads the environment as
 // before, so a driven run and an environment-driven run resolve to the same knobs.
 public struct HarnessConfig {
-    // Whether a caller filled this in. A default-constructed value is the
-    // "nothing given" case that leaves the environment as the source, which is
-    // what keeps every existing environment-driven run working unchanged.
-    var configured: Bool = false
-    var quitAfterFrames: Int = 0
-    var resizeSweep: Int = 0
+    var quitAfterFrames: UNumber = 0
+    var resizeSweep: UNumber = 0
     var logFps: Bool = false
-    var capturePath: String = ""
-    var captureAtFrame: Int = 0
-    var clickScript: [Int] = []
-    var scrollScript: [Int] = []
-    var dragScript: [Int] = []
-    var keyScript: [Int] = []
-    var textScript: [Int] = []
+    // The pixels the window draws for each point, where the run fixes them
+    // rather than the display: 3 draws a phone's 3x screen on a 1x display.
+    // Zero leaves them to the display.
+    var scale: UNumber = 0
+    var capture: FrameCapture? = .None
+    var script: InputScript = InputScript()
 }
 
-// A harness that reads one frame back to `path` and quits after `quitAfterFrames`.
-//
-// `atFrame` is which frame to capture; zero takes the last one drawn — the frame
-// the run quits after — so a settle-then-shoot needs only a frame count and a path.
-public function harnessCapture(path: String, atFrame: Int, quitAfterFrames: Int) -> HarnessConfig {
-    return HarnessConfig {
-        configured: true,
-        capturePath: path,
-        captureAtFrame: atFrame,
-        quitAfterFrames: quitAfterFrames
-    }
+// A frame to read back and the file to write it to. A frame left unset takes
+// the last one drawn — the frame the run quits after — so a settle-then-shoot
+// needs only a frame count and a path.
+public struct FrameCapture {
+    var path: String = ""
+    var frame: UNumber? = .None
 }

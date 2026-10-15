@@ -1,0 +1,9 @@
+// Closing a file descriptor, which only a Linux kernel hands the backend: the
+// dma-buf an exported texture's memory is. The call is made to the kernel
+// directly, so this file takes part only in a build for a platform with that
+// kernel behind it (KLF section 27.8), and `closeDescriptor!` reaches it there.
+
+import Foundation on linux, tessera
+
+@FFI.Syscall { name: close }
+function vulkanCloseDescriptor(descriptor: Int) -> Int

@@ -14,5 +14,4 @@ import Ember
 @Main
 function main() {
     print("api_preflight_fake")
-    return
 }

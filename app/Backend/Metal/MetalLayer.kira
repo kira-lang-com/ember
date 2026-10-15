@@ -1,0 +1,155 @@
+import Foundation
+import Heap
+
+// The on-screen surface: a CAMetalLayer attached to the host's view, and the
+// stand-in target a frame draws into while the window vends no drawable.
+//
+// Split from MetalContext.kira, which owns the context block and its offscreen
+// targets.
+
+// A CAMetalLayer on `device` that Core Animation sizes with its view, readable
+// back when `readable`.
+function metalNewViewLayer(device: RawPtr, readable: Bool) -> RawPtr {
+    let layerClass = metalObjcGetClass("CAMetalLayer")
+    let layer: RawPtr = metalMsgSend(metalMsgSend(layerClass, metalSel("alloc")), metalSel("init"))
+    metalMsgSend(layer, metalSel("setDevice:"), device)
+    metalMsgSend(layer, metalSel("setPixelFormat:"), MetalRegistry.pixelFormatBGRA8Unorm)
+    // Let Core Animation resize the layer (and thus its auto-sized drawable) with the
+    // view: kCALayerWidthSizable|kCALayerHeightSizable = 2|16. We do NOT pin
+    // drawableSize, so CAMetalLayer keeps it at bounds x contentsScale and updates it
+    // on resize; the actual pixel size is read back from the drawable's texture.
+    if !metalUsesUIKit!() { metalMsgSend(layer, metalSel("setAutoresizingMask:"), 18) }
+    // A drawable is write-only by default, which is exactly right for a window and
+    // exactly wrong for proving one draws: nothing may read back what was presented.
+    // A run that is going to capture or dump a frame opts out of that; every other
+    // run keeps framebufferOnly, which is a real optimization (it lets Core
+    // Animation pick a lossless-compressed texture) and costs a window nobody is
+    // verifying nothing.
+    if readable || metalEnvIsSet("KIRA_METAL_ONSCREEN_DUMP") {
+        metalMsgSend(layer, metalSel("setFramebufferOnly:"), false)
+    }
+    // Keep Core Animation's fallback resize behavior correct between delegate
+    // callbacks. The live-resize delegate submits newly laid-out frames during
+    // AppKit's modal tracking loop; contentsGravity covers only the brief interval
+    // between those submissions.
+    let gravity: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSString"),
+        metalSel("stringWithUTF8String:"),
+        "resize"
+    )
+    metalMsgSend(layer, metalSel("setContentsGravity:"), gravity)
+    return layer
+}
+
+// How the layer hands out and presents drawables.
+function metalConfigureLayerPacing(layer: RawPtr) {
+    // How many drawables the layer will hand out before `nextDrawable` blocks.
+    // An uncapped loop is paced by exactly this: a drawable comes back only once
+    // the compositor has finished with it, so the pool depth times the display's
+    // rate is the ceiling, whatever the renderer costs. KIRA_METAL_POOL_PROBE
+    // reports what the layer is actually configured with, because guessing at it
+    // is how a presentation-bound frame rate gets mistaken for a slow renderer.
+    if metalEnvIsSet("KIRA_METAL_POOL_PROBE") {
+        metalProbe(
+            ProbeSentinel.centerPixel,
+            [Number(metalMsgSendCount(layer, metalSel("maximumDrawableCount")))]
+        )
+    }
+    // Visible windows present on the display's beat. Uncapped, a window hands
+    // the compositor a surface for every frame it can draw, and compositing
+    // them shares the GPU the next frame needs: on a 60 Hz 4.5K panel that
+    // contention is most of a frame, and the frames come unevenly, 14 ms then
+    // 24. KIRA_METAL_UNCAPPED=1 lifts the beat for measuring what a frame costs
+    // rather than how it is paced; see docs/frame-cost.md.
+    var displaySync = true
+    if metalEnvIsSet("KIRA_METAL_UNCAPPED") {
+        displaySync = false
+    }
+    if !metalUsesUIKit!() { metalMsgSend(layer, metalSel("setDisplaySyncEnabled:"), displaySync) }
+}
+
+function metalHostLayer(viewPtr: RawPtr, layer: RawPtr) {
+    // Order matters: assign the layer FIRST, then turn on wantsLayer. This makes the
+    // view layer-HOSTING (the CAMetalLayer is ours to drive) rather than layer-backed
+    // (where AppKit owns the layer and would draw the view's opaque background over our
+    // rendered content on every display pass, blanking the frame).
+    if metalUsesUIKit!() {
+        let hostLayer: RawPtr = metalMsgSend(viewPtr, metalSel("layer"))
+        metalMsgSend(hostLayer, metalSel("addSublayer:"), layer)
+    } else {
+        metalMsgSend(viewPtr, metalSel("setLayer:"), layer)
+        metalMsgSend(viewPtr, metalSel("setWantsLayer:"), true)
+    }
+}
+
+// Attach a CAMetalLayer to a host-provided NSView/UIView (the on-screen path: the
+// platform runner creates the window + view and drives the run loop; the backend
+// owns the layer and all draw/present). After this the context is in layer mode, so
+// each pass acquires and presents a drawable from the on-screen layer. macOS sets
+// the view layer-backed via setWantsLayer:/setLayer:; on iOS a UIView is already
+// layer-backed and the layer is added as a sublayer by the runner.
+public function metalContextAttachLayerToView(
+    ctx: RawPtr,
+    viewPtr: RawPtr,
+    app: borrow GraphicsApplication,
+    readable: Bool
+) {
+    let layer = metalNewViewLayer(metalMemReadPtr(ctx, MetalContext.offsetDevice), readable)
+    metalConfigureLayerPacing(layer)
+    metalHostLayer(viewPtr, layer)
+    metalMemWritePtr(ctx, MetalContext.offsetLayer, layer)
+    metalMemWritePtr(ctx, MetalContext.offsetHostView, viewPtr)
+    metalMemWriteU64(ctx, MetalContext.offsetWidth, app.width)
+    metalMemWriteU64(ctx, MetalContext.offsetHeight, app.height)
+}
+
+// An occluded/hidden window may stop vending CAMetalLayer drawables. Keep ticking
+// the application against one private render target instead; when the window is
+// visible again the next frame returns to the layer and this fallback is released.
+public function metalContextHiddenTarget(ctx: RawPtr) -> RawPtr {
+    var width = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+    if width == 0 {
+        width = metalMemReadU64(ctx, MetalContext.offsetWidth)
+    }
+    var height: U64 = metalMemReadU64(ctx, MetalContext.offsetHeight)
+    let logicalWidth = metalMemReadU64(ctx, MetalContext.offsetWidth)
+    if logicalWidth > 0 && width > 0 {
+        height = height * width / logicalWidth
+    }
+    var texture = metalMemReadPtr(ctx, MetalContext.offsetHiddenTexture)
+    if !isNull(texture) &&
+        metalMemReadU64(ctx, MetalContext.offsetHiddenTextureWidth) == width &&
+        metalMemReadU64(ctx, MetalContext.offsetHiddenTextureHeight) == height {
+        return texture
+    }
+    if !isNull(texture) {
+        metalMsgSend(texture, metalSel("release"))
+    }
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let descClass = metalObjcGetClass("MTLTextureDescriptor")
+    let desc: RawPtr = metalMsgSend(
+        descClass,
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        MetalRegistry.pixelFormatBGRA8Unorm,
+        width,
+        height,
+        false
+    )
+    metalMsgSend(desc, metalSel("setUsage:"), MetalRegistry.textureUsageRenderTarget)
+    metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModePrivate)
+    texture = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+    metalMemWritePtr(ctx, MetalContext.offsetHiddenTexture, texture)
+    metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureWidth, width)
+    metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureHeight, height)
+    return texture
+}
+
+public function metalContextReleaseHiddenTarget(ctx: RawPtr) {
+    let texture = metalMemReadPtr(ctx, MetalContext.offsetHiddenTexture)
+    if !isNull(texture) {
+        metalMsgSend(texture, metalSel("release"))
+        metalMemWritePtr(ctx, MetalContext.offsetHiddenTexture, nullPointer())
+        metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureWidth, 0)
+        metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureHeight, 0)
+    }
+}

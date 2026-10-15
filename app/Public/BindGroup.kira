@@ -11,11 +11,11 @@
 // fixed slots, because the C table had to reserve its shape up front. The
 // state here reserves nothing — it grows exactly as far as the entries a
 // caller adds — and a uniform entry holds a reference to the very
-// `EMUniform` its caller passed in (see `EMUniform.kira`), not a copy of
+// `GraphicsUniform` its caller passed in (see `GraphicsUniform.kira`), not a copy of
 // whatever it held when the entry was added.
 public struct StoredUniformBindEntry {
-    var uniformSlot: Int = 0
-    var uniformId: U32 = 0
+    var uniformSlot: UN32 = 0
+    var uniformId: UniformId = NoUniformId
     var storage: NativeState<UniformState>
 }
 
@@ -31,7 +31,7 @@ public struct BindGroupState {
     // `WGPUBindGroup` is immutable once created — caches that object and rebuilds
     // it when this moves. Sokol needs none: it applies the entries at the draw
     // and has nothing to invalidate.
-    var revision: Int = 0
+    var revision: UNumber = 0
     // The Dawn backend's cached `WGPUBindGroup`, and what it was built for.
     //
     // A WebGPU bind group is created against a *pipeline's* layout for a
@@ -41,10 +41,16 @@ public struct BindGroupState {
     // pipeline, the slot, or the entries change. Ids rather than pointers,
     // because the id space is the backend's own table and a `RawPtr` field has
     // no zero a struct declaration can name.
-    var deviceGroupId: U32 = 0
-    var devicePipeline: U32 = 0
-    var deviceSlot: Int = 0 - 1
-    var deviceRevision: Int = 0 - 1
+    var deviceGroupId: UN32? = .None
+    var devicePipeline: UN32 = 0
+    // What the cached device object was built for, so a stale cache is a
+    // rebuild rather than a bind against the wrong pipeline.
+    //
+    // Optional rather than -1: a group that has never been minted has no
+    // pipeline and no slot, and `-1` would be a slot number nothing could
+    // distinguish from a real one.
+    var deviceSlot: UN32? = .None
+    var deviceRevision: UNumber? = .None
     // What tells this group apart from every other one, for a cache keyed on
     // several groups at once.
     //
@@ -53,7 +59,7 @@ public struct BindGroupState {
     // backend that needs it (Dawn merges an encoder's four slots into one
     // WebGPU group and caches the result against the combination), so a run on
     // a backend that does not need identities never spends one.
-    var identity: Int = 0
+    var identity: UNumber? = .None
 }
 
 public class BindGroup {
@@ -61,14 +67,11 @@ public class BindGroup {
     // released recursively with this state, so no raw token carries a hidden
     // destruction obligation.
     var storage: NativeState<BindGroupState>
-    var id: U32 = 0
+    var id: BindGroupId = NoBindGroupId
 }
 
 public function emptyBindGroup() -> BindGroup {
-    return BindGroup {
-        storage: nativeState(BindGroupState {}),
-        id: 0
-    }
+    return BindGroup { storage: nativeState(BindGroupState {}), id: NoBindGroupId }
 }
 
 // A slot that has never been bound. No state box at all, which is what an
@@ -77,126 +80,100 @@ public function emptyBindGroup() -> BindGroup {
 // the point. `emptyBindGroup` stays for callers that may still add entries;
 // this is for slots whose emptiness is final.
 public function unboundBindGroup() -> BindGroup {
-    return BindGroup {
-        storage: nativeState(BindGroupState {}),
-        id: 0
-    }
+    return BindGroup { storage: nativeState(BindGroupState {}), id: NoBindGroupId }
 }
 
-// sokol_gfx.h's `SG_MAX_VIEW_BINDSLOTS` / `SG_MAX_SAMPLER_BINDSLOTS`. An
-// entry's *slot* is checked against these before it is kept — Sokol itself
-// would only catch an out-of-range slot at the draw that finally applies it,
-// past the point a caller could tell why.
-public function sokolMaxViewBindSlots() -> Int { return 32 }
-// `SG_MAX_UNIFORMBLOCK_BINDSLOTS`: how many uniform blocks one pipeline may
-// have. Not a limit on where a SHADER numbers its uniform — that is a binding
-// index in the same space as its textures — but on the slot sokol resolves that
-// binding to, which is what `sg_apply_uniforms` takes.
-public function sokolMaxUniformBlockSlots() -> Int { return 8 }
-public function sokolMaxSamplerBindSlots() -> Int { return 12 }
-
-// Sokol's half of `EMGraphics.beginBindGroup` / `createBindGroup` /
-// `createUniformBindGroup` / `createTextureSamplerBindGroup`: an empty group
-// ready for entries. Never a resource sokol tracks — there is no
-// `sg_bind_group` — so there is nothing to allocate beyond this value.
-// 1 rather than a counter: sokol keys nothing on this id, so every live
-// group answers the same "not empty" sentinel `bindGroupResult` reads.
-public function sokolCreateBindGroupId(label: borrow String) -> BindGroup {
-    return BindGroup {
-        storage: nativeState(BindGroupState {
-            label: label
-        }),
-        id: 1
-    }
-}
-
-// The slot is the shader's own `@group(0)` binding index, not a sokol block
-// slot: sokol numbers its blocks itself, in the order the reflection reports
-// them, and `sokolUniformTargetMask` is what turns one into the other. So the
-// range this is checked against is the binding space a KSL group numbers into —
-// the same one a texture entry is checked against — and a shader that declares
-// its uniform after eight textures is not asking sokol for a ninth block.
-public function sokolBindGroupAddUniform(group: borrow BindGroup, uniformSlot: Int, uniform: borrow EMUniform) {
+// The slot is the shader's own `@group(0)` binding index, in the same space its
+// textures are numbered in — so a shader that declares its uniform after eight
+// textures is asking for the ninth binding, not a ninth block.
+public function addUniformToBindGroup(
+    group: borrow BindGroup,
+    uniformSlot: UN32,
+    uniform: borrow GraphicsUniform
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
-    if uniformSlot < 0 || uniformSlot >= sokolMaxViewBindSlots() {
-        graphicsFail(.Binding, "bind group '" + state.label + "' uniform slot is outside the binding range a shader group numbers into")
+    if uniformSlot >= BindGroupLimits.maxViewBindSlots {
+        log fault(
+            "bind group uniform slot is outside the binding range a shader group numbers",
+            label: state.label
+        )
         return
     }
-    state.uniformEntries.append(StoredUniformBindEntry {
-        uniformSlot: uniformSlot,
-        uniformId: uniform.id,
-        storage: nativeUserData(uniform.storage)
-    })
-    return
+    state.uniformEntries.append(
+        StoredUniformBindEntry {
+            uniformSlot: uniformSlot,
+            uniformId: uniform.id,
+            storage: nativeUserData(uniform.storage)
+        }
+    )
 }
 
-public function sokolBindGroupAddTexture(group: borrow BindGroup, textureSlot: Int, texture: borrow EMGraphicsTexture) {
+public function addTextureToBindGroup(
+    group: borrow BindGroup,
+    textureSlot: UN32,
+    texture: borrow GraphicsTexture
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if texture.viewId == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a texture with no sampled view")
+        log fault("bind group cannot bind a texture with no sampled view", label: state.label)
         return
     }
-    if textureSlot < 0 || textureSlot >= sokolMaxViewBindSlots() {
-        graphicsFail(.Binding, "bind group '" + state.label + "' texture slot is outside Sokol's supported view range")
+    if textureSlot >= BindGroupLimits.maxViewBindSlots {
+        log fault("bind group texture slot is outside the supported view range", label: state.label)
         return
     }
-    state.textureEntries.append(TextureBindEntry {
-        textureSlot: textureSlot,
-        texture: texture
-    })
-    return
+    state.textureEntries.append(TextureBindEntry { textureSlot: textureSlot, texture: texture })
 }
 
-public function sokolBindGroupAddSampler(group: borrow BindGroup, samplerSlot: Int, sampler: borrow EMGraphicsSampler) {
+public function addSamplerToBindGroup(
+    group: borrow BindGroup,
+    samplerSlot: UN32,
+    sampler: borrow GraphicsSampler
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if sampler.id == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind sampler 0")
+        log fault("a bind group cannot bind a sampler the device never created", label: state.label)
         return
     }
-    if samplerSlot < 0 || samplerSlot >= sokolMaxSamplerBindSlots() {
-        graphicsFail(.Binding, "bind group '" + state.label + "' sampler slot is outside Sokol's supported sampler range")
+    if samplerSlot >= BindGroupLimits.maxSamplerBindSlots {
+        log fault(
+            "bind group sampler slot is outside the supported sampler range",
+            label: state.label
+        )
         return
     }
-    state.samplerEntries.append(SamplerBindEntry {
-        samplerSlot: samplerSlot,
-        sampler: sampler
-    })
-    return
+    state.samplerEntries.append(SamplerBindEntry { samplerSlot: samplerSlot, sampler: sampler })
 }
 
-public function sokolBindGroupAddStorageBuffer(group: borrow BindGroup, storageSlot: Int, viewId: U32) {
+public function addStorageBufferToBindGroup(
+    group: borrow BindGroup,
+    storageSlot: UN32,
+    bufferId: BufferId
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
-    if viewId == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a storage buffer with no view")
+    if !bufferId.isPresent() {
+        log fault("bind group cannot bind a storage buffer with no view", label: state.label)
         return
     }
-    if storageSlot < 0 || storageSlot >= sokolMaxViewBindSlots() {
-        graphicsFail(.Binding, "bind group '" + state.label + "' storage slot is outside Sokol's supported view range")
+    if storageSlot >= BindGroupLimits.maxViewBindSlots {
+        log fault("bind group storage slot is outside the supported view range", label: state.label)
         return
     }
-    state.storageEntries.append(StorageBindEntry {
-        storageSlot: storageSlot,
-        viewId: viewId
-    })
-    return
+    state.storageEntries.append(StorageBindEntry { storageSlot: storageSlot, bufferId: bufferId })
 }
 
-// A no-op on Sokol: a `BindGroup` is an ordinary Kira value with no device
-// resource behind it — it never was one, even in the C-side table this
-// replaced, which only ever held CPU-side bookkeeping.
-public function sokolDestroyBindGroupId(bindGroupId: U32) {
-    return
+public namespace BindGroupLimits {
+    let maxViewBindSlots: UN32 = 32
+    let maxUniformBlockSlots: UN32 = 8
+    let maxSamplerBindSlots: UN32 = 12
 }
 
-
-// Explicitly shares one bind-group state owner. BindGroup is affine by default:
-// an ordinary assignment or field extraction cannot silently duplicate the
-// NativeState it contains. Callers that intentionally need another handle spell
-// that ownership operation here, and the returned value carries the matching
-// structural release.
-public function shareBindGroup(group: borrow BindGroup) -> BindGroup {
-    return BindGroup {
-        storage: nativeUserData(group.storage),
-        id: group.id
-    }
+// A texture and the sampler that reads it, each at its own slot: the group a
+// sampled draw binds most often.
+public struct TextureSamplerBinding {
+    var label: String = ""
+    var textureSlot: UN32 = 0
+    var texture: GraphicsTexture = GraphicsTexture()
+    var samplerSlot: UN32 = 0
+    var sampler: GraphicsSampler = GraphicsSampler()
 }

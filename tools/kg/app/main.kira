@@ -21,28 +21,31 @@ construct PngCommand() extends ParsableCommand {
     }
 
     let arguments: [ArgumentSpec] {
-        return [
-            argument(name: "input", help: "The captured .ppm to read"),
-            argument(name: "output", help: "The .png to write")
-        ]
+        return[argument(name: "input", help: "The captured .ppm to read"), argument(
+            name: "output",
+            help: "The .png to write"
+        )]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
         let parsed = parse_PngArguments(arguments)
-        if convertPpmToPngReporting(parsed.input, parsed.output) {
-            return 0
+        match convertPpmFileToPng(parsed.input, parsed.output) {
+            Ok -> {
+                print("wrote \(parsed.output)")
+                return ExitCode.success
+            }
+            Error(failure) -> {
+                log warn("could not convert the PPM to a PNG", parsed.input, parsed.output, failure)
+                return ExitCode.failure
+            }
         }
-        return 1
     }
 }
 
-function convertPpmToPngReporting(input: borrow String, output: borrow String) -> Bool {
-    if convertPpmFileToPng(input, output) {
-        print("wrote " + output)
-        return true
-    }
-    print("could not convert " + input + " to " + output)
-    return false
+// What `kg` answers its shell.
+namespace ExitCode {
+    let success: Int = 0
+    let failure: Int = 1
 }
 
 construct BackendsCommand() extends ParsableCommand {
@@ -54,7 +57,7 @@ construct BackendsCommand() extends ParsableCommand {
     }
 
     let arguments: [ArgumentSpec] {
-        return []
+        return[]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
@@ -62,7 +65,7 @@ construct BackendsCommand() extends ParsableCommand {
         print("vulkan — native Vulkan, Windows and Linux")
         print("dawn   — WebGPU, Windows/Linux/Apple/Web")
         print("The host picks one unless a run names it.")
-        return 0
+        return ExitCode.success
     }
 }
 
@@ -76,11 +79,11 @@ construct RootCommand() extends ParsableCommand {
     }
 
     let arguments: [ArgumentSpec] {
-        return []
+        return[]
     }
 
     function run(arguments: borrow ParsedArguments) -> Int {
-        return 0
+        return ExitCode.success
     }
 }
 
@@ -89,5 +92,4 @@ function main() {
     let root = RootCommand()
     let children: [Any ParsableCommand] = [PngCommand(), BackendsCommand()]
     runCommandRouter(root, children, commandLineArguments())
-    return
 }

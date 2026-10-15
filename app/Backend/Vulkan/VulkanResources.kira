@@ -1,546 +1,319 @@
 import Foundation
+import Heap
 
-// Device buffers, images and samplers. Buffers use host-visible memory so Kira's
-// existing CPU upload contract stays direct; sampled images use a short transfer
-// submission because optimal-tiled images are the portable Vulkan path.
+// Device buffers, uniforms and samplers.
+//
+// Buffers use host-visible memory, so the CPU upload contract the whole surface
+// has is a direct write rather than a staging submission. A uniform is a buffer
+// whose layout a shader's reflection already fixed; a sampler is the descriptor
+// a texture is read through.
+//
+// Images and textures are in `VulkanTexture.kira`, which is the other half of
+// this and a different problem: an optimal-tiled image cannot be written
+// directly, so every one of those uploads is a short transfer submission first.
 
-public function vulkanAligned(value: Int, alignment: Int) -> Int {
+// Where every per-frame buffer keeps one slot per frame in flight.
+namespace VulkanFrameRing {
+    let slots: UNumber = 3
+    // `minUniformBufferOffsetAlignment` is at most 256 on every device.
+    let slotAlignment: UNumber = 256
+    // Every usage a dynamic buffer may be bound at, because its caller does not
+    // say: the same stream is a vertex buffer in one pipeline and a storage
+    // array in the next.
+    let dynamicUsage: U32 = VulkanVocabulary.bufferUsageVertex
+        | VulkanVocabulary.bufferUsageIndex
+        | VulkanVocabulary.bufferUsageStorage
+        | VulkanVocabulary.bufferUsageUniform
+        | VulkanVocabulary.bufferUsageTransferSource
+        | VulkanVocabulary.bufferUsageTransferDestination
+}
+
+// A host-visible, coherent buffer, or nothing where the device refused one.
+// Logs why.
+function vulkanHostBuffer(
+    state: borrow mut VulkanState,
+    request: borrow VulkanBufferRequest
+) -> U32? {
+    match vulkanCreateBufferHandle(state, request) {
+        Ok(id) -> return .Some(id)
+        Error(failure) -> {
+            log fault("could not create a buffer", failure, label: request.label)
+            return .None
+        }
+    }
+}
+
+// A buffer with one slot per frame in flight, each `floatCount` floats long.
+struct VulkanRingBuffer {
+    let id: U32
+    let slotSize: UNumber
+    let totalSize: UNumber
+}
+
+// A ring of host-visible slots, or nothing where the device refused it. Logs
+// why.
+function vulkanNewRingBuffer(
+    state: borrow mut VulkanState,
+    label: borrow String,
+    usage: U32,
+    floatCount: UNumber
+) -> VulkanRingBuffer? {
+    let slotSize = vulkanAligned(floatCount * sizeOf<F32>(), VulkanFrameRing.slotAlignment)
+    let request = VulkanBufferRequest {
+        label: label,
+        usage: usage,
+        byteSize: slotSize * VulkanFrameRing.slots
+    }
+    let id = match vulkanHostBuffer(state, request) {
+        Some(id) -> id
+        None -> return .None
+    }
+    vulkanSetObjectStride(state, id, slotSize)
+    return .Some(VulkanRingBuffer { id: id, slotSize: slotSize, totalSize: request.byteSize })
+}
+
+public function vulkanAligned(value: Number, alignment: Number) -> Number {
     if value <= 0 {
         return alignment
     }
-    return (value + alignment - 1) / alignment * alignment
+    return alignedUp(value, alignment)
 }
 
-public function vulkanCreateBuffer(context: RawPtr, descriptor: borrow BufferDescriptor) -> BufferResult {
+public function vulkanCreateBuffer(
+    context: RawPtr,
+    descriptor: borrow BufferDescriptor
+) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateBuffer") {
         return .Error(.DeviceRefused)
     }
     if descriptor.data.count <= 0 {
-        graphicsFail(.Resource, "a vertex buffer was created with no data; Vulkan cannot make an empty buffer")
+        log fault("a vertex buffer was created with no data; Vulkan cannot make an empty buffer")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let byteCount = descriptor.data.count * 4
-    let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsage(descriptor.usage), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    vulkanWriteFloats(state.vulkan, id, descriptor.data, U64(0))
-    return .Ok(EMGraphicsBuffer {
-        id: id,
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = descriptor.data.count * sizeOf<F32>()
+    let request = VulkanBufferRequest {
+        label: descriptor.label,
+        usage: vulkanBufferUsage(descriptor.usage),
         byteSize: byteCount
-    })
+    }
+    let id = match vulkanHostBuffer(state.vulkan, request) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
-public function vulkanCreateIndexBuffer(context: RawPtr, descriptor: borrow IndexBufferDescriptor) -> BufferResult {
+public function vulkanCreateIndexBuffer(
+    context: RawPtr,
+    descriptor: borrow IndexBufferDescriptor
+) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateIndexBuffer") {
         return .Error(.DeviceRefused)
     }
     if descriptor.data.count <= 0 {
-        graphicsFail(.Resource, "an index buffer was created with no data")
+        log fault("an index buffer was created with no data")
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let byteCount = descriptor.data.count * 4
-    let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsage(.Index), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    let mapped = vulkanObjectExtra(state.vulkan, id)
-    var index = 0
-    while !pointerIsNull(mapped) && index < descriptor.data.count {
-        writeWord(mapped, U64(index * 4), descriptor.data[index])
-        index = index + 1
-    }
-    return .Ok(EMGraphicsBuffer {
-        id: id,
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = descriptor.data.count * sizeOf<U32>()
+    let request = VulkanBufferRequest {
+        label: descriptor.label,
+        usage: vulkanBufferUsage(.Index),
         byteSize: byteCount
-    })
+    }
+    let id = match vulkanHostBuffer(state.vulkan, request) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    vulkanWriteWords(state.vulkan, id, narrowWords(descriptor.data))
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
-public function vulkanCreateStorageBufferWords(context: RawPtr, label: borrow String, data: borrow [U32]) -> BufferResult {
+public function vulkanCreateStorageBufferWords(
+    context: RawPtr,
+    label: borrow String,
+    data: borrow[U32]
+) -> BufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateStorageBufferWords") {
         return .Error(.DeviceRefused)
     }
     if data.count <= 0 {
-        graphicsFail(.Resource, "storage buffer \"" + label + "\" was created with no data")
+        log fault("a storage buffer was created with no data", label: label)
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let byteCount = data.count * 4
-    let id = vulkanCreateBufferHandle(state.vulkan, label, vulkanBufferUsage(.Storage), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    let mapped = vulkanObjectExtra(state.vulkan, id)
-    var index = 0
-    while !pointerIsNull(mapped) && index < data.count {
-        writeWord(mapped, U64(index * 4), data[index])
-        index = index + 1
-    }
-    return .Ok(EMGraphicsBuffer {
-        id: id,
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = data.count * sizeOf<U32>()
+    let request = VulkanBufferRequest {
+        label: label,
+        usage: vulkanBufferUsage(.Storage),
         byteSize: byteCount
-    })
+    }
+    let id = match vulkanHostBuffer(state.vulkan, request) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    vulkanWriteWords(state.vulkan, id, data)
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
-public function vulkanCreateDynamicBuffer(context: RawPtr, label: borrow String, floatCapacity: Int) -> DynamicBufferResult {
+public function vulkanCreateDynamicBuffer(
+    context: RawPtr,
+    label: borrow String,
+    floatCapacity: Number
+) -> DynamicBufferResult {
     if !vulkanRequireDevice(context, "vulkanCreateDynamicBuffer") {
         return .Error(.DeviceRefused)
     }
     if floatCapacity <= 0 {
-        graphicsFail(.Resource, "dynamic buffer \"" + label + "\" was created with a capacity of " + String(floatCapacity) + " floats")
+        log fault(
+            "a dynamic buffer was created with no capacity",
+            label: label,
+            floatCapacity: floatCapacity
+        )
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let slotSize = vulkanAligned(floatCapacity * 4, 256)
-    let totalSize = slotSize * 3
-    let usage = vulkanBufferUsageVertex()
-        | vulkanBufferUsageIndex()
-        | vulkanBufferUsageStorage()
-        | vulkanBufferUsageUniform()
-        | vulkanBufferUsageTransferSource()
-        | vulkanBufferUsageTransferDestination()
-    let id = vulkanCreateBufferHandle(state.vulkan, label, usage, totalSize, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if id == 0 {
-        return .Error(.DeviceRefused)
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let ring = match vulkanNewRingBuffer(
+        state.vulkan,
+        label,
+        VulkanFrameRing.dynamicUsage,
+        floatCapacity
+    ) {
+        Some(ring) -> ring
+        None -> return .Error(.DeviceRefused)
     }
-    vulkanSetObjectStride(state.vulkan, id, U64(slotSize))
-    return .Ok(DynamicBuffer {
-        buffer: EMGraphicsBuffer {
-            id: id,
-            byteSize: totalSize
-        },
-        contents: vulkanObjectExtra(state.vulkan, id)
-    })
+    return vulkanMappedDynamicBuffer(state.vulkan, ring, label)
 }
 
-public function vulkanDynamicBufferFrameStart(context: RawPtr, buffer: borrow EMGraphicsBuffer) -> Int {
+// The ring as a dynamic buffer, with the host-visible memory the CPU writes
+// into. A ring whose memory did not map is released rather than handed back.
+function vulkanMappedDynamicBuffer(
+    state: borrow mut VulkanState,
+    ring: borrow VulkanRingBuffer,
+    label: borrow String
+) -> DynamicBufferResult {
+    let contents = match vulkanObjectMapped(state, ring.id) {
+        Some(contents) -> contents
+        None -> {
+            log fault("a dynamic buffer's host-visible memory was not mapped", label: label)
+            vulkanReleaseObject(state, ring.id)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let buffer = GraphicsBuffer { id: BufferId(ring.id), byteSize: ring.totalSize }
+    return .Ok(DynamicBuffer { buffer: buffer, contents: contents })
+}
+
+public function vulkanDynamicBufferFrameStart(
+    context: RawPtr,
+    buffer: borrow GraphicsBuffer
+) -> Number {
     if !vulkanRequireDevice(context, "vulkanDynamicBufferFrameStart") {
         return 0
     }
     if buffer.id == 0 {
-        graphicsFail(.Resource, "a dynamic buffer that was never created (id 0) was used")
+        log fault("a dynamic buffer that was never created (id 0) was used")
         return 0
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let stride = vulkanObjectStride(state.vulkan, buffer.id)
-    let slot = state.vulkan.dynamicFrame % 3
-    let offset = stride * U64(slot)
-    vulkanSetObjectOffset(state.vulkan, buffer.id, offset)
-    return Int(offset)
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let stride = vulkanObjectStride(state.vulkan, buffer.id.raw)
+    let slot = state.vulkan.dynamicFrame % VulkanFrameRing.slots
+    let offset = stride * slot
+    vulkanSetObjectOffset(state.vulkan, buffer.id.raw, offset)
+    return offset
 }
 
-public function vulkanCreateUniform(context: RawPtr, descriptor: borrow UniformDescriptor) -> UniformResult {
+public function vulkanCreateUniform(
+    context: RawPtr,
+    descriptor: borrow UniformDescriptor
+) -> UniformResult {
     if !vulkanRequireDevice(context, "vulkanCreateUniform") {
         return .Error(.DeviceRefused)
     }
     if descriptor.expectedFloatCount <= 0 || descriptor.data.count != descriptor.expectedFloatCount {
-        graphicsFail(.Resource, "a uniform declared " + String(descriptor.expectedFloatCount) + " floats but was given " + String(descriptor.data.count))
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let slotSize = vulkanAligned(descriptor.expectedFloatCount * 4, 256)
-    let id = vulkanCreateBufferHandle(state.vulkan, descriptor.label, vulkanBufferUsageUniform(), slotSize * 3, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    vulkanSetObjectStride(state.vulkan, id, U64(slotSize))
-    vulkanWriteFloats(state.vulkan, id, descriptor.data, U64(0))
-    return .Ok(EMUniform {
-        storage: nativeState(UniformState {
-            label: descriptor.label,
+        log fault(
+            "a uniform was given a different number of floats than it declared",
             expectedFloatCount: descriptor.expectedFloatCount,
-            values: descriptor.data
-        }),
-        id: id
-    })
+            count: descriptor.data.count
+        )
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let ring = match vulkanNewRingBuffer(
+        state.vulkan,
+        descriptor.label,
+        VulkanVocabulary.bufferUsageUniform,
+        descriptor.expectedFloatCount
+    ) {
+        Some(ring) -> ring
+        None -> return .Error(.DeviceRefused)
+    }
+    let id = ring.id
+    vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
+    return .Ok(
+        GraphicsUniform {
+            storage: nativeState(
+                UniformState {
+                    label: descriptor.label,
+                    expectedFloatCount: descriptor.expectedFloatCount,
+                    values: descriptor.data
+                }
+            ),
+            id: UniformId(id)
+        }
+    )
 }
 
-public function vulkanUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: borrow [F32]) {
+public function vulkanUpdateUniform(
+    context: RawPtr,
+    uniform: borrow GraphicsUniform,
+    data: borrow[Number]
+) {
     if !vulkanRequireDevice(context, "vulkanUpdateUniform") {
         return
     }
     if uniform.id == 0 {
-        graphicsFail(.Resource, "a uniform that was never created (id 0) was updated")
+        log fault("a uniform that was never created (id 0) was updated")
         return
     }
     var uniformState = nativeRecover<UniformState>(uniform.storage)
     if data.count != uniformState.expectedFloatCount {
-        graphicsFail(.Resource, "uniform update size does not match its declaration")
+        log fault("uniform update size does not match its declaration")
         return
     }
     uniformState.values = data
-    return
 }
 
-public function vulkanCreateSampler(context: RawPtr, descriptor: borrow SamplerDescriptor) -> SamplerResult {
+public function vulkanCreateSampler(
+    context: RawPtr,
+    descriptor: borrow SamplerDescriptor
+) -> SamplerResult {
     if !vulkanRequireDevice(context, "vulkanCreateSampler") {
         return .Error(.DeviceRefused)
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    var state = nativeRecover<GraphicsRuntimeState>(context)
     let info = VkSamplerCreateInfo {
-        sType: vulkanStructureSamplerCreateInfo(),
+        sType: VulkanVocabulary.structureSamplerCreateInfo,
         magFilter: vulkanSamplerFilter(descriptor.magFilter),
         minFilter: vulkanSamplerFilter(descriptor.minFilter),
-        mipmapMode: vulkanMipmapNearest(),
+        mipmapMode: VulkanVocabulary.mipmapNearest,
         addressModeU: vulkanAddressMode(descriptor.addressModeU),
         addressModeV: vulkanAddressMode(descriptor.addressModeV),
-        addressModeW: vulkanSamplerAddressClamp(),
+        addressModeW: VulkanVocabulary.samplerAddressClamp,
         maxAnisotropy: 1.0,
         maxLod: 1.0
     }
-    let samplerSlot = vulkanPointerSlot()
-    let result = vkCreateSampler(state.vulkan.device, info, nullPointer(), samplerSlot)
-    let sampler = pointerAt(samplerSlot, U64(0))
-    freeBytes(samplerSlot)
-    if result != vulkanSuccess() || pointerIsNull(sampler) {
-        graphicsFail(.Resource, "could not create sampler '" + descriptor.label + "' (" + vulkanResultName(result) + ")")
-        return .Error(.DeviceRefused)
-    }
-    let id = vulkanRegisterObject(state.vulkan, sampler, nullPointer(), nullPointer(), U64(0), I32(0), vulkanObjectKindSampler())
-    return .Ok(EMGraphicsSampler { id: id })
-}
-
-public function vulkanCreateImageHandle(state: borrow mut VulkanState, descriptor: borrow TextureDescriptor) -> U32 {
-    let samples = vulkanSampleCount(descriptor.sampleCount <= 0 ? 1 : descriptor.sampleCount)
-    if samples == I32(0) {
-        graphicsFail(.Resource, "texture sampleCount must be one of 1, 2, 4, 8, 16, 32 or 64")
-        return U32(0)
-    }
-    // Never VK_FORMAT_UNDEFINED for a swapchain-format texture on a headless
-    // device: the image is invalid, and ANV divides by its zero block size the
-    // first time it is copied.
-    var format = vulkanTextureFormat(descriptor.format)
-    if descriptor.format == .Swapchain {
-        format = vulkanSwapchainFormatOrDefault(state)
-    }
-    let info = VkImageCreateInfo {
-        sType: vulkanStructureImageCreateInfo(),
-        imageType: vulkanImageType2d(),
-        format: format,
-        extent: VkExtent3D {
-            width: U32(descriptor.width),
-            height: U32(descriptor.height),
-            depth: U32(1)
-        },
-        mipLevels: U32(1),
-        arrayLayers: U32(1),
-        samples: samples,
-        tiling: I32(0),
-        usage: vulkanImageUsage(descriptor.usage),
-        sharingMode: vulkanSharingExclusive(),
-        initialLayout: vulkanImageLayoutUndefined()
-    }
-    let imageSlot = vulkanPointerSlot()
-    let imageResult = vkCreateImage(state.device, info, nullPointer(), imageSlot)
-    let image = pointerAt(imageSlot, U64(0))
-    freeBytes(imageSlot)
-    if imageResult != vulkanSuccess() || pointerIsNull(image) {
-        graphicsFail(.Resource, "could not create texture '" + descriptor.label + "' (" + vulkanResultName(imageResult) + ")")
-        return U32(0)
-    }
-    let requirements = allocateBytes(U64(24))
-    vkGetImageMemoryRequirements(state.device, image, requirements)
-    let allocationSize = doubleWordAt(requirements, U64(0))
-    let memoryTypeBits = wordAt(requirements, U64(16))
-    freeBytes(requirements)
-    let memoryType = vulkanFindMemoryType(state, memoryTypeBits, vulkanMemoryDeviceLocal())
-    if memoryType == U32(4294967295) {
-        vkDestroyImage(state.device, image, nullPointer())
-        graphicsFail(.Resource, "found no device-local memory for texture '" + descriptor.label + "'")
-        return U32(0)
-    }
-    let allocation = VkMemoryAllocateInfo {
-        sType: vulkanStructureMemoryAllocateInfo(),
-        allocationSize: allocationSize,
-        memoryTypeIndex: memoryType
-    }
-    let memorySlot = vulkanPointerSlot()
-    let memoryResult = vkAllocateMemory(state.device, allocation, nullPointer(), memorySlot)
-    let memory = pointerAt(memorySlot, U64(0))
-    freeBytes(memorySlot)
-    if memoryResult != vulkanSuccess() || pointerIsNull(memory) {
-        vkDestroyImage(state.device, image, nullPointer())
-        graphicsFail(.Resource, "could not allocate " + String(Int(allocationSize)) + " bytes for texture '" + descriptor.label + "' (" + vulkanResultName(memoryResult) + ")")
-        return U32(0)
-    }
-    let bindResult = vkBindImageMemory(state.device, image, memory, U64(0))
-    if bindResult != vulkanSuccess() {
-        vkFreeMemory(state.device, memory, nullPointer())
-        vkDestroyImage(state.device, image, nullPointer())
-        graphicsFail(.Resource, "could not bind memory for texture '" + descriptor.label + "' (" + vulkanResultName(bindResult) + ")")
-        return U32(0)
-    }
-    let id = vulkanRegisterObject(state, image, memory, nullPointer(), allocationSize, info.format, vulkanObjectKindImage())
-    vulkanSetObjectLayout(state, id, vulkanImageLayoutUndefined())
-    return id
-}
-
-public function vulkanCreateImageView(state: borrow mut VulkanState, imageId: U32, format: I32, aspect: U32) -> U32 {
-    let image = vulkanObject(state, imageId)
-    if pointerIsNull(image) {
-        graphicsFail(.Resource, "a view was asked for image " + String(Int(imageId)) + ", which is not live")
-        return U32(0)
-    }
-    let info = VkImageViewCreateInfo {
-        sType: vulkanStructureImageViewCreateInfo(),
-        image: image,
-        viewType: vulkanImageViewType2d(),
-        format: format,
-        components: VkComponentMapping {},
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: aspect,
-            levelCount: U32(1),
-            layerCount: U32(1)
-        }
-    }
-    let viewSlot = vulkanPointerSlot()
-    let result = vkCreateImageView(state.device, info, nullPointer(), viewSlot)
-    let view = pointerAt(viewSlot, U64(0))
-    freeBytes(viewSlot)
-    if result != vulkanSuccess() || pointerIsNull(view) {
-        graphicsFail(.Resource, "could not create a view of image " + String(Int(imageId)) + " (" + vulkanResultName(result) + ")")
-        return U32(0)
-    }
-    return vulkanRegisterObject(state, view, nullPointer(), nullPointer(), U64(0), format, vulkanObjectKindImageView())
-}
-
-public function vulkanCreateTexture(context: RawPtr, descriptor: borrow TextureDescriptor) -> TextureResult {
-    if !vulkanRequireDevice(context, "vulkanCreateTexture") {
-        return .Error(.DeviceRefused)
-    }
-    if descriptor.width <= 0 || descriptor.height <= 0 || descriptor.format == .None {
-        graphicsFail(.Resource, "a texture was created " + String(descriptor.width) + "x" + String(descriptor.height) + (descriptor.format == .None ? " with no format" : "") + "; it needs a size and a format")
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let imageId = vulkanCreateImageHandle(state.vulkan, descriptor)
-    if imageId == 0 {
-        return .Error(.DeviceRefused)
-    }
-    let format = vulkanObjectFormat(state.vulkan, imageId)
-    var sampledId = U32(0)
-    var colorId = U32(0)
-    var depthId = U32(0)
-    var storageId = U32(0)
-    if descriptor.usage == .Sampled || descriptor.usage == .SampledStreaming || descriptor.usage == .RenderTargetSampled || descriptor.usage == .SampledStorage {
-        sampledId = vulkanCreateImageView(state.vulkan, imageId, format, vulkanImageAspectFor(descriptor.usage))
-    }
-    if descriptor.usage == .RenderTarget || descriptor.usage == .RenderTargetSampled {
-        colorId = vulkanCreateImageView(state.vulkan, imageId, format, vulkanAspectColor())
-    }
-    if descriptor.usage == .DepthStencil {
-        sampledId = vulkanCreateImageView(state.vulkan, imageId, format, vulkanAspectDepth())
-        depthId = vulkanCreateImageView(state.vulkan, imageId, format, vulkanAspectDepth() | vulkanAspectStencil())
-    }
-    if descriptor.usage == .SampledStorage {
-        storageId = vulkanCreateImageView(state.vulkan, imageId, format, vulkanAspectColor())
-    }
-    var viewsValid = false
-    match descriptor.usage {
-        Sampled -> viewsValid = sampledId != 0
-        SampledStreaming -> viewsValid = sampledId != 0
-        RenderTarget -> viewsValid = colorId != 0
-        RenderTargetSampled -> viewsValid = sampledId != 0 && colorId != 0
-        DepthStencil -> viewsValid = depthId != 0 && sampledId != 0
-        SampledStorage -> viewsValid = sampledId != 0 && storageId != 0
-    }
-    if !viewsValid {
-        if storageId != 0 { vulkanReleaseImageView(state.vulkan, storageId) }
-        if depthId != 0 { vulkanReleaseImageView(state.vulkan, depthId) }
-        if colorId != 0 { vulkanReleaseImageView(state.vulkan, colorId) }
-        if sampledId != 0 { vulkanReleaseImageView(state.vulkan, sampledId) }
-        vulkanReleaseImage(state.vulkan, imageId)
-        graphicsFail(.Resource, "texture '" + descriptor.label + "' is missing a view its usage needs; it was not created")
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(EMGraphicsTexture {
-        id: imageId,
-        viewId: sampledId,
-        colorViewId: colorId,
-        depthViewId: depthId,
-        storageViewId: storageId,
-        width: descriptor.width,
-        height: descriptor.height,
-        sampleCount: 1
-    })
-}
-
-public function vulkanCreateTextureFromPixels(context: RawPtr, descriptor: borrow TextureDescriptor, pixels: borrow [U8]) -> TextureResult {
-    if pixels.count != descriptor.width * descriptor.height * 4 {
-        graphicsFail(.Resource, "texture '" + descriptor.label + "' is " + String(descriptor.width) + "x" + String(descriptor.height) + " RGBA, which is " + String(descriptor.width * descriptor.height * 4) + " bytes, and was given " + String(pixels.count))
-        return .Error(.DeviceRefused)
-    }
-    match vulkanCreateTexture(context, descriptor) {
-        Error(reason) -> return .Error(reason)
-        Ok(texture) -> {
-            vulkanUploadTexture(context, texture, pixels, nullPointer(), pixels.count)
-            return .Ok(texture)
-        }
-    }
-}
-
-public function vulkanUpdateTexture(context: RawPtr, texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
-    if width != texture.width || height != texture.height {
-        graphicsFail(.Resource, "texture update dimensions do not match the texture")
-        return
-    }
-    if pixels.count != width * height * 4 {
-        graphicsFail(.Resource, "texture update byte count does not match the texture")
-        return
-    }
-    vulkanUploadTexture(context, texture, pixels, nullPointer(), pixels.count)
-    return
-}
-
-public function vulkanUpdateTextureBytes(context: RawPtr, texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
-    vulkanUploadTexture(context, texture, [], bytes, byteCount)
-    return
-}
-
-public function vulkanUploadTexture(context: RawPtr, texture: borrow EMGraphicsTexture, pixels: borrow [U8], bytes: RawPtr, byteCount: Int) {
-    if !vulkanRequireDevice(context, "vulkanUploadTexture") {
-        return
-    }
-    if texture.id == 0 || byteCount <= 0 {
-        graphicsFail(.Resource, (texture.id == 0 ? "pixels were uploaded to a texture that was never created (id 0)" : "an upload of no pixels"))
-        return
-    }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    if state.vulkan.passActive {
-        graphicsFail(.Resource, "end the Vulkan render pass before uploading a texture")
-        return
-    }
-    let format = vulkanObjectFormat(state.vulkan, texture.id)
-    let pixelSize = format == vulkanFormatRgba16Float() ? 8 : 4
-    if format == vulkanFormatDepth24Stencil8() || byteCount != texture.width * texture.height * pixelSize || (pointerIsNull(bytes) && pixels.count != byteCount) {
-        graphicsFail(.Resource, "texture upload has an invalid format or byte count")
-        return
-    }
-    let staging = vulkanCreateBufferHandle(state.vulkan, "kira-texture-upload", vulkanBufferUsageTransferSource(), byteCount, vulkanMemoryHostVisible() | vulkanMemoryHostCoherent())
-    if staging == 0 {
-        return
-    }
-    let mapped = vulkanObjectExtra(state.vulkan, staging)
-    if !pointerIsNull(mapped) {
-        var index = 0
-        while index < byteCount {
-            let value = pointerIsNull(bytes) ? pixels[index] : rawByteAt(bytes, U64(index))
-            writeByte(mapped, U64(index), value)
-            index = index + 1
-        }
-    }
-    if state.vulkan.frameActive {
-        vulkanRecordBufferToImage(state.vulkan, staging, texture.id, texture.width, texture.height)
-        state.vulkan.pendingUploadBuffers.append(staging)
-    } else {
-        vulkanCopyBufferToImageImmediate(state.vulkan, staging, texture.id, texture.width, texture.height)
-        vulkanReleaseBuffer(state.vulkan, staging)
-    }
-    return
-}
-
-
-public function vulkanTransitionImage(state: borrow mut VulkanState, imageId: U32, newLayout: I32, srcStage: U32, dstStage: U32, srcAccess: U32, dstAccess: U32, aspect: U32) {
-    let image = vulkanObject(state, imageId)
-    if pointerIsNull(image) || pointerIsNull(state.commandBuffer) {
-        return
-    }
-    let oldLayout = vulkanObjectLayout(state, imageId)
-    var actualSourceStage = srcStage
-    var actualSourceAccess = srcAccess
-    if oldLayout == vulkanImageLayoutShaderRead() {
-        actualSourceStage = vulkanStageFragmentShader() | vulkanStageComputeShader()
-        actualSourceAccess = vulkanAccessShaderRead()
-    }
-    if oldLayout == vulkanImageLayoutGeneral() {
-        actualSourceStage = vulkanStageComputeShader()
-        actualSourceAccess = vulkanAccessShaderWrite() | vulkanAccessShaderRead()
-    }
-    if oldLayout == vulkanImageLayoutColorAttachment() {
-        actualSourceStage = vulkanStageColorAttachmentOutput()
-        actualSourceAccess = vulkanAccessColorAttachmentWrite() | U32(VK_ACCESS_COLOR_ATTACHMENT_READ_BIT)
-    }
-    if oldLayout == vulkanImageLayoutDepthAttachment() {
-        actualSourceStage = vulkanStageEarlyFragmentTests() | U32(VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT)
-        actualSourceAccess = vulkanAccessDepthStencilWrite() | U32(VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT)
-    }
-    if oldLayout == vulkanImageLayoutTransferDestination() {
-        actualSourceStage = vulkanStageTransfer()
-        actualSourceAccess = vulkanAccessTransferWrite()
-    }
-    let barrier = VkImageMemoryBarrier {
-        sType: vulkanStructureImageMemoryBarrier(),
-        srcAccessMask: actualSourceAccess,
-        dstAccessMask: dstAccess,
-        oldLayout: oldLayout,
-        newLayout: newLayout,
-        srcQueueFamilyIndex: U32(4294967295),
-        dstQueueFamilyIndex: U32(4294967295),
-        image: image,
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: aspect,
-            levelCount: U32(1),
-            layerCount: U32(1)
-        }
-    }
-    vkCmdPipelineBarrier(
-        state.commandBuffer,
-        actualSourceStage,
-        dstStage,
-        U32(0),
-        U32(0),
-        nullPointer(),
-        U32(0),
-        nullPointer(),
-        U32(1),
-        barrier
+    let samplerSlot = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateSampler(state.vulkan.device, info, nullPointer(), samplerSlot.pointer())
     )
-    vulkanSetObjectLayout(state, imageId, newLayout)
-    return
-}
-
-public function vulkanRecordBufferToImage(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
-    let source = vulkanObject(state, stagingId)
-    let target = vulkanObject(state, imageId)
-    if pointerIsNull(source) || pointerIsNull(target) {
-        return
+    let sampler = boxedValue<RawPtr>(samplerSlot)
+    if result != .Success || isNull(sampler) {
+        log fault("could not create sampler", label: descriptor.label, result: result)
+        return .Error(.DeviceRefused)
     }
-    vulkanTransitionImage(state, imageId, vulkanImageLayoutTransferDestination(), vulkanStageTopOfPipe(), vulkanStageTransfer(), vulkanAccessNone(), vulkanAccessTransferWrite(), vulkanAspectColor())
-    let region = VkBufferImageCopy {
-        imageSubresource: VkImageSubresourceLayers {
-            aspectMask: vulkanAspectColor(),
-            layerCount: U32(1)
-        },
-        imageExtent: VkExtent3D {
-            width: U32(width),
-            height: U32(height),
-            depth: U32(1)
-        }
-    }
-    vkCmdCopyBufferToImage(state.commandBuffer, source, target, vulkanImageLayoutTransferDestination(), U32(1), region)
-    vulkanTransitionImage(state, imageId, vulkanImageLayoutShaderRead(), vulkanStageTransfer(), vulkanStageFragmentShader() | vulkanStageComputeShader(), vulkanAccessTransferWrite(), vulkanAccessShaderRead(), vulkanAspectColor())
-    return
-}
-
-public function vulkanCopyBufferToImageImmediate(state: borrow mut VulkanState, stagingId: U32, imageId: U32, width: Int, height: Int) {
-    vkQueueWaitIdle(state.queue)
-    vkResetCommandBuffer(state.commandBuffer, U32(0))
-    vkBeginCommandBuffer(state.commandBuffer, VkCommandBufferBeginInfo {
-        sType: vulkanStructureCommandBufferBeginInfo(),
-        flags: vulkanCommandBufferOneTime()
-    })
-    vulkanRecordBufferToImage(state, stagingId, imageId, width, height)
-    vkEndCommandBuffer(state.commandBuffer)
-    let commandSlot = vulkanPointerSlot()
-    writePointer(commandSlot, U64(0), state.commandBuffer)
-    vkQueueSubmit(state.queue, U32(1), VkSubmitInfo {
-        sType: vulkanStructureSubmitInfo(),
-        commandBufferCount: U32(1),
-        pCommandBuffers: commandSlot
-    }, nullPointer())
-    vkQueueWaitIdle(state.queue)
-    freeBytes(commandSlot)
-    return
+    let id = vulkanRegisterObject(state.vulkan, VulkanObject { kind: .Sampler, handle: sampler })
+    return .Ok(GraphicsSampler { id: SamplerId(id) })
 }

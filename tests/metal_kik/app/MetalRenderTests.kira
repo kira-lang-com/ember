@@ -1,48 +1,60 @@
 import Foundation
 import Ember
-// Metal render Tests. Names use the mtk / Mtk prefix.
+// Metal's render self-tests, each one drawing offscreen and reading a pixel back.
+//
+// The self-test reports whether the draw came out as the shader says it should.
+// `true` is the whole answer, so each case's expectation is that one `Bool`.
 
-construct MtkClearRendersExactColor() extends Test {
+// What every case expects: `true` where Metal exists, a skip everywhere else,
+// since no other host has a Metal device to draw on.
+function metalExpectation() -> Result<Any, TestFailure> {
+    match targetPlatform!() {
+        MacOS -> return .Ok(true)
+        else -> return .Error(.Compile("Metal GPU test requires macOS"))
+    }
+}
+
+construct ClearRendersExactColor() extends Test {
     test { return metalSelfTestClearOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkTriangleRasterizes() extends Test {
+construct TriangleRasterizes() extends Test {
     test { return metalSelfTestTriangleOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkIndexedQuadRasterizes() extends Test {
+construct IndexedQuadRasterizes() extends Test {
     test { return metalSelfTestIndexedOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkUniformDrivesFragmentColor() extends Test {
+construct UniformDrivesFragmentColor() extends Test {
     test { return metalSelfTestUniformOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkDepthOccludesFarSurface() extends Test {
+construct DepthOccludesFarSurface() extends Test {
     test { return metalSelfTestDepthOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkTextureSampling() extends Test {
+construct TextureSampling() extends Test {
     test { return metalSelfTestTextureOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkBindGroupBindsUniform() extends Test {
+construct BindGroupBindsUniform() extends Test {
     test { return metalSelfTestBindGroupOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkVertexUniformTransform() extends Test {
+construct VertexUniformTransform() extends Test {
     test { return metalSelfTestVertexUniformOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }
 
-construct MtkDynamicBufferContentsDraw() extends Test {
+construct DynamicBufferContentsDraw() extends Test {
     test { return metalSelfTestDynamicOk() }
-    expect { let e: Result<Bool, TestFailure> = Result.Ok(true); return e }
+    expect { return metalExpectation() }
 }

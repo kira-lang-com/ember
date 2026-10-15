@@ -1,0 +1,37 @@
+import Foundation
+
+// `vulkanCloseDescriptorFor(descriptor)`, answering whether the descriptor was
+// closed. Only a build whose platform has a Linux kernel behind it has the
+// system call, in VulkanDescriptorClose.kira; anywhere else no descriptor was
+// ever exported, so there is none to close.
+comptime macro VulkanDescriptorCloser {
+    kind { function }
+    expand(input: Syntax) -> Syntax {
+        match Build.platform() {
+            "linux" -> return quote {
+                function vulkanCloseDescriptorFor(descriptor: I32) -> Bool {
+                    return vulkanCloseDescriptor(Int(descriptor)) == 0
+                }
+            }
+            "tessera" -> return quote {
+                function vulkanCloseDescriptorFor(descriptor: I32) -> Bool {
+                    return vulkanCloseDescriptor(Int(descriptor)) == 0
+                }
+            }
+            else -> return quote {
+                function vulkanCloseDescriptorFor(descriptor: I32) -> Bool { return false }
+            }
+        }
+    }
+}
+
+VulkanDescriptorCloser!()
+
+// Closes the dma-buf descriptor an exported texture's memory was handed out
+// as. A descriptor that will not close is reported and left: it is the
+// kernel's to reclaim when the process ends.
+public function vulkanCloseFd(descriptor: I32) {
+    if !vulkanCloseDescriptorFor(descriptor) {
+        log warn("could not close an exported texture's dma-buf", descriptor: Number(descriptor))
+    }
+}

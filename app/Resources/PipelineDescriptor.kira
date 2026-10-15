@@ -1,13 +1,13 @@
 public struct VertexAttribute {
     var name: String = ""
-    var location: Int = 0
+    var location: UN32 = 0
     var format: VertexFormat = .Float4
-    var offset: Int = 0
+    var offset: UN32 = 0
 }
 
 public struct VertexLayout {
-    var stride: Int = 0
-    var attributes: [VertexAttribute]
+    var stride: UN32 = 0
+    var attributes: [VertexAttribute] = []
 }
 
 public struct BlendState {
@@ -17,7 +17,7 @@ public struct BlendState {
 
 public struct ColorTargetDescriptor {
     var format: TextureFormat = .Swapchain
-    var blend: BlendState
+    var blend: BlendState = BlendState()
 }
 
 public struct DepthStencilDescriptor {
@@ -46,16 +46,16 @@ public struct PrimitiveDescriptor {
 
 public struct RenderPipelineDescriptor {
     var label: String = ""
-    var shader: EMGraphicsShader
-    var vertexLayout: VertexLayout
-    var colorTargets: [ColorTargetDescriptor]
-    var depthStencil: DepthStencilDescriptor
-    var rasterization: RasterizationDescriptor
-    var primitive: PrimitiveDescriptor
+    var shader: GraphicsShader = GraphicsShader()
+    var vertexLayout: VertexLayout = VertexLayout()
+    var colorTargets: [ColorTargetDescriptor] = []
+    var depthStencil: DepthStencilDescriptor = DepthStencilDescriptor()
+    var rasterization: RasterizationDescriptor = RasterizationDescriptor()
+    var primitive: PrimitiveDescriptor = PrimitiveDescriptor()
     // Must match the attachments used by the render pass. Defaults to the
     // historical single-sample path so existing pipeline descriptors remain
     // source-compatible while backends can create real multisample pipelines.
-    var sampleCount: Int = 1
+    var sampleCount: UN8 = 1
     // Metal shader-library entry-point names (default v_main/f_main; KSL-compiled
     // libraries use `{shader}__vertex__main` / `__fragment__main`). Transient — this
     // descriptor is not stored in native state, so String fields are safe here.

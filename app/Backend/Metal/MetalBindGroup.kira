@@ -1,67 +1,114 @@
+import Heap
+
 // Metal bind groups: a small heap block of (kind, slot, resourceId) entries that
 // map public bind-group descriptors onto encoder bindings. At draw time each bound
 // group is applied — uniforms bind to both the vertex and fragment buffer slot (so
 // either stage can read them), textures and samplers bind to the fragment stage.
 //
 // Block layout: [entryCount: U64][entry...]; each entry is (kind, slot, resourceId)
-// as three U64s (24 bytes). kind: 1=uniform, 2=texture, 3=sampler.
-public function metalBindGroupCapacity() -> U64 { return 16 }
-public function metalBindEntryKindUniform() -> U64 { return 1 }
-public function metalBindEntryKindTexture() -> U64 { return 2 }
-public function metalBindEntryKindSampler() -> U64 { return 3 }
+// as three U64s. See `MetalBindGroup` for the sizes and kind codes.
 
-public function metalCreateBindGroup(ctx: RawPtr) -> Int {
-    let block = metalMemAlloc(8 + metalBindGroupCapacity() * 24)
+// One bound resource: what kind it is, the slot it binds at, and its
+// registered id.
+public struct MetalBindEntry {
+    var kind: U64 = MetalBindGroup.bindEntryKindUniform
+    var slot: UNumber = 0
+    var resourceId: UNumber = 0
+}
+
+public function metalCreateBindGroup(ctx: RawPtr) -> Number? {
+    let block = metalMemAlloc(
+        MetalBindGroup.headerBytes + MetalBindGroup.bindGroupCapacity * MetalBindGroup.entryBytes
+    )
+    if isNull(block) {
+        return .None
+    }
     metalMemWriteU64(block, 0, 0)
     // A bind group is a raw heap block, not an Objective-C object: register it as a
     // raw block so teardown frees it with metalMemFree instead of `release`.
-    return metalRegisterRawBlock(ctx, block)
+    return .Some(metalRegisterRawBlock(ctx, block))
 }
 
-public function metalBindGroupAddEntry(ctx: RawPtr, bindGroupId: Int, kind: U64, slot: Int, resourceId: Int) {
+// Appends `entry` to the group, which holds at most `bindGroupCapacity`.
+public function metalBindGroupAddEntry(
+    ctx: RawPtr,
+    bindGroupId: Number,
+    entry: borrow MetalBindEntry
+) {
     let block = metalLookup(ctx, bindGroupId)
     let count = metalMemReadU64(block, 0)
-    let base = 8 + count * 24
-    metalMemWriteU64(block, base, kind)
-    metalMemWriteU64(block, base + 8, slot)
-    metalMemWriteU64(block, base + 16, resourceId)
+    if count >= MetalBindGroup.bindGroupCapacity {
+        log fault(
+            "a bind group is full; the entry was not added",
+            capacity: MetalBindGroup.bindGroupCapacity,
+            slot: entry.slot
+        )
+        return
+    }
+    let base = MetalBindGroup.headerBytes + count * MetalBindGroup.entryBytes
+    metalMemWriteU64(block, base, entry.kind)
+    metalMemWriteU64(block, base + MetalBindGroup.wordBytes, U64(entry.slot))
+    metalMemWriteU64(block, base + 2 * MetalBindGroup.wordBytes, U64(entry.resourceId))
     metalMemWriteU64(block, 0, count + 1)
-    return
+}
+
+function metalReadBindEntry(block: RawPtr, index: U64) -> MetalBindEntry {
+    let base = MetalBindGroup.headerBytes + index * MetalBindGroup.entryBytes
+    return MetalBindEntry {
+        kind: metalMemReadU64(block, base),
+        slot: UNumber(metalMemReadU64(block, base + MetalBindGroup.wordBytes)),
+        resourceId: UNumber(metalMemReadU64(block, base + 2 * MetalBindGroup.wordBytes))
+    }
 }
 
 // Apply a bind group's entries onto the active render-command encoder.
-public function metalEncoderApplyBindGroup(ctx: RawPtr, bindGroupId: Int) {
+public function metalEncoderApplyBindGroup(ctx: RawPtr, bindGroupId: Number) {
     let block = metalLookup(ctx, bindGroupId)
-    let encoder = metalMemReadPtr(ctx, metalOffsetEncoder())
-    let count = metalMemReadU64(block, 0)
-    var i: U64 = 0
-    while i < count {
-        let base = 8 + i * 24
-        let kind = metalMemReadU64(block, base)
-        let slot = metalMemReadU64(block, base + 8)
-        let resourceId = metalMemReadU64(block, base + 16)
-        let resource = metalLookupU64(ctx, resourceId)
-        if kind == metalBindEntryKindUniform() {
-            // Vertex-stage uniforms bind ABOVE the vertex data (which occupies vertex
-            // buffer 0), i.e. at slot+1, so a uniform at slot 0 does not collide with the
-            // vertex buffer; fragment-stage uniforms bind directly at slot. A shader thus
-            // reads a vertex uniform from [[buffer(slot+1)]] and a fragment uniform from
-            // [[buffer(slot)]].
-            //
-            // The offset is the uniform's current ring slot, not 0: the buffer holds one
-            // slot per frame in flight so the CPU can write the next frame's values
-            // without touching the bytes this draw is about to read (MetalPacing.kira).
-            let offset = metalRingOffset(ctx, resourceId)
-            metalMsgSend(encoder, metalSel("setVertexBuffer:offset:atIndex:"), resource, offset, slot + 1)
-            metalMsgSend(encoder, metalSel("setFragmentBuffer:offset:atIndex:"), resource, offset, slot)
-        }
-        if kind == metalBindEntryKindTexture() {
-            metalMsgSend(encoder, metalSel("setFragmentTexture:atIndex:"), resource, slot)
-        }
-        if kind == metalBindEntryKindSampler() {
-            metalMsgSend(encoder, metalSel("setFragmentSamplerState:atIndex:"), resource, slot)
-        }
-        i = i + 1
+    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+    for index in 0..metalMemReadU64(block, 0) {
+        metalApplyBindEntry(ctx, encoder, metalReadBindEntry(block, index))
     }
-    return
+}
+
+function metalApplyBindEntry(ctx: RawPtr, encoder: RawPtr, entry: borrow MetalBindEntry) {
+    let resource = metalLookupU64(ctx, U64(entry.resourceId))
+    let slot = U64(entry.slot)
+    if entry.kind == MetalBindGroup.bindEntryKindUniform {
+        // Vertex-stage uniforms bind ABOVE the vertex data (which occupies vertex
+        // buffer 0), i.e. at slot+1, so a uniform at slot 0 does not collide with the
+        // vertex buffer; fragment-stage uniforms bind directly at slot. A shader thus
+        // reads a vertex uniform from [[buffer(slot+1)]] and a fragment uniform from
+        // [[buffer(slot)]].
+        //
+        // The offset is the uniform's current ring slot, not 0: the buffer holds one
+        // slot per frame in flight so the CPU can write the next frame's values
+        // without touching the bytes this draw is about to read (MetalPacing.kira).
+        let offset = metalRingOffset(ctx, U64(entry.resourceId))
+        metalMsgSend(
+            encoder,
+            metalSel("setVertexBuffer:offset:atIndex:"),
+            resource,
+            offset,
+            slot + 1
+        )
+        metalMsgSend(encoder, metalSel("setFragmentBuffer:offset:atIndex:"), resource, offset, slot)
+    }
+    if entry.kind == MetalBindGroup.bindEntryKindTexture {
+        metalMsgSend(encoder, metalSel("setFragmentTexture:atIndex:"), resource, slot)
+    }
+    if entry.kind == MetalBindGroup.bindEntryKindSampler {
+        metalMsgSend(encoder, metalSel("setFragmentSamplerState:atIndex:"), resource, slot)
+    }
+}
+
+public namespace MetalBindGroup {
+    let bindGroupCapacity: U64 = 16
+    let bindEntryKindUniform: U64 = 1
+    let bindEntryKindTexture: U64 = 2
+    let bindEntryKindSampler: U64 = 3
+    // The block opens with its entry count, and each entry is three words:
+    // kind, slot and resource id.
+    let wordBytes: U64 = 8
+    let headerBytes: U64 = 8
+    let entryBytes: U64 = 24
 }

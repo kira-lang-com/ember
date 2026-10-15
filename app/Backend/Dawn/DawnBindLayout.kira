@@ -1,4 +1,5 @@
 import Foundation
+import Heap
 // One WGSL `@group(0)`, assembled from the four slots an encoder carries.
 //
 // # Why anything has to be assembled
@@ -59,17 +60,17 @@ import Foundation
 // with.
 public struct DawnPipelineBindings {
     var pipelineId: U32 = 0
-    var bindings: [Int] = []
+    var bindings: [Number] = []
     // The group each entry of `bindings` sits in, index-aligned with it. A
     // binding alone does not name a resource once a shader writes more than one
     // group, because the numbering restarts inside each.
-    var groups: [Int] = []
+    var groups: [Number] = []
 }
 
 // One resource a shader's layout declares.
 public struct DawnShaderBinding {
-    var group: Int = 0
-    var binding: Int = 0
+    var group: UNumber = 0
+    var binding: UNumber = 0
 }
 
 // A merged `WGPUBindGroup` and the combination it was built for.
@@ -77,18 +78,42 @@ public struct DawnShaderBinding {
 // The key is the pipeline plus each slot's identity and revision, because that
 // is everything the group's contents depend on: a WebGPU bind group is immutable
 // and is created against one pipeline's layout, and an entry list changes only
-// when one of the four groups is rebound.
+// when one of the encoder's groups is rebound. A slot left unset has neither.
 public struct DawnMergedBindGroup {
     var pipelineId: U32 = 0
-    var identity0: Int = 0
-    var identity1: Int = 0
-    var identity2: Int = 0
-    var identity3: Int = 0
-    var revision0: Int = 0
-    var revision1: Int = 0
-    var revision2: Int = 0
-    var revision3: Int = 0
+    var identities: [UNumber?] = []
+    var revisions: [UNumber?] = []
     var groupId: U32 = 0
+}
+
+// A pipeline a draw binds against: its WebGPU object, and the id its bindings
+// were recorded under.
+public struct DawnDrawPipeline {
+    let handle: RawPtr
+    let id: U32
+}
+
+// How far a group fell short of what its shader reads.
+public struct DawnBindShortfall {
+    let group: UNumber
+    let bound: UNumber
+    let wanted: UNumber
+}
+
+// Why a draw's groups could not be bound. Each is a draw the device would
+// refuse, so it is skipped rather than encoded.
+public enum DawnBindFailure {
+    // A group the shader reads, left unset on the encoder.
+    Unbound(UNumber)
+    Incomplete(DawnBindShortfall)
+    // The device refused the bind group for this group index.
+    GroupRefused(UNumber)
+}
+
+// The bindings one group of a pipeline reads, by group index.
+struct DawnGroupRequest {
+    let index: UNumber
+    let wanted: [Number]
 }
 
 // How many merged groups are kept before the table is emptied and refilled.
@@ -99,7 +124,6 @@ public struct DawnMergedBindGroup {
 // safe at any moment — Dawn holds its own reference to a bind group a recorded
 // command names, which is why a dispatch can release one immediately after
 // binding it.
-public function dawnMaxMergedBindGroups() -> Int { return 256 }
 
 // The resources `digest` says some stage uses.
 //
@@ -138,21 +162,25 @@ public function dawnUsedBindings(digest: borrow String) -> [DawnShaderBinding] {
 }
 
 // The bindings a shader declares in `group`, in the order the digest gave them.
-public function dawnBindingsOfGroup(bindings: borrow [Int], groups: borrow [Int], group: Int) -> [Int] {
-    var out: [Int] = []
-    var index = 0
-    while index < bindings.count {
+public function dawnBindingsOfGroup(
+    bindings: borrow[Number],
+    groups: borrow[Number],
+    group: UNumber
+) -> [Number] {
+    var out: [Number] = []
+    // The two arrays are parallel, so the binding is taken by position and the
+    // shorter of the two ends the walk.
+    for (index, binding) in bindings.enumerated() {
         if index < groups.count && groups[index] == group {
-            out.append(bindings[index])
+            out.append(binding)
         }
-        index = index + 1
     }
     return move out
 }
 
 // How many distinct groups a shader's layout spans.
-public function dawnDistinctGroupCount(groups: borrow [Int]) -> Int {
-    var seen: [Int] = []
+public function dawnDistinctGroupCount(groups: borrow[Number]) -> Number {
+    var seen: [Number] = []
     for group in groups {
         if !dawnBindingsContain(seen, group) {
             seen.append(group)
@@ -161,7 +189,7 @@ public function dawnDistinctGroupCount(groups: borrow [Int]) -> Int {
     return seen.count
 }
 
-public function dawnBindingsContain(bindings: borrow [Int], binding: Int) -> Bool {
+public function dawnBindingsContain(bindings: borrow[Number], binding: UNumber) -> Bool {
     for candidate in bindings {
         if candidate == binding {
             return true
@@ -171,23 +199,31 @@ public function dawnBindingsContain(bindings: borrow [Int], binding: Int) -> Boo
 }
 
 // Remembers what a pipeline's layout declares, so a draw can filter to it.
-public function dawnRecordPipelineBindings(state: borrow mut EMGraphicsAppRuntimeState, pipelineId: U32, used: borrow [DawnShaderBinding]) {
+public function dawnRecordPipelineBindings(
+    state: borrow mut GraphicsRuntimeState,
+    pipelineId: U32,
+    used: borrow[DawnShaderBinding]
+) {
     dawnForgetPipelineBindings(state, pipelineId)
-    var bindings: [Int] = []
-    var groups: [Int] = []
+    var bindings: [Number] = []
+    var groups: [Number] = []
     for entry in used {
         bindings.append(entry.binding)
         groups.append(entry.group)
     }
-    state.dawn.pipelineBindings.append(DawnPipelineBindings {
-        pipelineId: pipelineId,
-        bindings: move bindings,
-        groups: move groups
-    })
-    return
+    state.dawn.pipelineBindings.append(
+        DawnPipelineBindings {
+            pipelineId: pipelineId,
+            bindings: move bindings,
+            groups: move groups
+        }
+    )
 }
 
-public function dawnForgetPipelineBindings(state: borrow mut EMGraphicsAppRuntimeState, pipelineId: U32) {
+public function dawnForgetPipelineBindings(
+    state: borrow mut GraphicsRuntimeState,
+    pipelineId: U32
+) {
     var kept: [DawnPipelineBindings] = []
     for held in state.dawn.pipelineBindings {
         if held.pipelineId != pipelineId {
@@ -195,141 +231,185 @@ public function dawnForgetPipelineBindings(state: borrow mut EMGraphicsAppRuntim
         }
     }
     state.dawn.pipelineBindings = kept
-    return
 }
 
-// Where `pipelineId`'s bindings sit in the table, or -1 when it has none — which
-// is the answer for every pipeline built from a shader with no reflection.
-public function dawnPipelineBindingSlot(state: borrow EMGraphicsAppRuntimeState, pipelineId: U32) -> Int {
-    for index in 0..state.dawn.pipelineBindings.count {
-        if state.dawn.pipelineBindings[index].pipelineId == pipelineId {
-            return index
+// Where `pipelineId`'s bindings sit in the table, or nothing when it has none —
+// which is the answer for every pipeline built from a shader with no
+// reflection.
+public function dawnPipelineBindingSlot(
+    state: borrow GraphicsRuntimeState,
+    pipelineId: U32
+) -> UNumber? {
+    for (index, held) in state.dawn.pipelineBindings.enumerated() {
+        if held.pipelineId == pipelineId {
+            return .Some(index)
         }
     }
-    return 0 - 1
+    return .None
 }
 
-// What tells one bind group apart from another, minted on first use.
-public function dawnGroupIdentity(state: borrow mut EMGraphicsAppRuntimeState, group: borrow BindGroup, present: Bool) -> Int {
-    if !present {
-        return 0
+// What tells one bind group apart from another, minted on first use. Nothing
+// for a slot the encoder left unset.
+public function dawnGroupIdentity(
+    state: borrow mut GraphicsRuntimeState,
+    slot: borrow BindGroup?
+) -> UNumber? {
+    let group = match slot {
+        Some(group) -> group
+        None -> return .None
     }
     var groupState = nativeRecover<BindGroupState>(group.storage)
-    if groupState.identity == 0 {
-        state.dawn.nextGroupIdentity = state.dawn.nextGroupIdentity + 1
-        groupState.identity = state.dawn.nextGroupIdentity
-    }
-    return groupState.identity
-}
-
-public function dawnGroupRevision(group: borrow BindGroup, present: Bool) -> Int {
-    if !present {
-        return 0
-    }
-    return nativeRecover<BindGroupState>(group.storage).revision
-}
-
-// The cached merged group for this combination, or 0 when none is held.
-public function dawnCachedMergedGroup(state: borrow EMGraphicsAppRuntimeState, key: borrow DawnMergedBindGroup) -> U32 {
-    for index in 0..state.dawn.mergedGroups.count {
-        let held = state.dawn.mergedGroups[index]
-        if held.pipelineId == key.pipelineId
-            && held.identity0 == key.identity0
-            && held.identity1 == key.identity1
-            && held.identity2 == key.identity2
-            && held.identity3 == key.identity3
-            && held.revision0 == key.revision0
-            && held.revision1 == key.revision1
-            && held.revision2 == key.revision2
-            && held.revision3 == key.revision3 {
-            return held.groupId
+    match groupState.identity {
+        Some(identity) -> return .Some(identity)
+        None -> {
+            state.dawn.nextGroupIdentity = state.dawn.nextGroupIdentity + 1
+            groupState.identity = .Some(state.dawn.nextGroupIdentity)
+            return groupState.identity
         }
     }
-    return U32(0)
 }
 
-public function dawnReleaseMergedGroups(state: borrow mut EMGraphicsAppRuntimeState) {
+public function dawnGroupRevision(slot: borrow BindGroup?) -> UNumber? {
+    return match slot {
+        Some(group) -> .Some(nativeRecover<BindGroupState>(group.storage).revision)
+        None -> .None
+    }
+}
+
+// The cache key for the encoder's groups merged for `pipelineId`.
+function dawnMergedKey(
+    state: borrow mut GraphicsRuntimeState,
+    pipelineId: U32,
+    groups: borrow[BindGroup?]
+) -> DawnMergedBindGroup {
+    var key = DawnMergedBindGroup { pipelineId: pipelineId }
+    for slot in groups {
+        key.identities.append(dawnGroupIdentity(state, slot))
+        key.revisions.append(dawnGroupRevision(slot))
+    }
+    return key
+}
+
+function dawnSameNumbers(first: borrow[UNumber?], second: borrow[UNumber?]) -> Bool {
+    if first.count != second.count {
+        return false
+    }
+    for (index, number) in first.enumerated() {
+        if number != second[index] { return false }
+    }
+    return true
+}
+
+// The cached merged group for this combination, if one is held.
+public function dawnCachedMergedGroup(
+    state: borrow GraphicsRuntimeState,
+    key: borrow DawnMergedBindGroup
+) -> U32? {
+    for held in state.dawn.mergedGroups {
+        if held.pipelineId == key.pipelineId
+            && dawnSameNumbers(held.identities, key.identities)
+            && dawnSameNumbers(held.revisions, key.revisions) {
+            return .Some(held.groupId)
+        }
+    }
+    return .None
+}
+
+public function dawnReleaseMergedGroups(state: borrow mut GraphicsRuntimeState) {
     for held in state.dawn.mergedGroups {
         let handle = dawnObject(state, held.groupId)
-        if !pointerIsNull(handle) {
+        if !isNull(handle) {
             wgpuBindGroupRelease(handle)
             dawnForgetObject(state, held.groupId)
         }
     }
     state.dawn.mergedGroups = []
-    return
 }
 
-// Merges the encoder's four slots, filters to what the pipeline reads, and binds
-// the result at group 0. Answers whether the draw may proceed.
-public function dawnBindMergedGroup(
-    state: borrow mut EMGraphicsAppRuntimeState,
+// A device bind group over `entries`, made against the pipeline's layout for
+// group `index`. Held on the merged-group table so it is released with
+// everything else a frame minted.
+function dawnMintBindGroup(
+    state: borrow mut GraphicsRuntimeState,
     pipelineHandle: RawPtr,
-    pipelineId: U32,
-    slot: Int,
-    group0: borrow BindGroup,
-    has0: Bool,
-    group1: borrow BindGroup,
-    has1: Bool,
-    group2: borrow BindGroup,
-    has2: Bool,
-    group3: borrow BindGroup,
-    has3: Bool,
-) -> Bool {
-    let wanted = state.dawn.pipelineBindings[slot].bindings
-    if wanted.count == 0 {
-        return true
+    index: UNumber,
+    entries: borrow[WGPUBindGroupEntry]
+) -> RawPtr? {
+    let layout = wgpuRenderPipelineGetBindGroupLayout(pipelineHandle, U32(index))
+    if isNull(layout) {
+        return .None
     }
-    var key = DawnMergedBindGroup {
-        pipelineId: pipelineId,
-        identity0: dawnGroupIdentity(state, group0, has0),
-        identity1: dawnGroupIdentity(state, group1, has1),
-        identity2: dawnGroupIdentity(state, group2, has2),
-        identity3: dawnGroupIdentity(state, group3, has3),
-        revision0: dawnGroupRevision(group0, has0),
-        revision1: dawnGroupRevision(group1, has1),
-        revision2: dawnGroupRevision(group2, has2),
-        revision3: dawnGroupRevision(group3, has3)
-    }
-    let cached = dawnCachedMergedGroup(state, key)
-    if cached != 0 {
-        wgpuRenderPassEncoderSetBindGroup(state.dawn.passEncoder, U32(0), dawnObject(state, cached), U64(0), nullPointer())
-        return true
-    }
-    var collected: [WGPUBindGroupEntry] = []
-    dawnCollectSlot(state, collected, wanted, group0, has0)
-    dawnCollectSlot(state, collected, wanted, group1, has1)
-    dawnCollectSlot(state, collected, wanted, group2, has2)
-    dawnCollectSlot(state, collected, wanted, group3, has3)
-    if collected.count != wanted.count {
-        graphicsFail(.Binding, "a draw bound " + String(collected.count) + " of the " + String(wanted.count) + " resources its shader reads, so it was skipped rather than refused by the device")
-        return false
-    }
-    let layout = wgpuRenderPipelineGetBindGroupLayout(pipelineHandle, U32(0))
-    if pointerIsNull(layout) {
-        return false
-    }
-    let handle = wgpuDeviceCreateBindGroup(state.dawn.device, WGPUBindGroupDescriptor {
-        label: dawnText("kira-merged-bindings"),
-        layout: layout,
-        entryCount: U64(collected.count),
-        entries: WGPUBindGroupEntryArray16 { elements: collected }
-    })
+    let handle = wgpuDeviceCreateBindGroup(
+        state.dawn.device,
+        WGPUBindGroupDescriptor {
+            label: dawnText("kira-bindings"),
+            layout: layout,
+            entryCount: U64(entries.count),
+            entries: WGPUBindGroupEntryArray16 { elements: entries }
+        }
+    )
     wgpuBindGroupLayoutRelease(layout)
-    if pointerIsNull(handle) {
-        return false
+    if isNull(handle) {
+        return .None
     }
-    if state.dawn.mergedGroups.count >= dawnMaxMergedBindGroups() {
+    if state.dawn.mergedGroups.count >= DawnBindLayout.maxMergedBindGroups {
         dawnReleaseMergedGroups(state)
     }
-    key.groupId = dawnRegisterObject(state, handle, dawnFormatUndefined())
+    return .Some(handle)
+}
+
+// Binds `handle` as group `index` of the open pass.
+function dawnSetGroup(state: borrow GraphicsRuntimeState, index: UNumber, handle: RawPtr) {
+    wgpuRenderPassEncoderSetBindGroup(
+        state.dawn.passEncoder,
+        U32(index),
+        handle,
+        U64(0),
+        nullPointer()
+    )
+}
+
+// Merges the encoder's slots, filters to what the pipeline reads, and binds the
+// result at group 0.
+public function dawnBindMergedGroup(
+    state: borrow mut GraphicsRuntimeState,
+    pipeline: borrow DawnDrawPipeline,
+    slot: UNumber,
+    groups: borrow[BindGroup?]
+) -> Result<Void, DawnBindFailure> {
+    let wanted = state.dawn.pipelineBindings[slot].bindings
+    if wanted.count == 0 {
+        return .Ok
+    }
+    var key = dawnMergedKey(state, pipeline.id, groups)
+    match dawnCachedMergedGroup(state, key) {
+        Some(cached) -> {
+            dawnSetGroup(state, 0, dawnObject(state, cached))
+            return .Ok
+        }
+        // Never built for this combination: build it below.
+        None -> {}
+    }
+    var collected: [WGPUBindGroupEntry] = []
+    for group in groups {
+        dawnCollectSlot(state, collected, wanted, group)
+    }
+    if collected.count != wanted.count {
+        let shortfall = DawnBindShortfall { group: 0, bound: collected.count, wanted: wanted.count }
+        return .Error(.Incomplete(shortfall))
+    }
+    let handle = match dawnMintBindGroup(state, pipeline.handle, 0, collected) {
+        Some(handle) -> handle
+        None -> return .Error(.GroupRefused(0))
+    }
+    key.groupId = dawnRegisterObject(state, handle, DawnVocabulary.formatUndefined)
     state.dawn.mergedGroups.append(key)
-    wgpuRenderPassEncoderSetBindGroup(state.dawn.passEncoder, U32(0), handle, U64(0), nullPointer())
-    return true
+    dawnSetGroup(state, 0, handle)
+    return .Ok
 }
 
 // Binds each encoder slot as the WGSL group of the same index, filtered to what
-// that group declares. Answers whether the draw may proceed.
+// that group declares.
 //
 // The slot *is* the group here. A renderer binding a shader's second resource
 // group calls `setBindGroup(1, …)`, which is the same number the shader wrote,
@@ -337,84 +417,73 @@ public function dawnBindMergedGroup(
 // group's bindings, which the merge path cannot express because it holds one
 // flat list for the whole pipeline.
 public function dawnBindPerGroup(
-    state: borrow mut EMGraphicsAppRuntimeState,
-    pipelineHandle: RawPtr,
-    pipelineId: U32,
-    slot: Int,
-    group0: borrow BindGroup,
-    has0: Bool,
-    group1: borrow BindGroup,
-    has1: Bool,
-    group2: borrow BindGroup,
-    has2: Bool,
-    group3: borrow BindGroup,
-    has3: Bool,
-) -> Bool {
+    state: borrow mut GraphicsRuntimeState,
+    pipeline: borrow DawnDrawPipeline,
+    slot: UNumber,
+    groups: borrow[BindGroup?]
+) -> Result<Void, DawnBindFailure> {
     let bindings = state.dawn.pipelineBindings[slot].bindings
-    let groups = state.dawn.pipelineBindings[slot].groups
-    if !dawnBindOneGroup(state, pipelineHandle, pipelineId, dawnBindingsOfGroup(bindings, groups, 0), 0, group0, has0) {
-        return false
+    let groupOf = state.dawn.pipelineBindings[slot].groups
+    for (index, group) in groups.enumerated() {
+        let request = DawnGroupRequest {
+            index: index,
+            wanted: dawnBindingsOfGroup(bindings, groupOf, index)
+        }
+        match dawnBindOneGroup(state, pipeline, request, group) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
     }
-    if !dawnBindOneGroup(state, pipelineHandle, pipelineId, dawnBindingsOfGroup(bindings, groups, 1), 1, group1, has1) {
-        return false
-    }
-    if !dawnBindOneGroup(state, pipelineHandle, pipelineId, dawnBindingsOfGroup(bindings, groups, 2), 2, group2, has2) {
-        return false
-    }
-    return dawnBindOneGroup(state, pipelineHandle, pipelineId, dawnBindingsOfGroup(bindings, groups, 3), 3, group3, has3)
+    return .Ok
 }
 
 // One group's bind group, built from the slot of the same index.
 public function dawnBindOneGroup(
-    state: borrow mut EMGraphicsAppRuntimeState,
-    pipelineHandle: RawPtr,
-    pipelineId: U32,
-    wanted: borrow [Int],
-    index: Int,
-    group: borrow BindGroup,
-    present: Bool,
-) -> Bool {
+    state: borrow mut GraphicsRuntimeState,
+    pipeline: borrow DawnDrawPipeline,
+    request: borrow DawnGroupRequest,
+    slot: borrow BindGroup?
+) -> Result<Void, DawnBindFailure> {
     // A group the shader declares nothing in needs no bind group, whatever the
     // encoder happens to be carrying at that slot.
-    if wanted.count == 0 {
-        return true
+    if request.wanted.count == 0 {
+        return .Ok
     }
-    if !present {
-        graphicsFail(.Binding, "a draw left group " + String(index) + " unbound, which its shader reads, so it was skipped rather than refused by the device")
-        return false
+    if slot == .None {
+        return .Error(.Unbound(request.index))
     }
     var collected: [WGPUBindGroupEntry] = []
-    dawnCollectSlot(state, collected, wanted, group, present)
-    if collected.count != wanted.count {
-        graphicsFail(.Binding, "a draw bound " + String(collected.count) + " of the " + String(wanted.count) + " resources its shader reads in group " + String(index) + ", so it was skipped rather than refused by the device")
-        return false
+    dawnCollectSlot(state, collected, request.wanted, slot)
+    if collected.count != request.wanted.count {
+        return .Error(
+            .Incomplete(
+                DawnBindShortfall {
+                    group: request.index,
+                    bound: collected.count,
+                    wanted: request.wanted.count
+                }
+            )
+        )
     }
-    let layout = wgpuRenderPipelineGetBindGroupLayout(pipelineHandle, U32(index))
-    if pointerIsNull(layout) {
-        return false
+    let handle = match dawnMintBindGroup(state, pipeline.handle, request.index, collected) {
+        Some(handle) -> handle
+        None -> return .Error(.GroupRefused(request.index))
     }
-    let handle = wgpuDeviceCreateBindGroup(state.dawn.device, WGPUBindGroupDescriptor {
-        label: dawnText("kira-group-bindings"),
-        layout: layout,
-        entryCount: U64(collected.count),
-        entries: WGPUBindGroupEntryArray16 { elements: collected }
-    })
-    wgpuBindGroupLayoutRelease(layout)
-    if pointerIsNull(handle) {
-        return false
+    let groupId = dawnRegisterObject(state, handle, DawnVocabulary.formatUndefined)
+    state.dawn.mergedGroups.append(
+        DawnMergedBindGroup { pipelineId: pipeline.id, groupId: groupId }
+    )
+    dawnSetGroup(state, request.index, handle)
+    return .Ok
+}
+
+function dawnEntryHeld(collected: borrow[WGPUBindGroupEntry], binding: U32) -> Bool {
+    for held in collected {
+        if held.binding == binding {
+            return true
+        }
     }
-    // Held on the merged-group table so it is released with everything else a
-    // frame minted: the table is a list of device objects to free, and this is
-    // one, whatever built it.
-    if state.dawn.mergedGroups.count >= dawnMaxMergedBindGroups() {
-        dawnReleaseMergedGroups(state)
-    }
-    state.dawn.mergedGroups.append(DawnMergedBindGroup {
-        pipelineId: pipelineId,
-        groupId: dawnRegisterObject(state, handle, dawnFormatUndefined())
-    })
-    wgpuRenderPassEncoderSetBindGroup(state.dawn.passEncoder, U32(index), handle, U64(0), nullPointer())
-    return true
+    return false
 }
 
 // Adds one slot's entries, keeping only the bindings the pipeline reads and only
@@ -424,30 +493,27 @@ public function dawnBindOneGroup(
 // caller assigns each resource one slot — so a second entry for a binding is a
 // caller's mistake, and taking the first keeps the answer the same whichever
 // order the slots are walked in.
-public function dawnCollectSlot(
-    state: borrow EMGraphicsAppRuntimeState,
-    collected: borrow mut [WGPUBindGroupEntry],
-    wanted: borrow [Int],
-    group: borrow BindGroup,
-    present: Bool,
+function dawnCollectSlot(
+    state: borrow GraphicsRuntimeState,
+    collected: borrow mut[WGPUBindGroupEntry],
+    wanted: borrow[Number],
+    slot: borrow BindGroup?
 ) {
-    if !present {
-        return
+    let group = match slot {
+        Some(group) -> group
+        None -> return
     }
     for entry in dawnBindGroupEntries(state, group.storage) {
-        let binding = Int(entry.binding)
+        let binding = Number(entry.binding)
         if !dawnBindingsContain(wanted, binding) {
             continue
         }
-        var already = false
-        for held in collected {
-            if held.binding == entry.binding {
-                already = true
-            }
-        }
-        if !already {
+        if !dawnEntryHeld(collected, entry.binding) {
             collected.append(entry)
         }
     }
-    return
+}
+
+public namespace DawnBindLayout {
+    let maxMergedBindGroups: UNumber = 256
 }

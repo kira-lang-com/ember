@@ -10,18 +10,16 @@
 // `kg_pipeline_records` table, keyed by a public id this struct's own `id`
 // now is.
 public struct RenderPipeline {
-    var id: U32 = 0
-    var drawPipelineId: U32 = 0
-    var indexedPipelineId: U32 = 0
+    var id: PipelineId = NoPipelineId
+    var drawPipelineId: PipelineId = NoPipelineId
+    var indexedPipelineId: PipelineId = NoPipelineId
     // Copied from the shader this pipeline was built from, at creation.
     var hasPositionAttribute: Bool = false
-    var requiredUniformMask: Int = 0
-    var availableUniformMask: Int = 0
+    var requiredUniformMask: UN32 = 0
+    var availableUniformMask: UN32 = 0
     var uniformBlocks: [UniformBlockDescriptor] = []
 }
 
 public function emptyRenderPipeline() -> RenderPipeline {
-    return RenderPipeline {
-        id: 0
-    }
+    return RenderPipeline { id: NoPipelineId }
 }

@@ -21,11 +21,11 @@
 // *view* id and not an image id.
 public struct PassAttachments {
     var hasColor: Bool = false
-    var color: ColorAttachment
+    var color: ColorAttachment = ColorAttachment()
     var hasDepth: Bool = false
-    var depth: DepthAttachment
+    var depth: DepthAttachment = DepthAttachment()
     var hasStencil: Bool = false
-    var stencil: StencilAttachment
+    var stencil: StencilAttachment = StencilAttachment()
 
     // Whether the pass draws into a texture the program owns rather than into
     // the window's swapchain.
@@ -43,40 +43,40 @@ public struct PassAttachments {
     // The attachment *views* a backend attaches through, not the images. Metal
     // repeats its one texture id into every view field, so both backends read
     // the same thing here.
-    function colorViewId() -> U32 {
+    function colorViewId() -> ViewId {
         return self.color.target.texture.colorViewId
     }
 
-    function resolveViewId() -> U32 {
+    function resolveViewId() -> ViewId {
         return self.color.resolveTarget.texture.colorViewId
     }
 
-    function depthViewId() -> U32 {
+    function depthViewId() -> ViewId {
         return self.depth.texture.depthViewId
     }
 
-    function stencilViewId() -> U32 {
+    function stencilViewId() -> ViewId {
         return self.stencil.texture.depthViewId
     }
 
     // The color target's extent, which sizes the pass and any managed depth
     // buffer provisioned to match it.
-    function colorWidth() -> Int {
+    function colorWidth() -> Number {
         return self.color.target.texture.width
     }
 
-    function colorHeight() -> Int {
+    function colorHeight() -> Number {
         return self.color.target.texture.height
     }
 
-    function colorSampleCount() -> Int {
+    function colorSampleCount() -> Number {
         return self.color.target.texture.sampleCount
     }
 
     // The texture the pass leaves behind for later sampling: the resolve target
     // when the pass has one, because that is the single-sampled image a shader
     // reads.
-    function sampledTexture() -> EMGraphicsTexture {
+    function sampledTexture() -> GraphicsTexture {
         if self.color.hasResolveTarget {
             return self.color.resolveTarget.texture
         }

@@ -12,6 +12,12 @@
 
 import Foundation
 
+// The bytes one texel of an uploaded RGBA8 image takes: the layout every
+// `updateTexture` and `createTextureFromPixels` array is in.
+public namespace TexelBytes {
+    let rgba8: UNumber = 4
+}
+
 public enum TextureFormat {
     Rgba8Unorm
     Rgba16Float
@@ -24,7 +30,7 @@ public enum TextureFormat {
     None
 }
 
-public function textureFormatCode(format: TextureFormat) -> Int {
+public function textureFormatCode(format: TextureFormat) -> Number {
     match format {
         Rgba8Unorm -> return 1
         Rgba16Float -> return 2
@@ -42,7 +48,7 @@ public enum VertexFormat {
     Float4
 }
 
-public function vertexFormatCode(format: VertexFormat) -> Int {
+public function vertexFormatCode(format: VertexFormat) -> Number {
     match format {
         Float -> return 0
         Float2 -> return 1
@@ -65,7 +71,7 @@ public enum BlendPreset {
     PremultipliedSubtractive
 }
 
-public function blendPresetCode(preset: BlendPreset) -> Int {
+public function blendPresetCode(preset: BlendPreset) -> Number {
     match preset {
         Replace -> return 1
         Alpha -> return 2
@@ -86,7 +92,7 @@ public enum CompareFunction {
     Always
 }
 
-public function compareFunctionCode(compare: CompareFunction) -> Int {
+public function compareFunctionCode(compare: CompareFunction) -> Number {
     match compare {
         Never -> return 0
         Less -> return 1
@@ -104,7 +110,7 @@ public enum CullMode {
     Back
 }
 
-public function cullModeCode(mode: CullMode) -> Int {
+public function cullModeCode(mode: CullMode) -> Number {
     match mode {
         None -> return 0
         Front -> return 1
@@ -117,7 +123,7 @@ public enum FrontFace {
     Clockwise
 }
 
-public function frontFaceCode(face: FrontFace) -> Int {
+public function frontFaceCode(face: FrontFace) -> Number {
     match face {
         CounterClockwise -> return 1
         Clockwise -> return 2
@@ -130,7 +136,7 @@ public enum PrimitiveTopology {
     LineList
 }
 
-public function primitiveTopologyCode(topology: PrimitiveTopology) -> Int {
+public function primitiveTopologyCode(topology: PrimitiveTopology) -> Number {
     match topology {
         TriangleList -> return 1
         TriangleStrip -> return 2
@@ -143,7 +149,7 @@ public enum IndexFormat {
     Uint32
 }
 
-public function indexFormatCode(format: IndexFormat) -> Int {
+public function indexFormatCode(format: IndexFormat) -> Number {
     match format {
         Uint16 -> return 1
         Uint32 -> return 2

@@ -1,0 +1,345 @@
+import Foundation
+import Heap
+
+// A render target whose memory leaves the process as a dma-buf.
+//
+// Unlike every image in `VulkanTexture.kira`, this one is LINEAR: an importer
+// reads its bytes with no knowledge of this driver's tiling, so the layout has
+// to be the one every reader shares — rows end to end at a stride the driver
+// reports. The memory is a dedicated allocation, made exportable when it is
+// allocated, because a dma-buf names a whole allocation and an importer that
+// found two images in one would read the wrong one.
+//
+// The fd is taken from the device that renders into the image. An importer
+// under venus cannot map memory that a different device allocated, so this is
+// the only device a compositor's peer can export from.
+
+namespace VulkanExport {
+    let dmaBuf: U32 = U32(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)
+    let tilingLinear: I32 = I32(VK_IMAGE_TILING_LINEAR)
+    let colorAttachmentFeature: U32 = U32(VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT)
+    // The sRGB twins of the two exportable formats: the same bytes in memory.
+    let formatRgba8Srgb: I32 = I32(43)
+    let formatBgra8Srgb: I32 = I32(50)
+    // An exported image is drawn into and sampled; a capture reads it back.
+    let usage: TextureUsage = .RenderTargetSampled
+}
+
+// The byte order of `format` in memory, or nothing for a format that is not
+// four bytes of color.
+function vulkanExportedPixelFormat(format: I32) -> ExportedPixelFormat? {
+    if format == VulkanVocabulary.formatRgba8 || format == VulkanExport.formatRgba8Srgb {
+        return .Some(.Rgba8Unorm)
+    }
+    if format == VulkanVocabulary.formatBgra8 || format == VulkanExport.formatBgra8Srgb {
+        return .Some(.Bgra8Unorm)
+    }
+    return .None
+}
+
+// Whether the device can draw into a linear image of `format`. Linear color
+// attachments are optional in Vulkan, and a device without them cannot render
+// into anything an importer could read.
+function vulkanRendersLinear(state: borrow VulkanState, format: I32) -> Bool {
+    let properties = boxed<VkFormatProperties>(VkFormatProperties())
+    vkGetPhysicalDeviceFormatProperties(state.physicalDevice, format, properties.pointer())
+    let features = boxedValue<VkFormatProperties>(properties).linearTilingFeatures
+    return (features & VulkanExport.colorAttachmentFeature) != U32(0)
+}
+
+// A linear image whose memory may be exported as a dma-buf.
+function vulkanNewExportableImage(
+    state: borrow VulkanState,
+    descriptor: borrow ExportedTextureDescriptor,
+    format: I32
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let external = boxed<VkExternalMemoryImageCreateInfo>(
+        VkExternalMemoryImageCreateInfo {
+            sType: I32(VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO),
+            handleTypes: VulkanExport.dmaBuf
+        }
+    )
+    let info = VkImageCreateInfo {
+        sType: VulkanVocabulary.structureImageCreateInfo,
+        pNext: external.pointer(),
+        imageType: VulkanVocabulary.imageType2d,
+        format: format,
+        extent: VkExtent3D {
+            width: U32(descriptor.width),
+            height: U32(descriptor.height),
+            depth: U32(1)
+        },
+        mipLevels: U32(1),
+        arrayLayers: U32(1),
+        samples: I32(1),
+        tiling: VulkanExport.tilingLinear,
+        usage: vulkanImageUsage(VulkanExport.usage),
+        sharingMode: VulkanVocabulary.sharingExclusive,
+        initialLayout: VulkanVocabulary.imageLayoutUndefined
+    }
+    let imageSlot = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(imageSlot))
+}
+
+// The memory type an exported image is allocated from: device-local where the
+// device offers one the image accepts, and any type it accepts otherwise — an
+// integrated GPU's only type may be both, and a software device has no
+// device-local type at all.
+function vulkanExportMemoryType(
+    state: borrow VulkanState,
+    requirements: borrow VkMemoryRequirements
+) -> U32? {
+    return match vulkanFindMemoryType(
+        state,
+        requirements.memoryTypeBits,
+        VulkanVocabulary.memoryDeviceLocal
+    ) {
+        Some(memoryType) -> .Some(memoryType)
+        None -> vulkanFindMemoryType(state, requirements.memoryTypeBits, U32(0))
+    }
+}
+
+// Memory dedicated to `image` and exportable as a dma-buf, not yet bound.
+function vulkanAllocateExportable(
+    state: borrow VulkanState,
+    image: RawPtr,
+    requirements: borrow VkMemoryRequirements,
+    memoryType: U32
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let dedicated = boxed<VkMemoryDedicatedAllocateInfo>(
+        VkMemoryDedicatedAllocateInfo {
+            sType: I32(VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO),
+            image: image
+        }
+    )
+    let exportInfo = boxed<VkExportMemoryAllocateInfo>(
+        VkExportMemoryAllocateInfo {
+            sType: I32(VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO),
+            pNext: dedicated.pointer(),
+            handleTypes: VulkanExport.dmaBuf
+        }
+    )
+    let allocate = VkMemoryAllocateInfo {
+        sType: VulkanVocabulary.structureMemoryAllocateInfo,
+        pNext: exportInfo.pointer(),
+        allocationSize: requirements.size,
+        memoryTypeIndex: memoryType
+    }
+    let memorySlot = boxed<RawPtr>(nullPointer())
+    let allocated = vulkanResultOf(
+        vkAllocateMemory(state.device, allocate, nullPointer(), memorySlot.pointer())
+    )
+    if allocated != .Success {
+        return .Error(.MemoryRefused(allocated))
+    }
+    return .Ok(boxedValue<RawPtr>(memorySlot))
+}
+
+// A dedicated, exportable allocation behind `image`, bound. Frees the memory,
+// but not the image, when the bind is refused.
+function vulkanBackExportableImage(
+    state: borrow VulkanState,
+    image: RawPtr
+) -> Result<VulkanAllocation, VulkanResourceFailure> {
+    let requirements = vulkanImageRequirements(state, image)
+    let memoryType = match vulkanExportMemoryType(state, requirements) {
+        Some(memoryType) -> memoryType
+        None -> return .Error(.NoMemoryType)
+    }
+    let memory = match vulkanAllocateExportable(state, image, requirements, memoryType) {
+        Ok(memory) -> memory
+        Error(failure) -> return .Error(failure)
+    }
+    let bound = vulkanResultOf(vkBindImageMemory(state.device, image, memory, U64(0)))
+    if bound != .Success {
+        vkFreeMemory(state.device, memory, nullPointer())
+        return .Error(.BindRefused(bound))
+    }
+    return .Ok(
+        VulkanAllocation { memory: memory, memoryType: memoryType, size: Number(requirements.size) }
+    )
+}
+
+// Where the pixels sit in the image's memory, as the driver laid them out.
+function vulkanColorLayout(state: borrow VulkanState, image: RawPtr) -> VkSubresourceLayout {
+    let subresource = VkImageSubresource { aspectMask: VulkanVocabulary.aspectColor }
+    let layout = boxed<VkSubresourceLayout>(VkSubresourceLayout())
+    vkGetImageSubresourceLayout(state.device, image, subresource, layout.pointer())
+    return boxedValue<VkSubresourceLayout>(layout)
+}
+
+// The exportable image, backed and registered, and its memory's layout.
+struct VulkanExportedImage {
+    let id: U32
+    let memory: RawPtr
+    let layout: VkSubresourceLayout
+    let pixelFormat: ExportedPixelFormat
+}
+
+function vulkanCreateExportableImage(
+    state: borrow mut VulkanState,
+    descriptor: borrow ExportedTextureDescriptor,
+    format: I32,
+    pixelFormat: ExportedPixelFormat
+) -> Result<VulkanExportedImage, VulkanResourceFailure> {
+    let image = match vulkanNewExportableImage(state, descriptor, format) {
+        Ok(image) -> image
+        Error(failure) -> return .Error(failure)
+    }
+    let allocation = match vulkanBackExportableImage(state, image) {
+        Ok(allocation) -> allocation
+        Error(failure) -> {
+            vkDestroyImage(state.device, image, nullPointer())
+            return .Error(failure)
+        }
+    }
+    let layout = vulkanColorLayout(state, image)
+    let id = vulkanRegisterObject(
+        state,
+        VulkanObject {
+            kind: .Image,
+            handle: image,
+            memory: .Some(allocation.memory),
+            size: allocation.size,
+            allocationSize: allocation.size,
+            format: format
+        }
+    )
+    return .Ok(
+        VulkanExportedImage {
+            id: id,
+            memory: allocation.memory,
+            layout: layout,
+            pixelFormat: pixelFormat
+        }
+    )
+}
+
+// The image's views, and the fd naming its memory. Releases the image when
+// either cannot be had.
+function vulkanExportImage(
+    state: borrow mut VulkanState,
+    descriptor: borrow ExportedTextureDescriptor,
+    image: borrow VulkanExportedImage
+) -> ExportedTextureResult {
+    let views = match vulkanCreateTextureViews(state, image.id, VulkanExport.usage) {
+        Ok(views) -> views
+        Error(failure) -> {
+            vulkanReleaseObject(state, image.id)
+            log fault(
+                "could not create an exported texture's views",
+                failure,
+                label: descriptor.label
+            )
+            return .Error(.DeviceRefused)
+        }
+    }
+    let fd = match vulkanGetMemoryFd(state.device, image.memory) {
+        Some(fd) -> fd
+        None -> {
+            vulkanReleaseViews(state, views)
+            vulkanReleaseObject(state, image.id)
+            log fault(
+                "the driver would not export an image's memory as a dma-buf",
+                label: descriptor.label
+            )
+            return .Error(.DeviceRefused)
+        }
+    }
+    return .Ok(vulkanExportedTexture(descriptor, image, views, fd))
+}
+
+// What the caller gets: the texture a pass draws into, and its memory as an
+// importer needs it described.
+function vulkanExportedTexture(
+    descriptor: borrow ExportedTextureDescriptor,
+    image: borrow VulkanExportedImage,
+    views: borrow VulkanTextureViews,
+    fd: I32
+) -> ExportedTexture {
+    let texture = TextureDescriptor {
+        label: descriptor.label,
+        width: descriptor.width,
+        height: descriptor.height,
+        usage: VulkanExport.usage
+    }
+    let memory = ExportedMemory {
+        kind: .DmaBuf,
+        handle: UN32(fd),
+        width: descriptor.width,
+        height: descriptor.height,
+        stride: UN32(image.layout.rowPitch),
+        offset: UN32(image.layout.offset),
+        format: image.pixelFormat
+    }
+    return ExportedTexture {
+        texture: vulkanGraphicsTexture(texture, image.id, views),
+        memory: memory
+    }
+}
+
+// The byte order the export will report, or nothing for a descriptor with no
+// size or a format that is not four bytes of color. Logs which.
+function vulkanExportDescriptorFormat(
+    descriptor: borrow ExportedTextureDescriptor,
+    format: I32
+) -> ExportedPixelFormat? {
+    if descriptor.width <= 0 || descriptor.height <= 0 {
+        log fault(
+            "an exported texture needs a size",
+            width: descriptor.width,
+            height: descriptor.height
+        )
+        return .None
+    }
+    let pixelFormat = vulkanExportedPixelFormat(format)
+    if pixelFormat == .None {
+        log fault("only four-byte color formats export", format: descriptor.format)
+    }
+    return pixelFormat
+}
+
+public function vulkanCreateExportedTexture(
+    context: RawPtr,
+    descriptor: borrow ExportedTextureDescriptor
+) -> ExportedTextureResult {
+    if !vulkanRequireDevice(context, "vulkanCreateExportedTexture") {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let format = vulkanImageFormat(state.vulkan, descriptor.format)
+    let pixelFormat = match vulkanExportDescriptorFormat(descriptor, format) {
+        Some(pixelFormat) -> pixelFormat
+        None -> return .Error(.InvalidDescriptor)
+    }
+    if !vulkanMemoryExportSupported(state.vulkan.device)
+        || !vulkanRendersLinear(state.vulkan, format) {
+        return .Error(.Unexportable)
+    }
+    let image = match vulkanCreateExportableImage(
+        state.vulkan,
+        descriptor,
+        format,
+        move pixelFormat
+    ) {
+        Ok(image) -> image
+        Error(failure) -> {
+            log fault("could not create an exported texture", failure, label: descriptor.label)
+            return .Error(.DeviceRefused)
+        }
+    }
+    return vulkanExportImage(state.vulkan, descriptor, image)
+}
+
+public function vulkanDestroyExportedTexture(context: RawPtr, exported: borrow ExportedTexture) {
+    vulkanDestroyTexture(context, exported.texture)
+    if exported.memory.handle > 0 {
+        vulkanCloseFd(I32(exported.memory.handle))
+    }
+}

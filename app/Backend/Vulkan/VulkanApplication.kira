@@ -1,378 +1,256 @@
 import Foundation
+import Heap
 
 // Vulkan's native run loop. Window events are added at the platform boundary;
 // the GPU lifetime below is deliberately independent of that translation.
 
-public function vulkanRunApplication(app: borrow EMGraphicsApplication, runtimeUserData: RawPtr) {
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
+// The window `app` asks for, open and wired to the runtime: on Windows the
+// window procedure can reach the run state, and on Wayland the seat is bound
+// and the first configure has been read.
+function vulkanOpenWindow(
+    runtime: borrow mut GraphicsRuntimeState,
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+) -> Result<RawPtr, WindowFailure> {
+    let window = match vulkanWindowFor(vulkanWindowPlatformForHost()).open(app.windowRequest()) {
+        Ok(window) -> window
+        Error(failure) -> return .Error(failure)
+    }
+    runtime.vulkan.window = window
+    if targetPlatform!() == .Windows {
+        runtime.vulkan.messageBlock = allocateZeroed(
+            memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
+        )
+        dawnAttachWindowRuntime(window, runtimeUserData)
+    }
+    if targetPlatform!() == .Linux {
+        runtime.dawn.window = window
+        if runtime.scale > 0 {
+            kira_wayland_surface_set_scale(window, I32(runtime.scale))
+        }
+        dawnWaylandAttachInput(runtime, runtimeUserData)
+        kira_wayland_surface_commit(window)
+        if kira_wayland_display_roundtrip(kira_wayland_proxy_get_display(window)) < I32(0) {
+            return .Error(.NoDisplay)
+        }
+    }
+    return .Ok(window)
+}
+
+function vulkanGraphics(runtime: borrow GraphicsRuntimeState, runtimeUserData: RawPtr) -> Graphics {
+    return Graphics {
+        userData: runtime.userData,
+        backend: .Vulkan,
+        backendContext: runtimeUserData
+    }
+}
+
+public function vulkanRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
     runtime.vulkan = VulkanState()
     readHarnessKnobs(runtime)
-    if hostPlatform() == .Windows && app.highDpi {
+    if targetPlatform!() == .Windows && app.highDpi {
         markProcessDpiAware()
     }
-    let window = vulkanWindowFor(vulkanWindowPlatformForHost())
-    runtime.vulkan.window = window.open(app.title, app.width, app.height, app.windowMode, app.transparent, app.opacity)
-    if pointerIsNull(runtime.vulkan.window) {
-        graphicsFail(.Window, "could not open the window '" + app.title + "' (" + String(app.width) + "x" + String(app.height) + "); is a display server running?")
-        return
+    match vulkanOpenWindow(runtime, app, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault(
+                "could not open the window; is a display server running?",
+                failure,
+                title: app.title
+            )
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
     }
-    if hostPlatform() == .Windows {
-        runtime.vulkan.messageBlock = allocateBytes(U64(48))
-        dawnAttachWindowRuntime(runtime.vulkan.window, runtimeUserData)
-    }
-    if hostPlatform() == .Linux {
-        runtime.dawn.window = runtime.vulkan.window
-        dawnWaylandAttachInput(runtime, runtimeUserData)
-        let display = kira_wayland_proxy_get_display(runtime.vulkan.window)
-        kira_wayland_surface_commit(runtime.vulkan.window)
-        kira_wayland_display_roundtrip(display)
-    }
-    if !vulkanCreateInstance(runtime.vulkan, true) {
-        vulkanShutdownState(runtime.vulkan)
-        return
-    }
-    runtime.vulkan.surface = window.createSurface(runtime.vulkan.instance, runtime.vulkan.window)
-    if pointerIsNull(runtime.vulkan.surface) {
-        graphicsFail(.Device, "could not create a surface for its window")
-        vulkanShutdownState(runtime.vulkan)
-        return
-    }
-    if !vulkanChoosePhysicalDevice(runtime.vulkan) || !vulkanCreateDevice(runtime.vulkan, true) || !vulkanCreateCommandState(runtime.vulkan) || !vulkanCreateSwapchain(runtime.vulkan) {
-        vulkanShutdownState(runtime.vulkan)
-        return
+    match vulkanSetUpWindowed(runtime.vulkan, vulkanWindowFor(vulkanWindowPlatformForHost())) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not set up Vulkan for its window", failure)
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
     }
     runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
     runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
     runtime.vulkan.initialized = true
     emberLiveBackendInitialized()
-    let graphics = EMGraphics {
-        userData: runtime.userData,
-        backend: .Vulkan,
-        backendContext: runtimeUserData
-    }
-    let onInit: (EMGraphics) -> Void = runtime.app.initHandler
-    onInit(move graphics)
+    let onInit: (Graphics) -> Void = runtime.app.initHandler
+    onInit(vulkanGraphics(runtime, runtimeUserData))
     vulkanDriveFrames(runtimeUserData)
-    vkDeviceWaitIdle(runtime.vulkan.device)
-    let cleanupGraphics = EMGraphics {
-        userData: runtime.userData,
-        backend: .Vulkan,
-        backendContext: runtimeUserData
-    }
-    let onCleanup: (EMGraphics) -> Void = runtime.app.cleanupHandler
-    onCleanup(move cleanupGraphics)
+    vulkanSettleDevice(runtime.vulkan, "the application's resources")
+    let onCleanup: (Graphics) -> Void = runtime.app.cleanupHandler
+    onCleanup(vulkanGraphics(runtime, runtimeUserData))
     vulkanShutdownState(runtime.vulkan)
-    return
 }
 
-let vulkanIdleFrameSeconds: Float = 1.0 / 60.0
+// What an unpresented frame waits out. A frame that presents nothing has no
+// compositor to pace it, so the loop would otherwise spin as fast as the CPU
+// allows. This is the interval it asks for rather than a cap on what it measures:
+// a frame that overran waits zero, which is the whole point — the sleep is the
+// floor, not a limiter on the work.
+public namespace VulkanIdleFrame {
+    let seconds: Number = 1 / 60
+}
+
+// Drains the platform's queue. The two window systems are least alike here:
+// Windows hands a client a message queue it peeks, and Wayland hands it a
+// socket whose events are dispatched to the listeners already installed on each
+// object.
+function vulkanPumpEvents(runtime: borrow mut GraphicsRuntimeState) {
+    if targetPlatform!() == .Windows {
+        vulkanPumpWindows(runtime)
+    }
+    if targetPlatform!() == .Linux {
+        dawnPumpWayland(runtime.vulkan.window)
+    }
+}
 
 public function vulkanDriveFrames(runtimeUserData: RawPtr) {
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(runtimeUserData)
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
     while !runtime.vulkan.quitRequested {
-        if hostPlatform() == .Windows {
-            vulkanPumpWindows(runtime, runtimeUserData)
+        vulkanPumpEvents(runtime)
+        if runtime.vulkan.quitRequested {
+            return
         }
-        if hostPlatform() == .Linux {
-            dawnPumpWayland(runtime.vulkan.window)
-        }
-        if runtime.vulkan.quitRequested { return }
         vulkanResizeIfNeeded(runtime)
-        if !vulkanAcquireFrame(runtime.vulkan) { return }
-        runtime.vulkan.frameStartedAt = vulkanMonotonicNanoseconds()
-        runtime.vulkan.framePassCount = 0
-        runtime.vulkan.frameDrawCount = 0
-        runtime.vulkan.frameTriangleCount = 0
-        let graphics = EMGraphics {
-            userData: runtime.userData,
-            backend: .Vulkan,
-            backendContext: runtimeUserData
+        match vulkanAcquireFrame(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not begin a frame; the run ends", failure)
+                return
+            }
         }
-        var frame = graphics.frame()
-        runtime.frameIndex = runtime.frameIndex + 1
-        vulkanDriveScripts(runtime, frame, runtime.frameIndex - 1)
-        let onFrame: (borrow mut RenderFrame) -> Void = runtime.app.frameHandler
-        onFrame(frame)
-        if frame.shouldQuit {
-            runtime.vulkan.quitRequested = true
-        }
-        var captureBuffer = U32(0)
-        if runtime.captureAtFrame > 0 && runtime.frameIndex == runtime.captureAtFrame {
-            captureBuffer = vulkanRecordFrameCapture(runtime.vulkan)
-        }
-        vulkanSubmitFrame(runtimeUserData, frame)
-        vulkanWriteFrameCapture(runtime.vulkan, captureBuffer, runtime.capturePath)
-        if !runtime.vulkan.presentedThisFrame {
-            // Presenting is what paces a frame to the display. A frame that
-            // presents nothing waits out the interval itself, or the loop spins.
-            kgSleepSeconds(vulkanIdleFrameSeconds - (kgMonotonicSeconds() - Float(Int(runtime.vulkan.frameStartedAt)) / 1000000000.0))
-        } else if graphicsTracing() {
-            graphicsTrace(.Frame, "frame " + String(runtime.frameIndex) + ": presented image " + String(Int(runtime.vulkan.currentImageIndex))
-                + " after " + String(runtime.vulkan.stats.passCount) + " passes, " + String(runtime.vulkan.stats.drawCount) + " draws")
-        }
+        vulkanRunFrame(runtime, runtimeUserData)
         if runtime.quitAfterFrames > 0 && runtime.frameIndex >= runtime.quitAfterFrames {
             return
         }
     }
-    return
 }
 
-public function vulkanResizeIfNeeded(runtime: borrow mut EMGraphicsAppRuntimeState) {
+// One acquired frame: scripted input, the application's frame, the submit,
+// and the capture when the harness asked for one on this frame.
+function vulkanRunFrame(runtime: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
+    runtime.vulkan.frameStartedAt = vulkanMonotonicNanoseconds()
+    runtime.vulkan.framePassCount = 0
+    runtime.vulkan.frameDrawCount = 0
+    runtime.vulkan.frameTriangleCount = 0
+    var frame = vulkanGraphics(runtime, runtimeUserData).frame()
+    runtime.frameIndex = runtime.frameIndex + 1
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    driveInputScript(runtime.inputScript, Number(runtime.frameIndex) - 1, onEvent)
+    let onFrame: (borrow mut RenderFrame) -> Void = runtime.app.frameHandler
+    onFrame(frame)
+    if frame.shouldQuit {
+        runtime.vulkan.quitRequested = true
+    }
+    match captureDue(runtime.capture, runtime.frameIndex) {
+        Some(path) -> vulkanSubmitCapturedFrame(runtime, runtimeUserData, frame, path)
+        None -> vulkanSubmitFrame(runtimeUserData, frame)
+    }
+    vulkanSettleFrame(runtime)
+}
+
+// The frame submitted with its swapchain image copied out first, and the copy
+// written to `path` once the submit has retired it.
+function vulkanSubmitCapturedFrame(
+    runtime: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr,
+    frame: borrow mut RenderFrame,
+    path: borrow String
+) {
+    let staging = match vulkanRecordFrameCapture(runtime.vulkan) {
+        Ok(staging) -> staging
+        Error(failure) -> {
+            log fault("could not capture the frame", failure)
+            vulkanSubmitFrame(runtimeUserData, frame)
+            return
+        }
+    }
+    vulkanSubmitFrame(runtimeUserData, frame)
+    match vulkanWriteFrameCapture(runtime.vulkan, staging, path) {
+        Ok -> log debug("wrote the presented frame", path: path)
+        Error(failure) -> log fault("could not write the presented frame", failure, path: path)
+    }
+}
+
+// Presenting is what paces a frame to the display. A frame that presents
+// nothing waits out the interval itself, or the loop spins. A frame that
+// overran the interval waits nothing, so the subtraction is floored rather than
+// handed to the clock as a negative sleep.
+function vulkanSettleFrame(runtime: borrow GraphicsRuntimeState) {
+    if runtime.vulkan.presentedThisFrame {
+        log debug(
+            "presented a frame",
+            frameIndex: runtime.frameIndex,
+            currentImageIndex: runtime.vulkan.currentImageIndex,
+            passCount: runtime.vulkan.stats.passCount,
+            drawCount: runtime.vulkan.stats.drawCount
+        )
+        return
+    }
+    let spent = harnessClockSeconds() - secondsFromNanoseconds(
+        Number(runtime.vulkan.frameStartedAt)
+    )
+    let remaining = VulkanIdleFrame.seconds - spent
+    if remaining > 0 {
+        harnessSleepSeconds(remaining)
+    }
+}
+
+public function vulkanResizeIfNeeded(runtime: borrow mut GraphicsRuntimeState) {
     let window = vulkanWindowFor(vulkanWindowPlatformForHost())
     let width = window.clientWidth(runtime.vulkan.window)
     let height = window.clientHeight(runtime.vulkan.window)
-    if width <= 0 || height <= 0 || (width == runtime.vulkan.swapchainWidth && height == runtime.vulkan.swapchainHeight) {
+    if width <= 0 || height <= 0 || (
+        width == runtime.vulkan.swapchainWidth && height == runtime.vulkan.swapchainHeight
+    ) {
         return
     }
-    if !vulkanRecreateSwapchain(runtime.vulkan) { return }
+    match vulkanRecreateSwapchain(runtime.vulkan) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault(
+                "could not recreate the swapchain at the window's new size",
+                failure,
+                width: width,
+                height: height
+            )
+            return
+        }
+    }
     runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
     runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
     let scale = window.scale(runtime.vulkan.window)
-    let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
-    onEvent(EMAppEvent {
-        kind: .Resized,
-        windowWidth: Int(Float(width) / scale),
-        windowHeight: Int(Float(height) / scale),
-        framebufferWidth: width,
-        framebufferHeight: height
-    })
-    return
-}
-
-public function vulkanPumpWindows(runtime: borrow mut EMGraphicsAppRuntimeState, runtimeUserData: RawPtr) {
-    let messages: WindowMessagePointer = runtime.vulkan.messageBlock
-    let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
-    while peekMessage(messages, nullPointer(), U32(0), U32(0), U32(1)) != 0 {
-        let message = messages.message
-        if message == dawnMessageQuit() {
-            runtime.vulkan.quitRequested = true
-            onEvent(EMAppEvent { kind: .QuitRequested, modifiers: dawnModifierState() })
-            return
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    onEvent(
+        AppEvent {
+            kind: .Resized,
+            // Points, not whole pixels: at a 1.25x scale a 1924-pixel client
+            // area is 1539.2 points, and an event that rounds it here is a
+            // layout that lays out one pixel out.
+            windowWidth: Number(width) / scale,
+            windowHeight: Number(height) / scale,
+            framebufferWidth: UN32(width),
+            framebufferHeight: UN32(height)
         }
-        vulkanDeliverWindowMessage(runtime, message, messages.wparam, messages.lparam)
-        translateMessage(messages)
-        dispatchMessage(messages)
-    }
-    let _ = runtimeUserData
-    return
+    )
 }
 
-public function vulkanDeliverWindowMessage(runtime: borrow mut EMGraphicsAppRuntimeState, message: U32, wparam: U64, lparam: Int) {
-    let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
+// Drains the Win32 message queue, turning what the application cares about into
+// `AppEvent`s and dispatching the rest.
+public function vulkanPumpWindows(runtime: borrow mut GraphicsRuntimeState) {
     let scale = vulkanWindowFor(vulkanWindowPlatformForHost()).scale(runtime.vulkan.window)
-    let rawX = lparam & 65535
-    let rawY = (lparam >> 16) & 65535
-    let x = Float(rawX >= 32768 ? rawX - 65536 : rawX) / scale
-    let y = Float(rawY >= 32768 ? rawY - 65536 : rawY) / scale
-    if message == dawnMessagePointerMove() {
-        let deltaX = runtime.vulkan.hasPointer ? x - runtime.vulkan.pointerX : 0.0
-        let deltaY = runtime.vulkan.hasPointer ? y - runtime.vulkan.pointerY : 0.0
-        runtime.vulkan.pointerX = x
-        runtime.vulkan.pointerY = y
-        runtime.vulkan.hasPointer = true
-        onEvent(EMAppEvent { kind: .PointerMoved, modifiers: dawnModifierState(), pointerX: x, pointerY: y, pointerDeltaX: deltaX, pointerDeltaY: deltaY })
-        return
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    match win32DrainMessages(runtime.vulkan.messageBlock, scale, runtime.vulkan.input, onEvent) {
+        QuitPosted -> runtime.vulkan.quitRequested = true
+        Empty -> {}
     }
-    if dawnMessageIsPointerButton(message) {
-        runtime.vulkan.pointerX = x
-        runtime.vulkan.pointerY = y
-        runtime.vulkan.hasPointer = true
-        onEvent(EMAppEvent {
-            kind: dawnMessageIsPointerDown(message) ? .PointerDown : .PointerUp,
-            modifiers: dawnModifierState(),
-            pointerButton: dawnPointerButton(message),
-            pointerX: x,
-            pointerY: y
-        })
-        return
-    }
-    if message == dawnMessageWheel() {
-        onEvent(EMAppEvent {
-            kind: .Scroll,
-            modifiers: dawnModifierState(),
-            pointerX: runtime.vulkan.pointerX,
-            pointerY: runtime.vulkan.pointerY,
-            scrollY: Float(dawnWheelNotches(wparam)) / 120.0
-        })
-        return
-    }
-    if message == dawnMessageKeyDown() || message == dawnMessageSystemKeyDown() {
-        onEvent(EMAppEvent {
-            kind: .KeyDown,
-            modifiers: dawnModifierState(),
-            keyCode: dawnKeyCode(Int(wparam)),
-            keyRepeat: ((lparam >> 30) & 1) == 1
-        })
-        return
-    }
-    if message == dawnMessageKeyUp() || message == dawnMessageSystemKeyUp() {
-        onEvent(EMAppEvent { kind: .KeyUp, modifiers: dawnModifierState(), keyCode: dawnKeyCode(Int(wparam)) })
-        return
-    }
-    if message == dawnMessageChar() {
-        let codepoint = Int(wparam)
-        if codepoint >= 32 && (codepoint < 55296 || codepoint > 57343) {
-            onEvent(EMAppEvent { kind: .TextInput, modifiers: dawnModifierState(), textCodepoint: codepoint })
-        }
-        return
-    }
-    if message == dawnMessageSetFocus() {
-        runtime.vulkan.focused = true
-        onEvent(EMAppEvent { kind: .Focused })
-        return
-    }
-    if message == dawnMessageKillFocus() {
-        runtime.vulkan.focused = false
-        onEvent(EMAppEvent { kind: .Unfocused })
-    }
-    return
-}
-
-public function vulkanDriveScripts(runtime: borrow mut EMGraphicsAppRuntimeState, frame: borrow mut RenderFrame, scriptFrame: Int) {
-    let onEvent: (borrow EMAppEvent) -> Void = runtime.app.eventHandler
-    var clickIndex = 0
-    while clickIndex + 3 <= runtime.clickScript.count {
-        if runtime.clickScript[clickIndex] == scriptFrame {
-            let px = Float(runtime.clickScript[clickIndex + 1])
-            let py = Float(runtime.clickScript[clickIndex + 2])
-            onEvent(EMAppEvent { kind: .PointerDown, pointerButton: .Left, pointerX: px, pointerY: py })
-            onEvent(EMAppEvent { kind: .PointerUp, pointerButton: .Left, pointerX: px, pointerY: py })
-        }
-        clickIndex = clickIndex + 3
-    }
-    var scrollIndex = 0
-    while scrollIndex + 4 <= runtime.scrollScript.count {
-        if runtime.scrollScript[scrollIndex] == scriptFrame {
-            let px = Float(runtime.scrollScript[scrollIndex + 1])
-            let py = Float(runtime.scrollScript[scrollIndex + 2])
-            onEvent(EMAppEvent { kind: .PointerMoved, pointerX: px, pointerY: py })
-            onEvent(EMAppEvent { kind: .Scroll, pointerX: px, pointerY: py, scrollY: Float(runtime.scrollScript[scrollIndex + 3]) / 10.0 })
-        }
-        scrollIndex = scrollIndex + 4
-    }
-    var dragIndex = 0
-    while dragIndex + 7 <= runtime.dragScript.count {
-        let start = runtime.dragScript[dragIndex]
-        let steps = runtime.dragScript[dragIndex + 6]
-        let px = Float(runtime.dragScript[dragIndex + 1])
-        let py = Float(runtime.dragScript[dragIndex + 2])
-        let dx = Float(runtime.dragScript[dragIndex + 3])
-        let dy = Float(runtime.dragScript[dragIndex + 4])
-        if scriptFrame == start {
-            onEvent(EMAppEvent { kind: .PointerMoved, pointerX: px, pointerY: py })
-            onEvent(EMAppEvent { kind: .PointerDown, pointerButton: dawnScriptButton(runtime.dragScript[dragIndex + 5]), pointerX: px, pointerY: py })
-        }
-        if steps > 0 && scriptFrame > start && scriptFrame <= start + steps {
-            let step = Float(scriptFrame - start) / Float(steps)
-            onEvent(EMAppEvent { kind: .PointerMoved, pointerX: px + dx * step, pointerY: py + dy * step })
-        }
-        if scriptFrame == start + steps + 1 {
-            onEvent(EMAppEvent { kind: .PointerUp, pointerButton: dawnScriptButton(runtime.dragScript[dragIndex + 5]), pointerX: px + dx, pointerY: py + dy })
-        }
-        dragIndex = dragIndex + 7
-    }
-    driveTypingScripts(runtime, scriptFrame)
-    let _ = frame
-    return
-}
-
-public function vulkanShutdownState(state: borrow mut VulkanState) {
-    if pointerIsNull(state.instance) {
-        if !pointerIsNull(state.window) {
-            vulkanWindowFor(vulkanWindowPlatformForHost()).close(state.window)
-            state.window = nullPointer()
-        }
-        return
-    }
-    if !pointerIsNull(state.device) {
-        vkDeviceWaitIdle(state.device)
-    }
-    for shader in state.shaders {
-        if shader.live {
-            if !pointerIsNull(shader.vertexModule) { vkDestroyShaderModule(state.device, shader.vertexModule, nullPointer()) }
-            if !pointerIsNull(shader.fragmentModule) { vkDestroyShaderModule(state.device, shader.fragmentModule, nullPointer()) }
-            if !pointerIsNull(shader.computeModule) { vkDestroyShaderModule(state.device, shader.computeModule, nullPointer()) }
-        }
-    }
-    state.shaders = []
-    for pipeline in state.pipelines {
-        if pipeline.live {
-            vkDestroyPipeline(state.device, pipeline.pipeline, nullPointer())
-            vkDestroyPipelineLayout(state.device, pipeline.layout, nullPointer())
-            for layout in pipeline.groupLayouts { vkDestroyDescriptorSetLayout(state.device, layout, nullPointer()) }
-        }
-    }
-    state.pipelines = []
-    // Views reference their images, so retire every view before any image.
-    for objectIndex in 0..state.objects.count {
-        let object = state.objects[objectIndex]
-        if !pointerIsNull(object) && state.objectKinds[objectIndex] == vulkanObjectKindImageView() && !pointerIsNull(state.device) {
-            vkDestroyImageView(state.device, object, nullPointer())
-        }
-    }
-    for objectIndex in 0..state.objects.count {
-        let object = state.objects[objectIndex]
-        if pointerIsNull(object) { continue }
-        let kind = state.objectKinds[objectIndex]
-        if kind == vulkanObjectKindImage() {
-            if !pointerIsNull(state.device) { vkDestroyImage(state.device, object, nullPointer()) }
-            let memory = state.objectMemory[objectIndex]
-            if !pointerIsNull(memory) && !pointerIsNull(state.device) { vkFreeMemory(state.device, memory, nullPointer()) }
-        }
-        if kind == vulkanObjectKindBuffer() {
-            let memory = state.objectMemory[objectIndex]
-            if !pointerIsNull(state.objectExtra[objectIndex]) && !pointerIsNull(memory) && !pointerIsNull(state.device) { vkUnmapMemory(state.device, memory) }
-            if !pointerIsNull(state.device) { vkDestroyBuffer(state.device, object, nullPointer()) }
-            if !pointerIsNull(memory) && !pointerIsNull(state.device) { vkFreeMemory(state.device, memory, nullPointer()) }
-        }
-        if kind == vulkanObjectKindSampler() && !pointerIsNull(state.device) { vkDestroySampler(state.device, object, nullPointer()) }
-    }
-    state.objects = []
-    state.objectMemory = []
-    state.objectExtra = []
-    state.objectSizes = []
-    state.objectAllocationSizes = []
-    state.objectStrides = []
-    state.objectFormats = []
-    state.objectOffsets = []
-    state.objectKinds = []
-    state.objectLayouts = []
-    if !pointerIsNull(state.descriptorPool) {
-        vkDestroyDescriptorPool(state.device, state.descriptorPool, nullPointer())
-        state.descriptorPool = nullPointer()
-    }
-    if !pointerIsNull(state.inFlightFence) {
-        vkDestroyFence(state.device, state.inFlightFence, nullPointer())
-        state.inFlightFence = nullPointer()
-    }
-    if !pointerIsNull(state.imageAvailable) {
-        vkDestroySemaphore(state.device, state.imageAvailable, nullPointer())
-        state.imageAvailable = nullPointer()
-    }
-    vulkanDestroySwapchain(state)
-    if !pointerIsNull(state.commandPool) {
-        vkDestroyCommandPool(state.device, state.commandPool, nullPointer())
-        state.commandPool = nullPointer()
-    }
-    if !pointerIsNull(state.surface) {
-        vulkanDestroySurface(state.instance, state.surface)
-        state.surface = nullPointer()
-    }
-    if !pointerIsNull(state.device) {
-        vkDestroyDevice(state.device, nullPointer())
-        state.device = nullPointer()
-    }
-    if !pointerIsNull(state.instance) {
-        vkDestroyInstance(state.instance, nullPointer())
-        state.instance = nullPointer()
-    }
-    if !pointerIsNull(state.window) {
-        vulkanWindowFor(vulkanWindowPlatformForHost()).close(state.window)
-        state.window = nullPointer()
-    }
-    if !pointerIsNull(state.messageBlock) {
-        freeBytes(state.messageBlock)
-        state.messageBlock = nullPointer()
-    }
-    return
 }

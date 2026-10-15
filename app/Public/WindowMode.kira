@@ -1,6 +1,6 @@
 // How an application's window is presented.
 //
-// Two questions wear the same vocabulary. `EMGraphicsApplication.windowMode` is
+// Two questions wear the same vocabulary. `GraphicsApplication.windowMode` is
 // the mode the window OPENS in, which is what a library shipping an application
 // shell sets as its default; `RenderFrame.setWindowMode` is the mode a running
 // program moves to, which is what a menu item or a keyboard shortcut drives.
@@ -16,7 +16,7 @@
 //
 // A backend that has one undecorated window and no separate borderless state
 // says so by what `windowMode` reads back: see `sokolWindowMode`.
-public enum EMWindowMode {
+public enum WindowMode {
     Windowed
     WindowedBorderless
     Fullscreen

@@ -1,0 +1,330 @@
+import Foundation
+import Heap
+
+// Pipeline layouts are derived from the KSL resource digest. A descriptor set is
+// still allocated per draw, because public bind groups intentionally exist before
+// a pipeline and Vulkan layouts are pipeline-owned.
+
+// What a pipeline's descriptor layout holds at most.
+public namespace VulkanLayoutLimit {
+    // Bind groups a pipeline reads.
+    let groups: UNumber = 4
+    // Bindings in one group: `VulkanDescriptorBindingArray32` carries no more.
+    let bindingsPerGroup: UNumber = 32
+}
+
+// The KSL `stageMask` bits, in the order the digest writes them, against the
+// Vulkan stage each one names.
+public function vulkanShaderStageFlags(mask: UNumber) -> U32 {
+    let stages = [U32(VK_SHADER_STAGE_VERTEX_BIT), U32(VK_SHADER_STAGE_FRAGMENT_BIT), U32(
+        VK_SHADER_STAGE_COMPUTE_BIT
+    )]
+    var flags = U32(0)
+    for bit in 0..stages.count {
+        if ((mask >> bit) & 1) != 0 {
+            flags = flags | stages[bit]
+        }
+    }
+    return flags
+}
+
+// One resource a shader reads, whatever its kind.
+public struct VulkanReflectedBinding {
+    let group: UNumber
+    let binding: UNumber
+    let stageMask: UNumber
+    let kind: VulkanDescriptorType
+}
+
+// The uniform and storage buffers the reflection names.
+function vulkanReflectedBuffers(
+    reflection: borrow KslResourceReflection,
+    found: borrow mut [VulkanReflectedBinding]
+) {
+    for item in reflection.uniforms {
+        found.append(
+            VulkanReflectedBinding {
+                group: item.group,
+                binding: item.binding,
+                stageMask: item.stageMask,
+                kind: .UniformBuffer
+            }
+        )
+    }
+    for item in reflection.storageBuffers {
+        found.append(
+            VulkanReflectedBinding {
+                group: item.group,
+                binding: item.binding,
+                stageMask: item.stageMask,
+                kind: .StorageBuffer
+            }
+        )
+    }
+}
+
+// The textures, samplers and storage images the reflection names.
+function vulkanReflectedImages(
+    reflection: borrow KslResourceReflection,
+    found: borrow mut [VulkanReflectedBinding]
+) {
+    for item in reflection.textures {
+        found.append(
+            VulkanReflectedBinding {
+                group: item.group,
+                binding: item.binding,
+                stageMask: item.stageMask,
+                kind: .SampledImage
+            }
+        )
+    }
+    for item in reflection.samplers {
+        found.append(
+            VulkanReflectedBinding {
+                group: item.group,
+                binding: item.binding,
+                stageMask: item.stageMask,
+                kind: .Sampler
+            }
+        )
+    }
+    for item in reflection.images {
+        found.append(
+            VulkanReflectedBinding {
+                group: item.group,
+                binding: item.binding,
+                stageMask: item.stageMask,
+                kind: .StorageImage
+            }
+        )
+    }
+}
+
+// Every resource the reflection names that some stage reads. A resource no
+// stage reads is left out: it has no place in a layout.
+public function vulkanReflectedBindings(
+    reflection: borrow KslResourceReflection
+) -> [VulkanReflectedBinding] {
+    var found: [VulkanReflectedBinding] = []
+    vulkanReflectedBuffers(reflection, found)
+    vulkanReflectedImages(reflection, found)
+    var read: [VulkanReflectedBinding] = []
+    for item in found {
+        if item.stageMask != 0 {
+            read.append(item)
+        }
+    }
+    return read
+}
+
+public function vulkanReflectionGroupCount(reflection: borrow KslResourceReflection) -> UNumber {
+    var count: UNumber = 0
+    for item in vulkanReflectedBindings(reflection) {
+        count = max(count, item.group + 1)
+    }
+    return min(count, VulkanLayoutLimit.groups)
+}
+
+// The bindings group `group` reads, each once, in the ascending binding order
+// Vulkan consumes dynamic offsets in, whatever resource categories reflection
+// lists them under.
+public function vulkanGroupBindings(
+    reflection: borrow KslResourceReflection,
+    group: UNumber
+) -> [VulkanReflectedBinding] {
+    var bindings: [VulkanReflectedBinding] = []
+    for item in vulkanReflectedBindings(reflection) {
+        if item.group != group || vulkanHasBinding(bindings, item.binding) {
+            continue
+        }
+        if bindings.count >= VulkanLayoutLimit.bindingsPerGroup {
+            break
+        }
+        bindings.append(item)
+    }
+    vulkanSortByBinding(bindings)
+    return bindings
+}
+
+function vulkanHasBinding(bindings: borrow[VulkanReflectedBinding], binding: UNumber) -> Bool {
+    for item in bindings {
+        if item.binding == binding {
+            return true
+        }
+    }
+    return false
+}
+
+function vulkanSortByBinding(bindings: borrow mut[VulkanReflectedBinding]) {
+    for index in 0..bindings.count {
+        var least = index
+        for candidate in (index + 1)..bindings.count {
+            if bindings[candidate].binding < bindings[least].binding {
+                least = candidate
+            }
+        }
+        let held = bindings[index]
+        bindings[index] = bindings[least]
+        bindings[least] = held
+    }
+}
+
+public function vulkanDescriptorBindings(
+    reflection: borrow KslResourceReflection,
+    group: UNumber
+) -> [VkDescriptorSetLayoutBinding] {
+    var bindings: [VkDescriptorSetLayoutBinding] = []
+    for item in vulkanGroupBindings(reflection, group) {
+        bindings.append(
+            VkDescriptorSetLayoutBinding {
+                binding: U32(item.binding),
+                descriptorType: vulkanDescriptorCode(item.kind),
+                descriptorCount: U32(1),
+                stageFlags: vulkanShaderStageFlags(item.stageMask)
+            }
+        )
+    }
+    return bindings
+}
+
+// Why a pipeline's layout could not be made.
+public enum VulkanLayoutFailure {
+    GroupRefused(VulkanResult)
+    LayoutRefused(VulkanResult)
+}
+
+// A pipeline layout and the per-group layouts it was made from, which live and
+// die with it.
+public struct VulkanPipelineLayouts {
+    let layout: RawPtr
+    let groupLayouts: [RawPtr]
+}
+
+function vulkanDestroyGroupLayouts(state: borrow VulkanState, layouts: borrow[RawPtr]) {
+    for held in layouts {
+        vkDestroyDescriptorSetLayout(state.device, held, nullPointer())
+    }
+}
+
+function vulkanCreateGroupLayout(
+    state: borrow VulkanState,
+    reflection: borrow KslResourceReflection,
+    group: UNumber
+) -> Result<RawPtr, VulkanLayoutFailure> {
+    let bindings = vulkanDescriptorBindings(reflection, group)
+    let info = VkDescriptorSetLayoutCreateInfo {
+        sType: VulkanVocabulary.structureDescriptorSetLayoutCreateInfo,
+        bindingCount: U32(bindings.count),
+        pBindings: VulkanDescriptorBindingArray32 { elements: bindings }
+    }
+    let layout = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateDescriptorSetLayout(state.device, info, nullPointer(), layout.pointer())
+    )
+    if result != .Success {
+        return .Error(.GroupRefused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(layout))
+}
+
+function vulkanCreateGroupLayouts(
+    state: borrow VulkanState,
+    reflection: borrow KslResourceReflection
+) -> Result< [RawPtr], VulkanLayoutFailure> {
+    var layouts: [RawPtr] = []
+    for group in 0..vulkanReflectionGroupCount(reflection) {
+        match vulkanCreateGroupLayout(state, reflection, group) {
+            Ok(layout) -> layouts.append(layout)
+            Error(failure) -> {
+                vulkanDestroyGroupLayouts(state, layouts)
+                return .Error(failure)
+            }
+        }
+    }
+    return .Ok(layouts)
+}
+
+// The set layouts laid end to end, as `VkPipelineLayoutCreateInfo` reads them.
+function vulkanPointerSlotArray(values: borrow[RawPtr]) -> RawPtr {
+    let storage = allocateZeroed(memoryLayout(values.count * sizeOf<RawPtr>(), alignOf<RawPtr>()))
+    for index in 0..values.count {
+        heapStore<RawPtr>(storage, index * sizeOf<RawPtr>(), values[index])
+    }
+    return storage
+}
+
+// The layout a pipeline over `reflection` binds through.
+public function vulkanCreatePipelineLayouts(
+    state: borrow VulkanState,
+    reflection: borrow KslResourceReflection
+) -> Result<VulkanPipelineLayouts, VulkanLayoutFailure> {
+    let groupLayouts = match vulkanCreateGroupLayouts(state, reflection) {
+        Ok(layouts) -> layouts
+        Error(failure) -> return .Error(failure)
+    }
+    let pointers = vulkanPointerSlotArray(groupLayouts)
+    let info = VkPipelineLayoutCreateInfo {
+        sType: VulkanVocabulary.structurePipelineLayoutCreateInfo,
+        setLayoutCount: U32(groupLayouts.count),
+        pSetLayouts: pointers
+    }
+    let layout = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreatePipelineLayout(state.device, info, nullPointer(), layout.pointer())
+    )
+    deallocate(pointers)
+    if result != .Success {
+        vulkanDestroyGroupLayouts(state, groupLayouts)
+        return .Error(.LayoutRefused(result))
+    }
+    return .Ok(
+        VulkanPipelineLayouts {
+            layout: boxedValue<RawPtr>(layout),
+            groupLayouts: move groupLayouts
+        }
+    )
+}
+
+public function vulkanDestroyPipelineLayouts(
+    state: borrow VulkanState,
+    layouts: borrow VulkanPipelineLayouts
+) {
+    vkDestroyPipelineLayout(state.device, layouts.layout, nullPointer())
+    vulkanDestroyGroupLayouts(state, layouts.groupLayouts)
+}
+
+public function vulkanRecordPipeline(
+    state: borrow mut VulkanState,
+    record: VulkanPipelineRecord
+) -> UNumber {
+    state.resourceCount = state.resourceCount + 1
+    for index in 0..state.pipelines.count {
+        if !state.pipelines[index].live {
+            state.pipelines[index] = move record
+            return index + 1
+        }
+    }
+    state.pipelines.append(move record)
+    return state.pipelines.count
+}
+
+public function vulkanPipelineRecord(
+    state: borrow VulkanState,
+    id: UNumber
+) -> VulkanPipelineRecord {
+    if id == 0 || id > state.pipelines.count {
+        return VulkanPipelineRecord()
+    }
+    return state.pipelines[id - 1]
+}
+
+public function vulkanReleasePipeline(state: borrow mut VulkanState, index: UNumber) {
+    if index >= state.pipelines.count || !state.pipelines[index].live { return }
+    vulkanSettleQueue(state, "a pipeline")
+    let record = state.pipelines[index]
+    vkDestroyPipeline(state.device, record.pipeline, nullPointer())
+    vkDestroyPipelineLayout(state.device, record.layout, nullPointer())
+    vulkanDestroyGroupLayouts(state, record.groupLayouts)
+    state.pipelines[index].live = false
+    state.resourceCount = state.resourceCount - 1
+}

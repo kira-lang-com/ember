@@ -1,182 +1,32 @@
 import Foundation
+import Heap
 
-// Pipeline layouts are derived from the KSL resource digest. A descriptor set is
-// still allocated per draw, because public bind groups intentionally exist before
-// a pipeline and Vulkan layouts are pipeline-owned.
+// Render pipelines: the fixed-function state a `RenderPipelineDescriptor` asks
+// for, built once and baked into one `VkPipeline` drawn through by dynamic
+// rendering. Layouts are `VulkanPipelineLayout.kira`'s.
 
-public function vulkanShaderStageFlags(mask: Int) -> U32 {
-    var flags = U32(0)
-    if (mask & 1) != 0 { flags = flags | U32(1) }
-    if (mask & 2) != 0 { flags = flags | U32(16) }
-    if (mask & 4) != 0 { flags = flags | U32(32) }
-    return flags
+// What one render pipeline holds at most.
+public namespace VulkanPipelineLimit {
+    let colorTargets: UNumber = 1
+    // `VulkanVertexAttributeArray16` carries no more.
+    let vertexAttributes: UNumber = 16
+    // A vertex and a fragment stage.
+    let graphicsStages: U32 = U32(2)
 }
 
-public function vulkanReflectionGroupCount(reflection: borrow KslResourceReflection) -> Int {
-    var count = 0
-    for block in reflection.uniforms {
-        if block.stageMask != 0 && block.group + 1 > count { count = block.group + 1 }
-    }
-    for buffer in reflection.storageBuffers {
-        if buffer.stageMask != 0 && buffer.group + 1 > count { count = buffer.group + 1 }
-    }
-    for texture in reflection.textures {
-        if texture.stageMask != 0 && texture.group + 1 > count { count = texture.group + 1 }
-    }
-    for sampler in reflection.samplers {
-        if sampler.stageMask != 0 && sampler.group + 1 > count { count = sampler.group + 1 }
-    }
-    for image in reflection.images {
-        if image.stageMask != 0 && image.group + 1 > count { count = image.group + 1 }
-    }
-    return count > 4 ? 4 : count
+public namespace VulkanBlend {
+    // Red, green, blue and alpha all written.
+    let writeAll: U32 = U32(
+        VK_COLOR_COMPONENT_R_BIT | VK_COLOR_COMPONENT_G_BIT | VK_COLOR_COMPONENT_B_BIT | VK_COLOR_COMPONENT_A_BIT
+    )
+    // A stencil compare or write that reads every bit.
+    let stencilAllBits: U32 = U32(4294967295)
 }
 
-public function vulkanHasBinding(bindings: borrow [VkDescriptorSetLayoutBinding], binding: Int) -> Bool {
-    for item in bindings {
-        if Int(item.binding) == binding {
-            return true
-        }
-    }
-    return false
-}
-
-public function vulkanAddBinding(bindings: borrow mut [VkDescriptorSetLayoutBinding], binding: Int, descriptorType: I32, stageMask: Int) {
-    if binding < 0 || vulkanHasBinding(bindings, binding) || bindings.count >= 32 {
-        return
-    }
-    bindings.append(VkDescriptorSetLayoutBinding {
-        binding: U32(binding),
-        descriptorType: descriptorType,
-        descriptorCount: U32(1),
-        stageFlags: vulkanShaderStageFlags(stageMask)
-    })
-    return
-}
-
-public function vulkanDescriptorBindings(reflection: borrow KslResourceReflection, group: Int) -> [VkDescriptorSetLayoutBinding] {
-    var bindings: [VkDescriptorSetLayoutBinding] = []
-    for block in reflection.uniforms {
-        if block.group == group && block.stageMask != 0 {
-            vulkanAddBinding(bindings, block.binding, vulkanDescriptorUniformBuffer(), block.stageMask)
-        }
-    }
-    for buffer in reflection.storageBuffers {
-        if buffer.group == group && buffer.stageMask != 0 {
-            vulkanAddBinding(bindings, buffer.binding, vulkanDescriptorStorageBuffer(), buffer.stageMask)
-        }
-    }
-    for texture in reflection.textures {
-        if texture.group == group && texture.stageMask != 0 {
-            vulkanAddBinding(bindings, texture.binding, vulkanDescriptorSampledImage(), texture.stageMask)
-        }
-    }
-    for sampler in reflection.samplers {
-        if sampler.group == group && sampler.stageMask != 0 {
-            vulkanAddBinding(bindings, sampler.binding, vulkanDescriptorSampler(), sampler.stageMask)
-        }
-    }
-    for image in reflection.images {
-        if image.group == group && image.stageMask != 0 {
-            vulkanAddBinding(bindings, image.binding, vulkanDescriptorStorageImage(), image.stageMask)
-        }
-    }
-    // Vulkan consumes dynamic offsets in ascending binding order, regardless
-    // of the resource categories used by reflection.
-    var index = 1
-    while index < bindings.count {
-        var position = index
-        while position > 0 && bindings[position - 1].binding > bindings[position].binding {
-            let previous = bindings[position - 1]
-            bindings[position - 1] = bindings[position]
-            bindings[position] = previous
-            position = position - 1
-        }
-        index = index + 1
-    }
-    return bindings
-}
-
-public function vulkanCreateDescriptorSetLayouts(state: borrow mut VulkanState, reflection: borrow KslResourceReflection) -> [RawPtr] {
-    let groupCount = vulkanReflectionGroupCount(reflection)
-    var layouts: [RawPtr] = []
-    var group = 0
-    while group < groupCount {
-        let bindings = vulkanDescriptorBindings(reflection, group)
-        let info = VkDescriptorSetLayoutCreateInfo {
-            sType: vulkanStructureDescriptorSetLayoutCreateInfo(),
-            bindingCount: U32(bindings.count),
-            pBindings: VulkanDescriptorBindingArray32 { elements: bindings }
-        }
-        let layoutSlot = vulkanPointerSlot()
-        let result = vkCreateDescriptorSetLayout(state.device, info, nullPointer(), layoutSlot)
-        let layout = pointerAt(layoutSlot, U64(0))
-        freeBytes(layoutSlot)
-        if result != vulkanSuccess() || pointerIsNull(layout) {
-            for held in layouts {
-                vkDestroyDescriptorSetLayout(state.device, held, nullPointer())
-            }
-            return []
-        }
-        layouts.append(layout)
-        group = group + 1
-    }
-    return layouts
-}
-
-public function vulkanRecordPipeline(state: borrow mut VulkanState, record: VulkanPipelineRecord) -> Int {
-    for index in 0..state.pipelines.count {
-        if !state.pipelines[index].live {
-            state.pipelines[index] = record
-            state.resourceCount = state.resourceCount + 1
-            return index + 1
-        }
-    }
-    state.pipelines.append(record)
-    state.resourceCount = state.resourceCount + 1
-    return state.pipelines.count
-}
-
-public function vulkanPipelineRecord(state: borrow VulkanState, id: Int) -> VulkanPipelineRecord {
-    let index = id - 1
-    if index < 0 || index >= state.pipelines.count {
-        return VulkanPipelineRecord {
-            pipeline: nullPointer(),
-            layout: nullPointer(),
-            reflection: KslResourceReflection {}
-        }
-    }
-    return state.pipelines[index]
-}
-
-public function vulkanCreatePipelineLayout(state: borrow mut VulkanState, layouts: borrow [RawPtr]) -> RawPtr {
-    let layoutPointers = vulkanPointerSlotArray(layouts)
-    let info = VkPipelineLayoutCreateInfo {
-        sType: vulkanStructurePipelineLayoutCreateInfo(),
-        setLayoutCount: U32(layouts.count),
-        pSetLayouts: layoutPointers
-    }
-    let layoutSlot = vulkanPointerSlot()
-    let result = vkCreatePipelineLayout(state.device, info, nullPointer(), layoutSlot)
-    let layout = pointerAt(layoutSlot, U64(0))
-    freeBytes(layoutSlot)
-    freeBytes(layoutPointers)
-    if result != vulkanSuccess() {
-        graphicsFail(.Pipeline, "could not create a pipeline layout of " + String(layouts.count) + " descriptor sets (" + vulkanResultName(result) + ")")
-        return nullPointer()
-    }
-    return layout
-}
-
-public function vulkanPointerSlotArray(values: borrow [RawPtr]) -> RawPtr {
-    let storage = allocateBytes(U64(values.count * 8))
-    for index in 0..values.count {
-        writePointer(storage, U64(index * 8), values[index])
-    }
-    return storage
-}
-
-public function vulkanPipelineColorFormat(descriptor: borrow RenderPipelineDescriptor, state: borrow VulkanState) -> I32 {
+public function vulkanPipelineColorFormat(
+    descriptor: borrow RenderPipelineDescriptor,
+    state: borrow VulkanState
+) -> I32 {
     if descriptor.colorTargets.count == 0 {
         return vulkanSwapchainFormatOrDefault(state)
     }
@@ -198,245 +48,401 @@ public function vulkanSwapchainFormatOrDefault(state: borrow VulkanState) -> I32
     return vulkanTextureFormat(.Swapchain)
 }
 
-public function vulkanBuildBlend(preset: borrow BlendPreset) -> VkPipelineColorBlendAttachmentState {
-    match preset {
-        Replace -> return VkPipelineColorBlendAttachmentState {
-            srcColorBlendFactor: vulkanBlendOne(),
-            dstColorBlendFactor: vulkanBlendZero(),
-            colorBlendOp: vulkanBlendAdd(),
-            srcAlphaBlendFactor: vulkanBlendOne(),
-            dstAlphaBlendFactor: vulkanBlendZero(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
+// The factors and operations one blend preset combines source and destination
+// with. Each preset names only where it departs from adding the whole source.
+struct VulkanBlendFactors {
+    let sourceColor: I32 = VulkanVocabulary.blendOne
+    let destinationColor: I32 = VulkanVocabulary.blendOne
+    let colorOperation: I32 = VulkanVocabulary.blendAdd
+    let sourceAlpha: I32 = VulkanVocabulary.blendOne
+    let destinationAlpha: I32 = VulkanVocabulary.blendOne
+}
+
+function vulkanBlendFactors(preset: borrow BlendPreset) -> VulkanBlendFactors {
+    let zero = VulkanVocabulary.blendZero
+    let sourceAlpha = VulkanVocabulary.blendSrcAlpha
+    let inverseAlpha = VulkanVocabulary.blendOneMinusSrcAlpha
+    return match preset {
+        Replace -> VulkanBlendFactors { destinationColor: zero, destinationAlpha: zero }
+        Alpha -> VulkanBlendFactors {
+            sourceColor: sourceAlpha,
+            destinationColor: inverseAlpha,
+            destinationAlpha: inverseAlpha
         }
-        Alpha -> return VkPipelineColorBlendAttachmentState {
-            blendEnable: U32(1),
-            srcColorBlendFactor: vulkanBlendSrcAlpha(),
-            dstColorBlendFactor: vulkanBlendOneMinusSrcAlpha(),
-            colorBlendOp: vulkanBlendAdd(),
-            srcAlphaBlendFactor: vulkanBlendOne(),
-            dstAlphaBlendFactor: vulkanBlendOneMinusSrcAlpha(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
+        PremultipliedAlpha -> VulkanBlendFactors {
+            destinationColor: inverseAlpha,
+            destinationAlpha: inverseAlpha
         }
-        PremultipliedAlpha -> return VkPipelineColorBlendAttachmentState {
-            blendEnable: U32(1),
-            srcColorBlendFactor: vulkanBlendOne(),
-            dstColorBlendFactor: vulkanBlendOneMinusSrcAlpha(),
-            colorBlendOp: vulkanBlendAdd(),
-            srcAlphaBlendFactor: vulkanBlendOne(),
-            dstAlphaBlendFactor: vulkanBlendOneMinusSrcAlpha(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
-        }
-        Additive -> return VkPipelineColorBlendAttachmentState {
-            blendEnable: U32(1),
-            srcColorBlendFactor: vulkanBlendSrcAlpha(),
-            dstColorBlendFactor: vulkanBlendOne(),
-            colorBlendOp: vulkanBlendAdd(),
-            srcAlphaBlendFactor: vulkanBlendOne(),
-            dstAlphaBlendFactor: vulkanBlendOne(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
-        }
-        PremultipliedAdditive -> return VkPipelineColorBlendAttachmentState {
-            blendEnable: U32(1),
-            srcColorBlendFactor: vulkanBlendOne(),
-            dstColorBlendFactor: vulkanBlendOne(),
-            colorBlendOp: vulkanBlendAdd(),
-            srcAlphaBlendFactor: vulkanBlendZero(),
-            dstAlphaBlendFactor: vulkanBlendOne(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
-        }
-        PremultipliedSubtractive -> return VkPipelineColorBlendAttachmentState {
-            blendEnable: U32(1),
-            srcColorBlendFactor: vulkanBlendOne(),
-            dstColorBlendFactor: vulkanBlendOne(),
-            colorBlendOp: vulkanBlendReverseSubtract(),
-            srcAlphaBlendFactor: vulkanBlendZero(),
-            dstAlphaBlendFactor: vulkanBlendOne(),
-            alphaBlendOp: vulkanBlendAdd(),
-            colorWriteMask: U32(15)
+        Additive -> VulkanBlendFactors { sourceColor: sourceAlpha }
+        PremultipliedAdditive -> VulkanBlendFactors { sourceAlpha: zero }
+        PremultipliedSubtractive -> VulkanBlendFactors {
+            colorOperation: VulkanVocabulary.blendReverseSubtract,
+            sourceAlpha: zero
         }
     }
 }
 
-public function vulkanCreateRenderPipeline(context: RawPtr, descriptor: borrow RenderPipelineDescriptor) -> PipelineResult {
-    if !vulkanRequireDevice(context, "vulkanCreateRenderPipeline") {
-        return .Error(.DeviceRefused)
+public function vulkanBuildBlend(
+    preset: borrow BlendPreset
+) -> VkPipelineColorBlendAttachmentState {
+    let factors = vulkanBlendFactors(preset)
+    return VkPipelineColorBlendAttachmentState {
+        blendEnable: preset == .Replace ? U32(0) : U32(1),
+        srcColorBlendFactor: factors.sourceColor,
+        dstColorBlendFactor: factors.destinationColor,
+        colorBlendOp: factors.colorOperation,
+        srcAlphaBlendFactor: factors.sourceAlpha,
+        dstAlphaBlendFactor: factors.destinationAlpha,
+        alphaBlendOp: VulkanVocabulary.blendAdd,
+        colorWriteMask: VulkanBlend.writeAll
     }
-    if descriptor.shader.id == 0 {
-        graphicsFail(.Pipeline, "a render pipeline was created with no shader (shader id 0)")
-        return .Error(.DeviceRefused)
+}
+
+function vulkanColorBlendState(
+    descriptor: borrow RenderPipelineDescriptor
+) -> VkPipelineColorBlendStateCreateInfo {
+    var blend = vulkanBuildBlend(.Replace)
+    if descriptor.colorTargets.count > 0 && descriptor.colorTargets[0].blend.enabled {
+        blend = vulkanBuildBlend(descriptor.colorTargets[0].blend.preset)
     }
-    let samples = vulkanSampleCount(descriptor.sampleCount <= 0 ? 1 : descriptor.sampleCount)
-    if samples == I32(0) {
-        graphicsFail(.Pipeline, "pipeline sampleCount must be one of 1, 2, 4, 8, 16, 32 or 64")
-        return .Error(.DeviceRefused)
+    return VkPipelineColorBlendStateCreateInfo {
+        sType: VulkanVocabulary.structurePipelineColorBlendStateCreateInfo,
+        attachmentCount: U32(1),
+        pAttachments: VulkanBlendAttachmentArray1 { elements: [blend] }
     }
-    if descriptor.colorTargets.count > 1 || descriptor.vertexLayout.attributes.count > 16 {
-        graphicsFail(.Pipeline, "currently exposes one color attachment and at most sixteen vertex attributes per pipeline")
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let shader = vulkanShaderRecord(state.vulkan, descriptor.shader.id)
-    if !shader.live || pointerIsNull(shader.vertexModule) || pointerIsNull(shader.fragmentModule) {
-        graphicsFail(.Pipeline, "a render pipeline names shader " + String(Int(descriptor.shader.id)) + ", which " + (!shader.live ? "is not live" : pointerIsNull(shader.vertexModule) ? "has no vertex stage" : "has no fragment stage"))
-        return .Error(.ShaderRejected)
-    }
-    let layouts = vulkanCreateDescriptorSetLayouts(state.vulkan, shader.reflection)
-    if vulkanReflectionGroupCount(shader.reflection) > 0 && layouts.count == 0 {
-        graphicsFail(.Pipeline, "could not create the descriptor set layouts of shader " + String(Int(descriptor.shader.id)))
-        return .Error(.DeviceRefused)
-    }
-    let layout = vulkanCreatePipelineLayout(state.vulkan, layouts)
-    if pointerIsNull(layout) {
-        for held in layouts { vkDestroyDescriptorSetLayout(state.vulkan.device, held, nullPointer()) }
-        return .Error(.DeviceRefused)
-    }
+}
+
+function vulkanVertexInputState(
+    descriptor: borrow RenderPipelineDescriptor
+) -> VkPipelineVertexInputStateCreateInfo {
     var attributes: [VkVertexInputAttributeDescription] = []
     for attribute in descriptor.vertexLayout.attributes {
-        if attributes.count >= 16 { break }
-        attributes.append(VkVertexInputAttributeDescription {
-            location: U32(attribute.location),
-            binding: U32(0),
-            format: vulkanVertexFormat(attribute.format),
-            offset: U32(attribute.offset)
-        })
+        attributes.append(
+            VkVertexInputAttributeDescription {
+                location: U32(attribute.location),
+                binding: U32(0),
+                format: vulkanVertexFormat(attribute.format),
+                offset: U32(attribute.offset)
+            }
+        )
     }
     let binding = VkVertexInputBindingDescription {
         binding: U32(0),
         stride: U32(descriptor.vertexLayout.stride),
-        inputRate: vulkanInputRateVertex()
+        inputRate: VulkanVocabulary.inputRateVertex
     }
-    let stages = VulkanShaderStageArray2 {
-        elements: [
-            VkPipelineShaderStageCreateInfo {
-                sType: vulkanStructurePipelineShaderStageCreateInfo(),
-                stage: I32(1),
-                module: shader.vertexModule,
-                pName: shader.vertexEntry
-            },
-            VkPipelineShaderStageCreateInfo {
-                sType: vulkanStructurePipelineShaderStageCreateInfo(),
-                stage: I32(16),
-                module: shader.fragmentModule,
-                pName: shader.fragmentEntry
-            }
-        ]
-    }
-    let vertexInput = VkPipelineVertexInputStateCreateInfo {
-        sType: vulkanStructurePipelineVertexInputStateCreateInfo(),
+    return VkPipelineVertexInputStateCreateInfo {
+        sType: VulkanVocabulary.structurePipelineVertexInputStateCreateInfo,
         vertexBindingDescriptionCount: attributes.count > 0 ? U32(1) : U32(0),
         pVertexBindingDescriptions: VulkanVertexBindingArray1 { elements: [binding] },
         vertexAttributeDescriptionCount: U32(attributes.count),
         pVertexAttributeDescriptions: VulkanVertexAttributeArray16 { elements: attributes }
     }
-    let inputAssembly = VkPipelineInputAssemblyStateCreateInfo {
-        sType: vulkanStructurePipelineInputAssemblyStateCreateInfo(),
-        topology: vulkanTopology(descriptor.primitive.topology)
+}
+
+function vulkanPipelineStages(shader: borrow VulkanShaderRecord) -> VulkanShaderStageArray2 {
+    return VulkanShaderStageArray2 {
+        elements: [VkPipelineShaderStageCreateInfo {
+            sType: VulkanVocabulary.structurePipelineShaderStageCreateInfo,
+            stage: I32(VK_SHADER_STAGE_VERTEX_BIT),
+            module: shader.vertexModule,
+            pName: shader.vertexEntry
+        }, VkPipelineShaderStageCreateInfo {
+            sType: VulkanVocabulary.structurePipelineShaderStageCreateInfo,
+            stage: I32(VK_SHADER_STAGE_FRAGMENT_BIT),
+            module: shader.fragmentModule,
+            pName: shader.fragmentEntry
+        }]
     }
-    let viewport = VkPipelineViewportStateCreateInfo {
-        sType: vulkanStructurePipelineViewportStateCreateInfo(),
-        viewportCount: U32(1),
-        scissorCount: U32(1)
+}
+
+function vulkanUsesDepth(descriptor: borrow RenderPipelineDescriptor) -> Bool {
+    return descriptor.depthStencil.depthEnabled || descriptor.depthStencil.depthWriteEnabled
+}
+
+function vulkanDepthStencilState(
+    descriptor: borrow RenderPipelineDescriptor
+) -> VkPipelineDepthStencilStateCreateInfo {
+    let stencil = VkStencilOpState {
+        compareOp: VulkanVocabulary.compareAlways,
+        compareMask: VulkanBlend.stencilAllBits,
+        writeMask: VulkanBlend.stencilAllBits
     }
-    let raster = VkPipelineRasterizationStateCreateInfo {
-        sType: vulkanStructurePipelineRasterizationStateCreateInfo(),
-        polygonMode: vulkanPolygonFill(),
+    return VkPipelineDepthStencilStateCreateInfo {
+        sType: VulkanVocabulary.structurePipelineDepthStencilStateCreateInfo,
+        depthTestEnable: descriptor.depthStencil.depthEnabled ? U32(1) : U32(0),
+        depthWriteEnable: descriptor.depthStencil.depthWriteEnabled ? U32(1) : U32(0),
+        depthCompareOp: vulkanCompareFunction(descriptor.depthStencil.depthCompare),
+        front: stencil,
+        back: stencil,
+        maxDepthBounds: 1.0
+    }
+}
+
+function vulkanRasterizationState(
+    descriptor: borrow RenderPipelineDescriptor
+) -> VkPipelineRasterizationStateCreateInfo {
+    return VkPipelineRasterizationStateCreateInfo {
+        sType: VulkanVocabulary.structurePipelineRasterizationStateCreateInfo,
+        polygonMode: VulkanVocabulary.polygonFill,
         cullMode: vulkanCullMode(descriptor.rasterization.cullMode),
         frontFace: vulkanFrontFace(descriptor.rasterization.frontFace),
         lineWidth: 1.0
     }
-    let multisample = VkPipelineMultisampleStateCreateInfo {
-        sType: vulkanStructurePipelineMultisampleStateCreateInfo(),
-        rasterizationSamples: samples
+}
+
+// The attachment formats a pipeline renders into, chained ahead of the create
+// info for dynamic rendering. The info points at the color format, so both are
+// held here, and the value has to outlive the create call.
+struct VulkanRenderingFormats {
+    let color: Boxed<I32>
+    let info: Boxed<VkPipelineRenderingCreateInfo>
+}
+
+function vulkanRenderingFormats(
+    state: borrow VulkanState,
+    descriptor: borrow RenderPipelineDescriptor
+) -> VulkanRenderingFormats {
+    let usesDepth = vulkanUsesDepth(descriptor)
+    let stencil = usesDepth && descriptor.depthStencil.format == .Depth24Stencil8
+    let color = boxed<I32>(vulkanPipelineColorFormat(descriptor, state))
+    let info = boxed<VkPipelineRenderingCreateInfo>(
+        VkPipelineRenderingCreateInfo {
+            sType: VulkanVocabulary.structurePipelineRenderingCreateInfo,
+            pNext: nullPointer(),
+            viewMask: U32(0),
+            colorAttachmentCount: U32(1),
+            pColorAttachmentFormats: color.pointer(),
+            depthAttachmentFormat: usesDepth ? vulkanTextureFormat(descriptor.depthStencil.format) : I32(0),
+            stencilAttachmentFormat: stencil ? VulkanVocabulary.formatDepth24Stencil8 : I32(0)
+        }
+    )
+    return VulkanRenderingFormats { color: move color, info: move info }
+}
+
+// Why a render pipeline could not be made.
+enum VulkanPipelineFailure {
+    NoShader
+    UnsupportedSampleCount(UNumber)
+    TooManyTargets
+    ShaderNotRenderable
+    Layout(VulkanLayoutFailure)
+    Refused(VulkanResult)
+}
+
+function vulkanPipelineFailureReason(failure: borrow VulkanPipelineFailure) -> ResourceFailure {
+    return match failure {
+        ShaderNotRenderable -> .ShaderRejected
+        NoShader -> .DeviceRefused
+        UnsupportedSampleCount(_) -> .DeviceRefused
+        TooManyTargets -> .DeviceRefused
+        Layout(_) -> .DeviceRefused
+        Refused(_) -> .DeviceRefused
     }
-    let usesDepth = descriptor.depthStencil.depthEnabled || descriptor.depthStencil.depthWriteEnabled
-    let depth = VkPipelineDepthStencilStateCreateInfo {
-        sType: vulkanStructurePipelineDepthStencilStateCreateInfo(),
-        depthTestEnable: usesDepth && descriptor.depthStencil.depthEnabled ? U32(1) : U32(0),
-        depthWriteEnable: descriptor.depthStencil.depthWriteEnabled ? U32(1) : U32(0),
-        depthCompareOp: vulkanCompareFunction(descriptor.depthStencil.depthCompare),
-        front: VkStencilOpState { compareOp: vulkanCompareAlways(), compareMask: U32(4294967295), writeMask: U32(4294967295) },
-        back: VkStencilOpState { compareOp: vulkanCompareAlways(), compareMask: U32(4294967295), writeMask: U32(4294967295) },
-        maxDepthBounds: 1.0
+}
+
+function vulkanPipelineSamples(
+    descriptor: borrow RenderPipelineDescriptor
+) -> Result<I32, VulkanPipelineFailure> {
+    if descriptor.shader.id == 0 {
+        return .Error(.NoShader)
     }
-    var blend = vulkanBuildBlend(.Replace)
-    if descriptor.colorTargets.count > 0 && descriptor.colorTargets[0].blend.enabled {
-        blend = vulkanBuildBlend(descriptor.colorTargets[0].blend.preset)
+    if descriptor.colorTargets.count > VulkanPipelineLimit.colorTargets
+        || descriptor.vertexLayout.attributes.count > VulkanPipelineLimit.vertexAttributes {
+        return .Error(.TooManyTargets)
     }
-    let colorBlend = VkPipelineColorBlendStateCreateInfo {
-        sType: vulkanStructurePipelineColorBlendStateCreateInfo(),
-        attachmentCount: U32(1),
-        pAttachments: VulkanBlendAttachmentArray1 { elements: [blend] }
+    match vulkanSampleCount(max(descriptor.sampleCount, 1)) {
+        Some(samples) -> return .Ok(samples)
+        None -> return .Error(.UnsupportedSampleCount(descriptor.sampleCount))
     }
-    let dynamicStateData = allocateBytes(U64(8))
-    writeWord(dynamicStateData, U64(0), U32(0))
-    writeWord(dynamicStateData, U64(4), U32(1))
-    let dynamicState = VkPipelineDynamicStateCreateInfo {
-        sType: vulkanStructurePipelineDynamicStateCreateInfo(),
-        dynamicStateCount: U32(2),
-        pDynamicStates: dynamicStateData
+}
+
+function vulkanRenderableShader(
+    state: borrow VulkanState,
+    descriptor: borrow RenderPipelineDescriptor
+) -> Result<VulkanShaderRecord, VulkanPipelineFailure> {
+    let shader = vulkanShaderRecord(state, descriptor.shader.id.raw)
+    if !shader.live || isNull(shader.vertexModule) || isNull(shader.fragmentModule) {
+        return .Error(.ShaderNotRenderable)
     }
-    let pipelineInfo = VkGraphicsPipelineCreateInfo {
-        sType: vulkanStructureGraphicsPipelineCreateInfo(),
-        pNext: vulkanPipelineRenderingInfo(
-            vulkanPipelineColorFormat(descriptor, state.vulkan),
-            usesDepth ? vulkanTextureFormat(descriptor.depthStencil.format) : I32(0),
-            usesDepth && descriptor.depthStencil.format == .Depth24Stencil8 ? vulkanFormatDepth24Stencil8() : I32(0)
-        ),
-        stageCount: U32(2),
-        pStages: stages,
-        pVertexInputState: vertexInput,
-        pInputAssemblyState: inputAssembly,
-        pViewportState: viewport,
-        pRasterizationState: raster,
-        pMultisampleState: multisample,
-        pDepthStencilState: depth,
-        pColorBlendState: colorBlend,
-        pDynamicState: dynamicState,
-        layout: layout
+    return .Ok(shader)
+}
+
+// What a render pipeline is built from once its descriptor has been checked.
+struct VulkanPipelineInputs {
+    let shader: VulkanShaderRecord
+    let layouts: VulkanPipelineLayouts
+    let samples: I32
+}
+
+function vulkanInputAssemblyState(
+    descriptor: borrow RenderPipelineDescriptor
+) -> VkPipelineInputAssemblyStateCreateInfo {
+    return VkPipelineInputAssemblyStateCreateInfo {
+        sType: VulkanVocabulary.structurePipelineInputAssemblyStateCreateInfo,
+        topology: vulkanTopology(descriptor.primitive.topology)
     }
-    let pipelineSlot = vulkanPointerSlot()
-    let result = vkCreateGraphicsPipelines(state.vulkan.device, nullPointer(), U32(1), pipelineInfo, nullPointer(), pipelineSlot)
-    let pipeline = pointerAt(pipelineSlot, U64(0))
-    freeBytes(pipelineSlot)
-    freeBytes(dynamicStateData)
-    if result != vulkanSuccess() || pointerIsNull(pipeline) {
-        vkDestroyPipelineLayout(state.vulkan.device, layout, nullPointer())
-        for held in layouts { vkDestroyDescriptorSetLayout(state.vulkan.device, held, nullPointer()) }
-        graphicsFail(.Pipeline, "rejected pipeline '" + descriptor.label + "' (" + vulkanResultName(result) + ")")
+}
+
+// `dynamicStates` points at a `VulkanDynamicStates` and `formats` at the
+// rendering formats, both of which have to outlive the create call.
+function vulkanGraphicsPipelineInfo(
+    descriptor: borrow RenderPipelineDescriptor,
+    inputs: borrow VulkanPipelineInputs,
+    dynamicStates: RawPtr,
+    formats: RawPtr
+) -> VkGraphicsPipelineCreateInfo {
+    return VkGraphicsPipelineCreateInfo {
+        sType: VulkanVocabulary.structureGraphicsPipelineCreateInfo,
+        pNext: formats,
+        stageCount: VulkanPipelineLimit.graphicsStages,
+        pStages: vulkanPipelineStages(inputs.shader),
+        pVertexInputState: vulkanVertexInputState(descriptor),
+        pInputAssemblyState: vulkanInputAssemblyState(descriptor),
+        pViewportState: VkPipelineViewportStateCreateInfo {
+            sType: VulkanVocabulary.structurePipelineViewportStateCreateInfo,
+            viewportCount: U32(1),
+            scissorCount: U32(1)
+        },
+        pRasterizationState: vulkanRasterizationState(descriptor),
+        pMultisampleState: VkPipelineMultisampleStateCreateInfo {
+            sType: VulkanVocabulary.structurePipelineMultisampleStateCreateInfo,
+            rasterizationSamples: inputs.samples
+        },
+        pDepthStencilState: vulkanDepthStencilState(descriptor),
+        pColorBlendState: vulkanColorBlendState(descriptor),
+        pDynamicState: VkPipelineDynamicStateCreateInfo {
+            sType: VulkanVocabulary.structurePipelineDynamicStateCreateInfo,
+            dynamicStateCount: U32(sizeOf<VulkanDynamicStates>() / sizeOf<I32>()),
+            pDynamicStates: dynamicStates
+        },
+        layout: inputs.layouts.layout
+    }
+}
+
+function vulkanBuildRenderPipeline(
+    state: borrow VulkanState,
+    descriptor: borrow RenderPipelineDescriptor,
+    inputs: borrow VulkanPipelineInputs
+) -> Result<RawPtr, VulkanPipelineFailure> {
+    let dynamicStates = boxed<VulkanDynamicStates>(VulkanDynamicStates())
+    let formats = vulkanRenderingFormats(state, descriptor)
+    let info = vulkanGraphicsPipelineInfo(
+        descriptor,
+        inputs,
+        dynamicStates.pointer(),
+        formats.info.pointer()
+    )
+    let pipeline = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateGraphicsPipelines(
+            state.device,
+            nullPointer(),
+            U32(1),
+            info,
+            nullPointer(),
+            pipeline.pointer()
+        )
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(pipeline))
+}
+
+// The sample count, shader and layouts `descriptor` builds a pipeline from.
+function vulkanPipelineInputs(
+    state: borrow mut VulkanState,
+    descriptor: borrow RenderPipelineDescriptor
+) -> Result<VulkanPipelineInputs, VulkanPipelineFailure> {
+    let samples = match vulkanPipelineSamples(descriptor) {
+        Ok(samples) -> samples
+        Error(failure) -> return .Error(failure)
+    }
+    let shader = match vulkanRenderableShader(state, descriptor) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let layouts = match vulkanCreatePipelineLayouts(state, shader.reflection) {
+        Ok(layouts) -> layouts
+        Error(failure) -> return .Error(.Layout(failure))
+    }
+    return .Ok(
+        VulkanPipelineInputs { shader: move shader, layouts: move layouts, samples: samples }
+    )
+}
+
+function vulkanCreateRenderPipelineState(
+    state: borrow mut VulkanState,
+    descriptor: borrow RenderPipelineDescriptor
+) -> Result<UNumber, VulkanPipelineFailure> {
+    let inputs = match vulkanPipelineInputs(state, descriptor) {
+        Ok(inputs) -> inputs
+        Error(failure) -> return .Error(failure)
+    }
+    let pipeline = match vulkanBuildRenderPipeline(state, descriptor, inputs) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> {
+            vulkanDestroyPipelineLayouts(state, inputs.layouts)
+            return .Error(failure)
+        }
+    }
+    return .Ok(
+        vulkanRecordPipeline(
+            state,
+            VulkanPipelineRecord {
+                pipeline: pipeline,
+                layout: inputs.layouts.layout,
+                groupLayouts: inputs.layouts.groupLayouts,
+                groupCount: inputs.layouts.groupLayouts.count,
+                reflection: inputs.shader.reflection,
+                sampleCount: max(descriptor.sampleCount, 1),
+                live: true
+            }
+        )
+    )
+}
+
+public function vulkanCreateRenderPipeline(
+    context: RawPtr,
+    descriptor: borrow RenderPipelineDescriptor
+) -> PipelineResult {
+    if !vulkanRequireDevice(context, "vulkanCreateRenderPipeline") {
         return .Error(.DeviceRefused)
     }
-    let id = vulkanRecordPipeline(state.vulkan, VulkanPipelineRecord {
-        pipeline: pipeline,
-        layout: layout,
-        groupLayouts: layouts,
-        groupCount: layouts.count,
-        reflection: shader.reflection,
-        sampleCount: descriptor.sampleCount <= 0 ? 1 : descriptor.sampleCount,
-        live: true
-    })
-    return .Ok(RenderPipeline {
-        id: U32(id),
-        drawPipelineId: U32(id),
-        indexedPipelineId: U32(id),
-        hasPositionAttribute: descriptor.shader.hasPositionAttribute,
-        requiredUniformMask: descriptor.shader.requiredUniformMask,
-        availableUniformMask: descriptor.shader.availableUniformMask,
-        uniformBlocks: descriptor.shader.uniformBlocks
-    })
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let id = match vulkanCreateRenderPipelineState(state.vulkan, descriptor) {
+        Ok(id) -> PipelineId(U32(id))
+        Error(failure) -> {
+            log fault(
+                "could not create a render pipeline",
+                failure,
+                label: descriptor.label,
+                shader: descriptor.shader.id
+            )
+            return .Error(vulkanPipelineFailureReason(failure))
+        }
+    }
+    return .Ok(
+        RenderPipeline {
+            id: id,
+            drawPipelineId: id,
+            indexedPipelineId: id,
+            hasPositionAttribute: descriptor.shader.hasPositionAttribute,
+            requiredUniformMask: descriptor.shader.requiredUniformMask,
+            availableUniformMask: descriptor.shader.availableUniformMask,
+            uniformBlocks: descriptor.shader.uniformBlocks
+        }
+    )
 }
 
 public function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline) {
     if !vulkanHasDevice(context) || pipeline.id == 0 {
         return
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let index = Int(pipeline.id) - 1
-    if index < 0 || index >= state.vulkan.pipelines.count || !state.vulkan.pipelines[index].live {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let index = Number(pipeline.id.raw) - 1
+    if index >= state.vulkan.pipelines.count || !state.vulkan.pipelines[index].live {
         return
     }
     if state.vulkan.frameActive {
@@ -447,18 +453,4 @@ public function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPi
         return
     }
     vulkanReleasePipeline(state.vulkan, index)
-}
-
-public function vulkanReleasePipeline(state: borrow mut VulkanState, index: Int) {
-    if index < 0 || index >= state.pipelines.count || !state.pipelines[index].live { return }
-    vkQueueWaitIdle(state.queue)
-    let record = state.pipelines[index]
-    vkDestroyPipeline(state.device, record.pipeline, nullPointer())
-    vkDestroyPipelineLayout(state.device, record.layout, nullPointer())
-    for layout in record.groupLayouts {
-        vkDestroyDescriptorSetLayout(state.device, layout, nullPointer())
-    }
-    state.pipelines[index].live = false
-    state.resourceCount = state.resourceCount - 1
-    return
 }

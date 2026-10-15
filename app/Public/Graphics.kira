@@ -1,4 +1,5 @@
 import Foundation
+import Heap
 // The public graphics surface: one method per thing a renderer asks for, and
 // nothing else.
 //
@@ -10,13 +11,13 @@ import Foundation
 //
 // The one method that names no backend is `createTextureFromFile`, because
 // decoding an image is not a backend's work.
-public class EMGraphics {
+public class Graphics {
     var userData: RawPtr
     var backend: RenderBackendKind = .Dawn
     // The backend's own per-run context: Metal's context object, and Dawn's
-    // `EMGraphicsAppRuntimeState` the run loop keeps its frame counters on. It
+    // `GraphicsRuntimeState` the run loop keeps its frame counters on. It
     // was called `metalContext` and it was null on every backend but Metal,
-    // which is why callers started reading `!pointerIsNull(...)` as "am I
+    // which is why callers started reading `!isNull(...)` as "am I
     // Metal" — a question about identity wearing the name of a resource.
     var backendContext: RawPtr
 
@@ -41,13 +42,15 @@ public class EMGraphics {
     // Shader creation from an inline `ksl!` artifact — the whole artifact rather
     // than a list of its fields, because which target's text a backend reads is
     // the backend's business. Nothing is read from a file.
-    function createShaderFromKslArtifact(label: borrow String, artifact: borrow KslArtifact) -> ShaderResult {
+    function createShaderFromKslArtifact(
+        label: borrow String,
+        artifact: borrow KslArtifact
+    ) -> ShaderResult {
         return self.renderBackend().createShaderFromKslArtifact(label, artifact)
     }
 
-    function destroyShader(shader: EMGraphicsShader) {
+    function destroyShader(shader: GraphicsShader) {
         self.renderBackend().destroyShader(shader)
-        return
     }
 
     function createRenderPipeline(descriptor: borrow RenderPipelineDescriptor) -> PipelineResult {
@@ -56,12 +59,10 @@ public class EMGraphics {
 
     function destroyPipeline(pipeline: borrow RenderPipeline) {
         self.renderBackend().destroyPipeline(pipeline)
-        return
     }
 
     function destroyRenderPipeline(pipeline: borrow RenderPipeline) {
         destroyPipeline(pipeline)
-        return
     }
 
     // A persistent buffer of `floatCapacity` f32 slots that the CPU rewrites,
@@ -71,7 +72,10 @@ public class EMGraphics {
     // The memory arrives with the buffer because the two are not always the same
     // storage: on Metal/Vulkan a write lands where the GPU reads, while a staging
     // backend writes into a block `commitDynamicBuffer` hands over. See `DynamicBuffer`.
-    function createDynamicBuffer(label: borrow String, floatCapacity: Int) -> DynamicBufferResult {
+    function createDynamicBuffer(
+        label: borrow String,
+        floatCapacity: Number
+    ) -> DynamicBufferResult {
         return self.renderBackend().createDynamicBuffer(label, floatCapacity)
     }
 
@@ -79,16 +83,19 @@ public class EMGraphics {
     // every write into it this frame must add to its own. Call once per frame,
     // before writing: the frame the GPU is still drawing keeps the slot it was
     // recorded with, so nothing written past this offset can tear it.
-    function dynamicBufferFrameStart(buffer: borrow EMGraphicsBuffer) -> Int {
+    function dynamicBufferFrameStart(buffer: borrow GraphicsBuffer) -> Number {
         return self.renderBackend().dynamicBufferFrameStart(buffer)
     }
 
     // Hand the first `floatCount` slots written into `contents` to the GPU. A
     // call of its own rather than something every write does, because a backend
     // that stages may run it at most ONCE per buffer per frame.
-    function commitDynamicBuffer(buffer: borrow EMGraphicsBuffer, contents: RawPtr, floatCount: Int) {
+    function commitDynamicBuffer(
+        buffer: borrow GraphicsBuffer,
+        contents: RawPtr,
+        floatCount: UNumber
+    ) {
         self.renderBackend().commitDynamicBuffer(buffer, contents, floatCount)
-        return
     }
 
     function createBuffer(descriptor: borrow BufferDescriptor) -> BufferResult {
@@ -99,36 +106,41 @@ public class EMGraphics {
         return self.renderBackend().createIndexBuffer(descriptor)
     }
 
-    function destroyBuffer(buffer: borrow EMGraphicsBuffer) {
+    function destroyBuffer(buffer: borrow GraphicsBuffer) {
         self.renderBackend().destroyBuffer(buffer)
-        return
     }
 
     function createUniform(descriptor: borrow UniformDescriptor) -> UniformResult {
         return self.renderBackend().createUniform(descriptor)
     }
 
-    function updateUniform(uniform: borrow EMUniform, data: borrow [F32]) {
+    function updateUniform(uniform: borrow GraphicsUniform, data: borrow[Number]) {
         self.renderBackend().updateUniform(uniform, data)
-        return
     }
 
-    function destroyUniform(uniform: borrow EMUniform) {
+    function destroyUniform(uniform: borrow GraphicsUniform) {
         self.renderBackend().destroyUniform(uniform)
-        return
     }
 
     function createBindGroup(descriptor: borrow BindGroupDescriptor) -> BindGroupResult {
         return self.renderBackend().createBindGroup(descriptor)
     }
 
-    function createUniformBindGroup(label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
+    function createUniformBindGroup(
+        label: borrow String,
+        uniformSlot: UN32,
+        uniform: borrow GraphicsUniform
+    ) -> BindGroupResult {
         return self.renderBackend().createUniformBindGroup(label, uniformSlot, uniform)
     }
 
     // Bind a buffer a shader reads as storage — the compositor's quad stream, or
     // any per-instance table a vertex stage indexes by vertex id.
-    function createStorageBufferBindGroup(label: borrow String, slot: Int, bufferId: U32) -> BindGroupResult {
+    function createStorageBufferBindGroup(
+        label: borrow String,
+        slot: UN32,
+        bufferId: BufferId
+    ) -> BindGroupResult {
         return self.renderBackend().createStorageBufferBindGroup(label, slot, bufferId)
     }
 
@@ -145,26 +157,46 @@ public class EMGraphics {
     }
 
     // Add a texture at `slot`; the fragment stage reads it at [[texture(slot)]].
-    function bindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) {
+    function bindGroupAddTexture(
+        group: borrow BindGroup,
+        slot: UN32,
+        texture: borrow GraphicsTexture
+    ) {
         self.renderBackend().bindGroupAddTexture(group, slot, texture)
-        return
     }
 
     // Add a sampler at `slot`; the fragment stage reads it at [[sampler(slot)]].
-    function bindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) {
+    function bindGroupAddSampler(
+        group: borrow BindGroup,
+        slot: UN32,
+        sampler: borrow GraphicsSampler
+    ) {
         self.renderBackend().bindGroupAddSampler(group, slot, sampler)
-        return
     }
 
     // Add a uniform block at `slot`, so a group can carry the resources a shader
     // reads together rather than spending a second encoder slot on one number.
-    function bindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) {
+    function bindGroupAddUniform(
+        group: borrow BindGroup,
+        slot: UN32,
+        uniform: borrow GraphicsUniform
+    ) {
         self.renderBackend().bindGroupAddUniform(group, slot, uniform)
-        return
     }
 
-    function createTextureSamplerBindGroup(label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
-        return self.renderBackend().createTextureSamplerBindGroup(label, textureSlot, texture, samplerSlot, sampler)
+    // Add a storage buffer to a group begun with `beginBindGroup`.
+    function bindGroupAddStorageBuffer(
+        group: borrow BindGroup,
+        slot: UN32,
+        buffer: borrow GraphicsBuffer
+    ) {
+        self.renderBackend().bindGroupAddStorageBuffer(group, slot, buffer)
+    }
+
+    function createTextureSamplerBindGroup(
+        binding: borrow TextureSamplerBinding
+    ) -> BindGroupResult {
+        return self.renderBackend().createTextureSamplerBindGroup(binding)
     }
 
     // Destroying reclaims BOTH halves: the backend's id, and the state box
@@ -173,23 +205,22 @@ public class EMGraphics {
     // use-after-free the box's magic word traps.
     function destroyBindGroup(bindGroup: borrow BindGroup) {
         self.renderBackend().destroyBindGroup(bindGroup)
-        return
     }
 
     // The Retina backing scale (physical pixels per point) of the current
     // drawable.
-    function backingScale() -> Float {
+    function backingScale() -> Number {
         return self.renderBackend().backingScale()
     }
 
     // Drawable size in framebuffer pixels. A host rendering context-sized
     // offscreen targets must use these rather than the Metal-only
     // backend context accessors, which remain valid on every backend.
-    function contextWidth() -> Int {
+    function contextWidth() -> Number {
         return self.renderBackend().contextWidth()
     }
 
-    function contextHeight() -> Int {
+    function contextHeight() -> Number {
         return self.renderBackend().contextHeight()
     }
 
@@ -204,7 +235,10 @@ public class EMGraphics {
     // because a backend can do better when the contents arrive with the image:
     // a backend may keep it immutable, and Metal re-tiles it once into the layout
     // every later sample reads.
-    function createTextureFromPixels(descriptor: borrow TextureDescriptor, pixels: borrow [U8]) -> TextureResult {
+    function createTextureFromPixels(
+        descriptor: borrow TextureDescriptor,
+        pixels: borrow[UN8]
+    ) -> TextureResult {
         return self.renderBackend().createTextureFromPixels(descriptor, pixels)
     }
 
@@ -216,9 +250,13 @@ public class EMGraphics {
     // CPU copy of a texture nobody asked it to remember.
     //
     // The texture must have been created with the `SampledStreaming` usage.
-    function updateTexture(texture: borrow EMGraphicsTexture, width: Int, height: Int, pixels: borrow [U8]) {
+    function updateTexture(
+        texture: borrow GraphicsTexture,
+        width: UN32,
+        height: UN32,
+        pixels: borrow[UN8]
+    ) {
         self.renderBackend().updateTexture(texture, width, height, pixels)
-        return
     }
 
     // Replace a texture's contents from raw memory the caller already owns.
@@ -231,22 +269,47 @@ public class EMGraphics {
     //
     // The texture must have been created with the `SampledStreaming` usage,
     // and a backend may impose a once-per-frame upload limit.
-    function updateTextureBytes(texture: borrow EMGraphicsTexture, bytes: RawPtr, byteCount: Int) {
+    function updateTextureBytes(texture: borrow GraphicsTexture, bytes: RawPtr, byteCount: Number) {
         self.renderBackend().updateTextureBytes(texture, bytes, byteCount)
-        return
     }
 
     // `updateTextureBytes` for an image of which only `rowCount` rows from
     // `firstRow` changed: a glyph atlas gains a few glyphs on a shelf or two,
     // and sending the whole image again for them costs more than the frame.
-    function updateTextureRows(texture: borrow EMGraphicsTexture, bytes: RawPtr, firstRow: Int, rowCount: Int) {
+    function updateTextureRows(
+        texture: borrow GraphicsTexture,
+        bytes: RawPtr,
+        firstRow: UN32,
+        rowCount: UN32
+    ) {
         self.renderBackend().updateTextureRows(texture, bytes, firstRow, rowCount)
-        return
     }
 
-    function destroyTexture(texture: borrow EMGraphicsTexture) {
+    function destroyTexture(texture: borrow GraphicsTexture) {
         self.renderBackend().destroyTexture(texture)
-        return
+    }
+
+    // A render target whose memory another process can import: a dma-buf on a
+    // Vulkan device under Linux, an IOSurface on Metal. Dawn answers
+    // `.Unexportable`. See `ExportedTexture.kira`.
+    function createExportedTexture(
+        descriptor: borrow ExportedTextureDescriptor
+    ) -> ExportedTextureResult {
+        return self.renderBackend().createExportedTexture(descriptor)
+    }
+
+    // Destroy an exported texture and close its handle. What a peer imported
+    // stays valid on its side; this side's reference is what goes.
+    function destroyExportedTexture(exported: borrow ExportedTexture) {
+        self.renderBackend().destroyExportedTexture(exported)
+    }
+
+    // A sampled texture over memory another process exported: a dma-buf on a
+    // Vulkan device under Linux. Dawn and Metal answer `.Unimportable`. The
+    // handle is the texture's once this succeeds and the caller's when it
+    // fails; `destroyTexture` lets the texture and its memory go.
+    function importTexture(memory: borrow ExportedMemory) -> ImportedTextureResult {
+        return self.renderBackend().importTexture(memory)
     }
 
     // Decode an image file (PNG, JPEG) into a sampled texture.
@@ -265,15 +328,18 @@ public class EMGraphics {
     function createTextureFromFile(label: borrow String, path: borrow String) -> TextureResult {
         match decodeImageFile(path) {
             Ok(image) -> {
-                return self.createTextureFromPixels(TextureDescriptor {
-                    label: label,
-                    width: image.width,
-                    height: image.height,
-                    format: .Rgba8Unorm,
-                    usage: .Sampled,
-                    sampleCount: 1,
-                    storage: .Persistent
-                }, image.pixels)
+                return self.createTextureFromPixels(
+                    TextureDescriptor {
+                        label: label,
+                        width: UN32(image.width),
+                        height: UN32(image.height),
+                        format: .Rgba8Unorm,
+                        usage: .Sampled,
+                        sampleCount: 1,
+                        storage: .Persistent
+                    },
+                    widenBytes(image.pixels)
+                )
             }
             // A path with nothing at it, bytes that are not an image, and an
             // image whose bytes are damaged are one answer to a caller loading
@@ -286,9 +352,8 @@ public class EMGraphics {
         return self.renderBackend().createSampler(descriptor)
     }
 
-    function destroySampler(sampler: borrow EMGraphicsSampler) {
+    function destroySampler(sampler: borrow GraphicsSampler) {
         self.renderBackend().destroySampler(sampler)
-        return
     }
 
     function frame() -> RenderFrame {
@@ -296,7 +361,7 @@ public class EMGraphics {
             attachments: PassAttachments {
                 color: ColorAttachment {
                     target: swapchainRenderTarget(),
-                    clearColor: Color {},
+                    clearColor: RGBAColor {},
                     resolveTarget: emptyRenderTarget()
                 },
                 depth: emptyDepthAttachment(),

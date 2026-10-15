@@ -22,15 +22,20 @@ import Foundation
 // members returns, which is what keeps a simple pipeline three lines long.
 
 // One attribute in the vertex stream a pipeline reads.
+// One attribute in the vertex stream a pipeline reads.
+//
+// `offset` is in bytes from the start of the vertex, which is a measure of the
+// stream's shape rather than an index into anything — so it is a `Number` and
+// narrows to the fixed width at the vertex layout the device takes.
 public struct VertexAttributeSpec {
-    var location: Int = 0
+    var location: UN32 = 0
     var format: VertexFormat = .Float4
-    var offset: Int = 0
+    var offset: UN32 = 0
 }
 
 // The vertex stream's shape: how wide one vertex is, and what it holds.
 public struct VertexStream {
-    var stride: Int = 0
+    var stride: UN32 = 0
     var attributes: [VertexAttributeSpec]
 }
 
@@ -96,51 +101,11 @@ public construct Pipeline {
 // pipeline is, and this hands it to the descriptor the backends build from.
 // Both speak the same typed vocabulary now, so nothing is translated here —
 // the integer wire form appears only at the backend call itself.
-extend EMGraphics {
+extend Graphics {
     function buildDeclaredPipeline(plan: borrow PipelinePlan) -> PipelineResult {
-        var attributes: [VertexAttribute] = []
-        var index = 0
-        while index < plan.vertices.attributes.count {
-            let attribute = plan.vertices.attributes[index]
-            attributes.append(VertexAttribute {
-                location: attribute.location,
-                format: attribute.format,
-                offset: attribute.offset
-            })
-            index = index + 1
-        }
         attempt {
-        let shader = try self.createShaderFromKslArtifact(plan.label, plan.shader)
-        return self.createRenderPipeline(RenderPipelineDescriptor {
-            label: plan.label,
-            shader: shader,
-            vertexLayout: VertexLayout {
-                stride: plan.vertices.stride,
-                attributes: move attributes
-            },
-            colorTargets: [ColorTargetDescriptor {
-                format: plan.colorFormat,
-                blend: BlendState {
-                    enabled: plan.blending.enabled,
-                    preset: plan.blending.preset
-                }
-            }],
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: plan.depth.enabled,
-                depthWriteEnabled: plan.depth.writes,
-                depthCompare: plan.depth.compare,
-                format: plan.depth.format
-            },
-            rasterization: RasterizationDescriptor {
-                cullMode: plan.raster.cull,
-                frontFace: plan.raster.front
-            },
-            primitive: PrimitiveDescriptor {
-                topology: plan.raster.topology
-            },
-            vertexEntry: plan.shader.vertexEntry,
-            fragmentEntry: plan.shader.fragmentEntry
-        })
+            let shader = try self.createShaderFromKslArtifact(plan.label, plan.shader)
+            return self.createRenderPipeline(pipelineDescriptorFor(plan, move shader))
         } handle {
             // A pipeline is its shader: without one there is nothing to build,
             // so the shader's reason is the pipeline's reason.
@@ -148,5 +113,50 @@ extend EMGraphics {
             DeviceRefused { return .Error(.DeviceRefused) }
             AssetUnreadable { return .Error(.AssetUnreadable) }
         }
+    }
+}
+
+// The vertex layout a declared stream describes.
+function vertexLayoutFor(stream: borrow VertexStream) -> VertexLayout {
+    var attributes: [VertexAttribute] = []
+    for attribute in stream.attributes {
+        attributes.append(
+            VertexAttribute {
+                location: attribute.location,
+                format: attribute.format,
+                offset: attribute.offset
+            }
+        )
+    }
+    return VertexLayout { stride: stream.stride, attributes: move attributes }
+}
+
+// The descriptor a backend builds a declared pipeline from, around the shader
+// already made from its artifact.
+function pipelineDescriptorFor(
+    plan: borrow PipelinePlan,
+    shader: GraphicsShader
+) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: plan.label,
+        shader: move shader,
+        vertexLayout: vertexLayoutFor(plan.vertices),
+        colorTargets: [ColorTargetDescriptor {
+            format: plan.colorFormat,
+            blend: BlendState { enabled: plan.blending.enabled, preset: plan.blending.preset }
+        }],
+        depthStencil: DepthStencilDescriptor {
+            depthEnabled: plan.depth.enabled,
+            depthWriteEnabled: plan.depth.writes,
+            depthCompare: plan.depth.compare,
+            format: plan.depth.format
+        },
+        rasterization: RasterizationDescriptor {
+            cullMode: plan.raster.cull,
+            frontFace: plan.raster.front
+        },
+        primitive: PrimitiveDescriptor { topology: plan.raster.topology },
+        vertexEntry: plan.shader.vertexEntry,
+        fragmentEntry: plan.shader.fragmentEntry
     }
 }

@@ -1,20 +1,12 @@
-public function graphicsApplicationDefaultInit(graphics: EMGraphics) {
-    return
-}
+public function graphicsApplicationDefaultInit(graphics: Graphics) {}
 
-public function graphicsApplicationDefaultFrame(frame: borrow mut RenderFrame) {
-    return
-}
+public function graphicsApplicationDefaultFrame(frame: borrow mut RenderFrame) {}
 
-public function graphicsApplicationDefaultEvent(event: borrow EMAppEvent) {
-    return
-}
+public function graphicsApplicationDefaultEvent(event: borrow AppEvent) {}
 
-public function graphicsApplicationDefaultCleanup(graphics: EMGraphics) {
-    return
-}
+public function graphicsApplicationDefaultCleanup(graphics: Graphics) {}
 
-public function graphicsApplicationNoWindowDragRegion(x: Float, y: Float) -> Bool {
+public function graphicsApplicationNoWindowDragRegion(x: Number, y: Number) -> Bool {
     return false
 }
 
@@ -24,15 +16,15 @@ public function graphicsApplicationNoWindowDragRegion(x: Float, y: Float) -> Boo
 // four points are also the top resize edge on Wayland, so twelve leaves an
 // eight-point move handle instead of the effectively two-point handle a six-
 // point strip produced.
-public function graphicsApplicationFallbackWindowDragRegion(x: Float, y: Float) -> Bool {
-    return x >= 0.0 && y >= 0.0 && y < 12.0
+public function graphicsApplicationFallbackWindowDragRegion(x: Number, y: Number) -> Bool {
+    return x >= 0 && y >= 0 && y < 12
 }
 
-public struct EMGraphicsApplication {
+public struct GraphicsApplication {
     var title: String = "Ember"
-    var width: Int = 640
-    var height: Int = 480
-    var sampleCount: Int = 1
+    var width: UN32 = 640
+    var height: UN32 = 480
+    var sampleCount: UN8 = 1
     // Request a full-resolution framebuffer on HighDPI/Retina displays. When true
     // (the default), a desktop backend makes its drawable pixel-sized and reports
     // the backing factor; UI layout
@@ -42,17 +34,17 @@ public struct EMGraphicsApplication {
     // The mode the window OPENS in. `width`/`height` are what a windowed mode is
     // given; a fullscreen window takes the display's size instead, so a program
     // that starts there reads its viewport back off the frame.
-    var windowMode: EMWindowMode = .Windowed
-    // What the window's title bar is. See Public/EMWindowTitlebar.kira.
-    var titlebar: EMWindowTitlebar = .Standard
+    var windowMode: WindowMode = .Windowed
+    // What the window's title bar is. See Public/WindowTitlebar.kira.
+    var titlebar: WindowTitlebar = .Standard
     // The radius a decorated window's corners are rounded to, in points. Zero
     // keeps the platform's own corner; a larger one rounds the window by its
     // content -- the window shows through past the curve, and its shadow
     // follows -- for a toolkit drawing another platform's windows. A backend
     // that cannot shape its window keeps its own corner.
-    var cornerRadius: Float = 0.0
+    var cornerRadius: Number = 0
     // A window the desktop shows through: every pixel left at
-    // `graphicsTransparentKey()` is a hole rather than a color, so the
+    // `TransparentKey.color` is a hole rather than a color, so the
     // application's own drawing is the window's shape. See
     // Public/WindowComposition.kira.
     var transparent: Bool = false
@@ -61,11 +53,11 @@ public struct EMGraphicsApplication {
     // everything on it against what is behind, which is the "sheet of glass"
     // an overlay wants and not the same thing as a translucent surface inside
     // an opaque window.
-    var opacity: Float = 1.0
+    var opacity: Number = 1
     // Optional fixed frame cadence in nanoseconds. Zero keeps the backend
     // uncapped; a positive value uses absolute deadlines and never emits catch-up
     // bursts after an overrun.
-    var targetFrameDurationNs: Int = 0
+    var targetFrameDurationNs: UNumber = 0
     // Offscreen color-target format (Metal). Default swapchain (BGRA8); set to
     // the `R32Uint` texture format to render a visibility buffer.
     var colorFormat: TextureFormat = .Swapchain
@@ -76,43 +68,60 @@ public struct EMGraphicsApplication {
     // and a comparison is only worth anything when the
     // program either one drew is the same program.
     var backend: RenderBackendKind = graphicsDefaultBackend()
-    var platform: EMPlatform = .Unknown
     // Launch-time harness settings — capture, quit-after, input scripts — as a
-    // value rather than the environment. Default is unconfigured: the backend
-    // reads the environment as it always has. A caller that provides one drives
-    // the run without any environment variable.
-    var harness: HarnessConfig = HarnessConfig {}
-    var initHandler: (EMGraphics) -> Void = graphicsApplicationDefaultInit
+    // value rather than the environment. Without one the backend reads the
+    // environment; with one it drives the run without any environment variable.
+    var harness: HarnessConfig? = .None
+    var initHandler: (Graphics) -> Void = graphicsApplicationDefaultInit
     var frameHandler: (borrow mut RenderFrame) -> Void = graphicsApplicationDefaultFrame
-    var eventHandler: (borrow EMAppEvent) -> Void = graphicsApplicationDefaultEvent
-    var cleanupHandler: (EMGraphics) -> Void = graphicsApplicationDefaultCleanup
+    var eventHandler: (borrow AppEvent) -> Void = graphicsApplicationDefaultEvent
+    var cleanupHandler: (Graphics) -> Void = graphicsApplicationDefaultCleanup
     // Client-side window furniture describes the part of its CONTENT that acts
     // as a titlebar. Raw graphics apps retain a narrow invisible fallback at the
     // top so an undecorated window cannot become impossible to move.
-    var windowDragRegion: (Float, Float) -> Bool = graphicsApplicationFallbackWindowDragRegion
+    var windowDragRegion: (Number, Number) -> Bool = graphicsApplicationFallbackWindowDragRegion
 
-    function onInit(body: (EMGraphics) -> Void) {
+    function onInit(body: (Graphics) -> Void) {
         self.initHandler = body
-        return
     }
 
     function onFrame(body: (borrow mut RenderFrame) -> Void) {
         self.frameHandler = body
-        return
     }
 
-    function onEvent(body: (borrow EMAppEvent) -> Void) {
+    function onEvent(body: (borrow AppEvent) -> Void) {
         self.eventHandler = body
-        return
     }
 
-    function onCleanup(body: (EMGraphics) -> Void) {
+    function onCleanup(body: (Graphics) -> Void) {
         self.cleanupHandler = body
-        return
     }
 
     function run(userData: RawPtr) {
         graphicsRuntimeRun(self, userData)
-        return
     }
+
+    // The window this application asks for.
+    function windowRequest(borrow self) -> WindowRequest {
+        return WindowRequest {
+            title: self.title,
+            width: self.width,
+            height: self.height,
+            windowMode: self.windowMode,
+            transparent: self.transparent,
+            opacity: self.opacity
+        }
+    }
+}
+
+// The window a program asks a backend to open: what of `GraphicsApplication` a
+// window is made from. The application's handlers stay with the application,
+// so a window family's members carry only values that cross a library.
+public struct WindowRequest {
+    var title: String = "Ember"
+    var width: UN32 = 640
+    var height: UN32 = 480
+    var windowMode: WindowMode = .Windowed
+    var transparent: Bool = false
+    var opacity: Number = 1
 }

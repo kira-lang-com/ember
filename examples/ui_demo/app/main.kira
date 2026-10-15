@@ -1,139 +1,118 @@
 import Ember
 import Foundation
 
-struct UiDemoState {
-    var shader: EMGraphicsShader
-    var pipeline: RenderPipeline
-    var vertices: EMGraphicsBuffer
+namespace Panel {
+    // Three quads, two triangles each.
+    let vertexCount: UN32 = 18
+    // Two floats a vertex.
+    let stride: UN32 = 8
 }
 
-function uiDemoVertices() -> [F32] {
-    return [
-        -0.44, -0.24,
-        0.44, -0.24,
-        0.44, 0.24,
-        -0.44, -0.24,
-        0.44, 0.24,
-        -0.44, 0.24,
-
-        -0.28, 0.06,
-        0.28, 0.06,
-        0.28, 0.12,
-        -0.28, 0.06,
-        0.28, 0.12,
-        -0.28, 0.12,
-
-        -0.28, -0.08,
-        0.16, -0.08,
-        0.16, -0.02,
-        -0.28, -0.08,
-        0.16, -0.02,
-        -0.28, -0.02
-    ]
+function panelVertices() -> [Number] {
+    return [-0.44, -0.24, 0.44, -0.24, 0.44, 0.24, -0.44, -0.24, 0.44, 0.24, -0.44, 0.24, -0.28, 0.06, 0.28, 0.06, 0.28, 0.12, -0.28, 0.06, 0.28, 0.12, -0.28, 0.12, -0.28, -0.08, 0.16, -0.08, 0.16, -0.02, -0.28, -0.08, 0.16, -0.02, -0.28, -0.02]
 }
 
-function uiDemoVertexLayout() -> VertexLayout {
+function panelVertexLayout() -> VertexLayout {
     return VertexLayout {
-        stride: 8
-        attributes: [
-            VertexAttribute {
-                name: "position"
-                location: 0
-                format: VertexFormat.Float2
-                offset: 0
-            }
-        ]
+        stride: Panel.stride,
+        attributes: [VertexAttribute { name: "position", format: .Float2 }]
+    }
+}
+
+// What the frame draws with, made once at init and destroyed at cleanup.
+struct PanelResources {
+    var shader: GraphicsShader
+    var pipeline: RenderPipeline
+    var vertices: GraphicsBuffer
+}
+
+// None until init has made the resources, and None for good when it could not:
+// a frame then clears and draws nothing.
+struct PanelState {
+    var resources: PanelResources? = .None
+}
+
+function panelPipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "ui-demo-pipeline",
+        shader: copy shader,
+        vertexLayout: panelVertexLayout(),
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+    }
+}
+
+function panelResources(graphics: borrow Graphics) -> Result<PanelResources, ResourceFailure> {
+    let shader = match graphics.createShader(
+        ShaderDescriptor {
+            label: "ui-demo-shader",
+            vertexPath: "generated/shaders/UiDemo.vert.glsl",
+            fragmentPath: "generated/shaders/UiDemo.frag.glsl"
+        }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "ui-demo-vertices", data: panelVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(panelPipeline(shader)) {
+        Ok(pipeline) -> .Ok(
+            PanelResources { shader: shader, pipeline: pipeline, vertices: vertices }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function panelInit(graphics: Graphics) {
+    var state = nativeRecover<PanelState>(graphics.userData)
+    match panelResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the panel", move failure)
+    }
+}
+
+function panelFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<PanelState>(frame.userData)
+    let encoder = frame.beginRenderPass(
+        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.06, b: 0.08 })
+    )
+    match state.resources {
+        Some(resources) -> {
+            encoder.setPipeline(resources.pipeline)
+            encoder.setVertexBuffer(resources.vertices)
+            encoder.draw(Panel.vertexCount)
+        }
+        None -> {}
+    }
+    frame.endPass()
+}
+
+function panelCleanup(graphics: Graphics) {
+    let state = nativeRecover<PanelState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            graphics.destroyBuffer(resources.vertices)
+            graphics.destroyRenderPipeline(resources.pipeline)
+            graphics.destroyShader(copy resources.shader)
+        }
+        None -> {}
     }
 }
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember UI Demo"
-        width: 640
-        height: 480
-        sampleCount: 1
+    var app = GraphicsApplication {
+        title: "Ember UI Demo",
+        width: 640,
+        height: 480,
+        sampleCount: 1,
+        initHandler: panelInit,
+        frameHandler: panelFrame,
+        cleanupHandler: panelCleanup
     }
-    let state = nativeState(UiDemoState {
-        shader: emptyGraphicsShader()
-        pipeline: emptyRenderPipeline()
-        vertices: emptyGraphicsBuffer()
-    })
-
-    app.onInit { graphics in
-        var uiState = nativeRecover<UiDemoState>(graphics.userData)
-
-        uiState.shader = shaderOrReport(graphics.createShader(ShaderDescriptor {
-            label: "ui-demo-shader"
-            vertexSource: ""
-            fragmentSource: ""
-            vertexPath: "generated/shaders/UiDemo.vert.glsl"
-            fragmentPath: "generated/shaders/UiDemo.frag.glsl"
-        }), "shader")
-
-        uiState.vertices = bufferOrReport(graphics.createBuffer(BufferDescriptor {
-            label: "ui-demo-vertices"
-            usage: BufferUsage.Vertex
-            data: uiDemoVertices()
-        }), "vertices")
-
-        uiState.pipeline = pipelineOrReport(graphics.createRenderPipeline(RenderPipelineDescriptor {
-            label: "ui-demo-pipeline"
-            shader: uiState.shader
-            vertexLayout: uiDemoVertexLayout()
-            colorTargets: [
-                ColorTargetDescriptor {
-                    format: TextureFormat.Swapchain
-                    blend: BlendState {
-                        enabled: false
-                        preset: BlendPreset.Replace
-                    }
-                }
-            ]
-            depthStencil: DepthStencilDescriptor {
-                depthEnabled: false
-                depthWriteEnabled: false
-                depthCompare: CompareFunction.Always
-                format: TextureFormat.None
-            }
-            rasterization: RasterizationDescriptor {
-                cullMode: CullMode.None
-                frontFace: FrontFace.CounterClockwise
-            }
-            primitive: PrimitiveDescriptor {
-                topology: PrimitiveTopology.TriangleList
-            }
-        }), "pipeline")
-        return
-    }
-
-    app.onFrame { frame in
-        var uiState = nativeRecover<UiDemoState>(frame.userData)
-        let pass = clearSwapchainRenderPass(Color {
-            r: 0.05
-            g: 0.06
-            b: 0.08
-            a: 1.0
-        })
-        let pipeline = uiState.pipeline
-        let vertices = uiState.vertices
-
-        let encoder = frame.beginRenderPass(pass)
-        encoder.setPipeline(pipeline)
-        encoder.setVertexBuffer(vertices)
-        encoder.draw(18)
-        frame.endPass()
-        return
-    }
-
-    app.onCleanup { graphics in
-        var uiState = nativeRecover<UiDemoState>(graphics.userData)
-        graphics.destroyBuffer(uiState.vertices)
-        graphics.destroyRenderPipeline(uiState.pipeline)
-        graphics.destroyShader(uiState.shader)
-        return
-    }
-
-    app.run(nativeUserData(state))
-    return
+    app.run(nativeUserData(nativeState(PanelState())))
 }

@@ -1,0 +1,96 @@
+import Foundation
+import Heap
+
+// Reading rendered pixels back into a file.
+//
+// A pass that began and a draw that was counted are equally true of a frame
+// that came out blank; a capture is what shows what a frame contains. Every
+// backend copies its image into a host-visible buffer and hands the mapped
+// bytes here, which writes them as a binary PPM (`P6`).
+
+// Why a frame or texture could not be captured.
+public enum CaptureFailure {
+    NoDevice
+    // The backend has no readback for this kind of target.
+    Unsupported
+    NoTexture
+    // The frame the copy is recorded into could not be begun.
+    FrameNotBegun
+    // The swapchain's images cannot be copied out, or are a format the
+    // capture does not write.
+    NotReadable
+    NoImage
+    StagingRefused
+    SubmissionFailed
+    MapFailed
+    File(FileFailure)
+}
+
+// The order of the four 8-bit channels in a captured pixel.
+public enum PixelOrder {
+    Rgba
+    Bgra
+}
+
+// One captured pixel as it sits in mapped memory.
+public @FFI.Struct { layout: c }
+struct MappedPixel {
+    var first: U8
+    var second: U8
+    var third: U8
+    var alpha: U8
+}
+
+// Rows of pixels a backend mapped, `bytesPerRow` apart: a copy may pad each row
+// past `width` pixels.
+public struct MappedPixels {
+    let start: RawPtr
+    let width: UNumber
+    let height: UNumber
+    let bytesPerRow: UNumber
+    let order: PixelOrder
+}
+
+namespace PortablePixmap {
+    let magic: String = "P6"
+    let sampleMaximum: UNumber = 255
+}
+
+// The mapped pixels as a binary PPM: red, green and blue per pixel, no alpha
+// and no row padding.
+public function portablePixmap(pixels: borrow MappedPixels) -> [U8] {
+    let header = "\(PortablePixmap.magic)\n\(pixels.width) \(pixels.height)\n\(PortablePixmap.sampleMaximum)\n"
+    var bytes = header.bytes()
+    for row in 0..pixels.height {
+        for column in 0..pixels.width {
+            let pixel = heapLoad<MappedPixel>(
+                pixels.start,
+                row * pixels.bytesPerRow + column * sizeOf<MappedPixel>()
+            )
+            match pixels.order {
+                Rgba -> {
+                    bytes.append(pixel.first)
+                    bytes.append(pixel.second)
+                    bytes.append(pixel.third)
+                }
+                Bgra -> {
+                    bytes.append(pixel.third)
+                    bytes.append(pixel.second)
+                    bytes.append(pixel.first)
+                }
+            }
+        }
+    }
+    return bytes
+}
+
+// The mapped pixels written to `path`.
+public function writeCapture(
+    pixels: borrow MappedPixels,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    return match writeBytesFile(path, portablePixmap(pixels)) {
+        Ok -> .Ok
+        Error(failure) -> .Error(.File(failure))
+    }
+}

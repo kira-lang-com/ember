@@ -2,48 +2,40 @@ import Ember
 import Foundation
 
 struct RuntimeState {
-    var initCount: Int
-    var frameCount: Int
-    var cleanupCount: Int
+    var initCount: Number
+    var frameCount: Number
+    var cleanupCount: Number
 }
 
 @Main
 function main() {
-    var app = EMGraphicsApplication {
-        title: "Ember Runtime Entry"
-        width: 320
-        height: 240
-        sampleCount: 1
+    var app = GraphicsApplication {
+        title: "Ember Runtime Entry" width: 320 height: 240 sampleCount: 1
     }
-    let state = nativeState(RuntimeState {
-        initCount: 0
-        frameCount: 0
-        cleanupCount: 0
-    })
+    let state = nativeState(RuntimeState { initCount: 0 frameCount: 0 cleanupCount: 0 })
 
-    app.onInit { graphics in
+    app.onInit {
+        graphics in
         var runtimeState = nativeRecover<RuntimeState>(graphics.userData)
         runtimeState.initCount = runtimeState.initCount + 1
         return
     }
 
-    app.onFrame { frame in
+    app.onFrame {
+        frame in
         var runtimeState = nativeRecover<RuntimeState>(frame.userData)
         runtimeState.frameCount = runtimeState.frameCount + 1
 
-        frame.pass(Color {
-            r: 0.10
-            g: 0.10
-            b: 0.13
-            a: 1.0
-        }) { encoder in
+        frame.pass(RGBAColor { r: 0.10 g: 0.10 b: 0.13 a: 1.0 }) {
+            encoder in
             return
         }
         frame.requestQuit()
         return
     }
 
-    app.onCleanup { graphics in
+    app.onCleanup {
+        graphics in
         var runtimeState = nativeRecover<RuntimeState>(graphics.userData)
         runtimeState.cleanupCount = runtimeState.cleanupCount + 1
         print(runtimeState.initCount)
@@ -53,5 +45,4 @@ function main() {
     }
 
     app.run(nativeUserData(state))
-    return
 }

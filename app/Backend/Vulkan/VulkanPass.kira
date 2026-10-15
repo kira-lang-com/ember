@@ -1,476 +1,376 @@
 import Foundation
+import Heap
 
 // Dynamic rendering keeps a pipeline independent of a particular offscreen
 // framebuffer. Each pass still owns explicit image-layout transitions, which is
 // the Vulkan rule that makes pass ordering visible to the driver.
 
-public function vulkanWindowScale(context: RawPtr) -> Float {
-    if !vulkanHasDevice(context) { return 1.0 }
-    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
+public function vulkanWindowScale(context: RawPtr) -> Number {
+    if !vulkanHasDevice(context) { return 1 }
+    let state = nativeRecover<GraphicsRuntimeState>(context)
     return vulkanWindowFor(vulkanWindowPlatformForHost()).scale(state.vulkan.window)
 }
 
-public function vulkanContextWidth(context: RawPtr) -> Int {
+public function vulkanContextWidth(context: RawPtr) -> Number {
     if !vulkanHasDevice(context) { return 0 }
-    return nativeRecover<EMGraphicsAppRuntimeState>(context).vulkan.swapchainWidth
+    return nativeRecover<GraphicsRuntimeState>(context).vulkan.swapchainWidth
 }
 
-public function vulkanContextHeight(context: RawPtr) -> Int {
+public function vulkanContextHeight(context: RawPtr) -> Number {
     if !vulkanHasDevice(context) { return 0 }
-    return nativeRecover<EMGraphicsAppRuntimeState>(context).vulkan.swapchainHeight
+    return nativeRecover<GraphicsRuntimeState>(context).vulkan.swapchainHeight
 }
 
-public function vulkanViewportWidth(context: RawPtr) -> Float {
-    return Float(vulkanContextWidth(context)) / (vulkanWindowScale(context) <= 0.0 ? 1.0 : vulkanWindowScale(context))
+public function vulkanViewportWidth(context: RawPtr) -> Number {
+    return Number(vulkanContextWidth(context)) / vulkanEffectiveWindowScale(context)
 }
 
-public function vulkanViewportHeight(context: RawPtr) -> Float {
-    return Float(vulkanContextHeight(context)) / (vulkanWindowScale(context) <= 0.0 ? 1.0 : vulkanWindowScale(context))
+public function vulkanViewportHeight(context: RawPtr) -> Number {
+    return Number(vulkanContextHeight(context)) / vulkanEffectiveWindowScale(context)
 }
 
-public function vulkanWindowMode(context: RawPtr) -> EMWindowMode {
+// The window's scale, or one where it reports none. A compositor that answers
+// zero for the scale of a surface it has not mapped would otherwise divide a
+// viewport by zero at the first frame.
+public function vulkanEffectiveWindowScale(context: RawPtr) -> Number {
+    let scale = vulkanWindowScale(context)
+    if scale <= 0 { return 1 }
+    return scale
+}
+
+public function vulkanWindowMode(context: RawPtr) -> WindowMode {
     if !vulkanHasDevice(context) { return .Windowed }
-    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    if hostPlatform() == .Windows {
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    if targetPlatform!() == .Windows {
         return dawnReadWindowMode(state.vulkan.window)
     }
     return .Windowed
 }
 
-public function vulkanSetWindowMode(context: RawPtr, mode: borrow EMWindowMode) {
-    if !vulkanHasDevice(context) || hostPlatform() != .Windows { return }
-    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    dawnApplyWindowMode(state.vulkan.window, mode, state.app.width, state.app.height)
-    return
+public function vulkanSetWindowMode(context: RawPtr, mode: borrow WindowMode) {
+    if !vulkanHasDevice(context) || targetPlatform!() != .Windows { return }
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    dawnApplyWindowMode(state.vulkan.window, mode, state.app.windowRequest())
 }
 
 public function vulkanMinimizeWindow(context: RawPtr) {
-    if hostPlatform() == .Windows && vulkanHasDevice(context) {
-        let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if targetPlatform!() == .Windows && vulkanHasDevice(context) {
+        let runtime = nativeRecover<GraphicsRuntimeState>(context)
         showWindow(runtime.vulkan.window, I32(6))
     }
-    if hostPlatform() == .Linux && vulkanHasDevice(context) {
-        let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if targetPlatform!() == .Linux && vulkanHasDevice(context) {
+        let runtime = nativeRecover<GraphicsRuntimeState>(context)
         dawnWaylandMinimize(runtime)
     }
-    return
 }
 
 public function vulkanToggleMaximizeWindow(context: RawPtr) {
-    if hostPlatform() == .Windows && vulkanHasDevice(context) {
-        let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if targetPlatform!() == .Windows && vulkanHasDevice(context) {
+        let runtime = nativeRecover<GraphicsRuntimeState>(context)
         if dawnReadWindowMode(runtime.vulkan.window) == .Windowed {
             showWindow(runtime.vulkan.window, I32(3))
         } else {
             showWindow(runtime.vulkan.window, I32(9))
         }
     }
-    if hostPlatform() == .Linux && vulkanHasDevice(context) {
-        let runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if targetPlatform!() == .Linux && vulkanHasDevice(context) {
+        let runtime = nativeRecover<GraphicsRuntimeState>(context)
         dawnWaylandToggleMaximize(runtime)
     }
-    return
 }
 
 public function vulkanShowMouse(context: RawPtr, show: Bool) {
     if !vulkanHasDevice(context) { return }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    if hostPlatform() == .Windows && runtime.vulkan.mouseVisible != show {
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    if targetPlatform!() == .Windows && runtime.vulkan.mouseVisible != show {
         showCursor(show)
         runtime.vulkan.mouseVisible = show
     }
-    return
 }
 
 public function vulkanMouseShown(context: RawPtr) -> Bool {
     if !vulkanHasDevice(context) { return true }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     return runtime.vulkan.mouseVisible
 }
 
 public function vulkanLockMouse(context: RawPtr, lock: Bool) {
-    if !vulkanHasDevice(context) || hostPlatform() != .Windows { return }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    if !vulkanHasDevice(context) || targetPlatform!() != .Windows { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     if runtime.vulkan.mouseLocked == lock { return }
-    if vulkanClipCursor(runtime.vulkan.window, lock ? I32(1) : I32(0)) == I32(0) { return }
+    if !vulkanClipCursor(runtime.vulkan.window, lock) { return }
     runtime.vulkan.mouseLocked = lock
     vulkanShowMouse(context, !lock)
-    return
 }
 
 public function vulkanMouseLocked(context: RawPtr) -> Bool {
     if !vulkanHasDevice(context) { return false }
-    return nativeRecover<EMGraphicsAppRuntimeState>(context).vulkan.mouseLocked
+    return nativeRecover<GraphicsRuntimeState>(context).vulkan.mouseLocked
 }
 
-public function vulkanClearValue(color: borrow Color) -> VkClearValue {
-    let bits = allocateBytes(U64(16))
-    writeFloat32(bits, U64(0), color.r)
-    writeFloat32(bits, U64(4), color.g)
-    writeFloat32(bits, U64(8), color.b)
-    writeFloat32(bits, U64(12), color.a)
-    let value = VkClearValue {
-        color: VkClearColorValue {
-            words: VulkanWordArray4 {
-                elements: [wordAt(bits, U64(0)), wordAt(bits, U64(4)), wordAt(bits, U64(8)), wordAt(bits, U64(12))]
-            }
+// `VkClearValue` is a C union of a colour and a depth-stencil pair; each is
+// written over it as the struct it is.
+public @FFI.Struct { layout: c }
+struct VulkanClearColor {
+    var red: F32
+    var green: F32
+    var blue: F32
+    var alpha: F32
+}
+
+public function vulkanClearValue(color: borrow RGBAColor) -> VkClearValue {
+    let value = boxed<VkClearValue>(VkClearValue())
+    heapStore<VulkanClearColor>(
+        value.pointer(),
+        0,
+        VulkanClearColor {
+            red: F32(color.r),
+            green: F32(color.g),
+            blue: F32(color.b),
+            alpha: F32(color.a)
         }
-    }
-    freeBytes(bits)
-    return value
+    )
+    return boxedValue<VkClearValue>(value)
 }
 
-public function vulkanDepthClearValue(depth: Float, stencil: Int) -> VkClearValue {
-    let bits = allocateBytes(U64(4))
-    writeFloat32(bits, U64(0), depth)
-    let value = VkClearValue {
-        color: VkClearColorValue {
-            words: VulkanWordArray4 {
-                elements: [wordAt(bits, U64(0)), U32(stencil), U32(0), U32(0)]
-            }
+public function vulkanDepthClearValue(depth: Number, stencil: Number) -> VkClearValue {
+    let value = boxed<VkClearValue>(VkClearValue())
+    heapStore<VkClearDepthStencilValue>(
+        value.pointer(),
+        0,
+        VkClearDepthStencilValue { depth: F32(depth), stencil: U32(stencil) }
+    )
+    return boxedValue<VkClearValue>(value)
+}
+
+// The size and sample count a managed depth target is made at.
+public struct VulkanDepthExtent {
+    let width: UN32 = 0
+    let height: UN32 = 0
+    let sampleCount: UN8 = 1
+}
+
+// The depth target a pass gets when it asks for depth without naming a
+// texture, kept and reused while passes stay the same size.
+public struct VulkanManagedDepth {
+    let image: U32
+    let view: U32
+    let extent: VulkanDepthExtent
+}
+
+function vulkanManagedDepthFits(
+    depth: borrow VulkanManagedDepth,
+    extent: borrow VulkanDepthExtent
+) -> Bool {
+    return depth.extent.width == extent.width
+        && depth.extent.height == extent.height
+        && depth.extent.sampleCount == extent.sampleCount
+}
+
+public function vulkanReleaseManagedDepth(state: borrow mut VulkanState) {
+    match state.managedDepth {
+        Some(depth) -> {
+            vulkanReleaseObject(state, depth.view)
+            vulkanReleaseObject(state, depth.image)
         }
+        None -> {}
     }
-    freeBytes(bits)
-    return value
+    state.managedDepth = .None
 }
 
-public function vulkanEnsureDepthTarget(state: borrow mut VulkanState, width: Int, height: Int, sampleCount: Int) -> RawPtr {
-    if state.managedDepthId != 0 && state.managedDepthWidth == width && state.managedDepthHeight == height && state.managedDepthSampleCount == sampleCount {
-        return vulkanObject(state, state.managedDepthViewId)
+public function vulkanEnsureDepthTarget(
+    state: borrow mut VulkanState,
+    extent: borrow VulkanDepthExtent
+) -> Result<VulkanManagedDepth, VulkanResourceFailure> {
+    match state.managedDepth {
+        Some(depth) -> if vulkanManagedDepthFits(depth, extent) {
+            return .Ok(depth)
+        }
+        None -> {}
     }
-    if state.managedDepthViewId != 0 { vulkanReleaseImageView(state, state.managedDepthViewId) }
-    if state.managedDepthId != 0 { vulkanReleaseImage(state, state.managedDepthId) }
+    vulkanReleaseManagedDepth(state)
+    let depth = match vulkanNewManagedDepth(state, extent) {
+        Ok(depth) -> depth
+        Error(failure) -> return .Error(failure)
+    }
+    state.managedDepth = .Some(depth)
+    return .Ok(depth)
+}
+
+// A depth-stencil image and its view at the size and sample count a pass
+// wants.
+function vulkanNewManagedDepth(
+    state: borrow mut VulkanState,
+    extent: borrow VulkanDepthExtent
+) -> Result<VulkanManagedDepth, VulkanResourceFailure> {
     let descriptor = TextureDescriptor {
         label: "kira-vulkan-managed-depth",
-        width: width,
-        height: height,
+        width: extent.width,
+        height: extent.height,
         format: .Depth24Stencil8,
         usage: .DepthStencil,
-        sampleCount: sampleCount,
+        sampleCount: extent.sampleCount,
         storage: .Transient
     }
-    state.managedDepthId = vulkanCreateImageHandle(state, descriptor)
-    if state.managedDepthId == 0 {
-        graphicsFail(.Resource, "could not create the " + String(width) + "x" + String(height) + " depth target a pass asked for")
-        return nullPointer()
+    let image = match vulkanCreateImageHandle(state, descriptor) {
+        Ok(image) -> image
+        Error(failure) -> return .Error(failure)
     }
-    state.managedDepthViewId = vulkanCreateImageView(state, state.managedDepthId, vulkanFormatDepth24Stencil8(), vulkanAspectDepth() | vulkanAspectStencil())
-    state.managedDepthWidth = width
-    state.managedDepthHeight = height
-    state.managedDepthSampleCount = sampleCount
-    return vulkanObject(state, state.managedDepthViewId)
-}
-
-public function vulkanTransitionSwapchainImage(state: borrow mut VulkanState, image: RawPtr, index: U32, newLayout: I32, srcStage: U32, dstStage: U32, srcAccess: U32, dstAccess: U32) {
-    if pointerIsNull(image) { return }
-    let oldLayout = state.swapchainLayouts[Int(index)]
-    if oldLayout == newLayout { return }
-    var actualSourceStage = srcStage
-    var actualSourceAccess = srcAccess
-    if oldLayout == vulkanImageLayoutPresent() {
-        actualSourceStage = vulkanStageBottomOfPipe()
-        actualSourceAccess = vulkanAccessNone()
-    }
-    if oldLayout == vulkanImageLayoutColorAttachment() {
-        actualSourceStage = vulkanStageColorAttachmentOutput()
-        actualSourceAccess = vulkanAccessColorAttachmentWrite()
-    }
-    if oldLayout == vulkanImageLayoutTransferSource() {
-        actualSourceStage = vulkanStageTransfer()
-        actualSourceAccess = vulkanAccessTransferRead()
-    }
-    let barrier = VkImageMemoryBarrier {
-        sType: I32(45),
-        srcAccessMask: actualSourceAccess,
-        dstAccessMask: dstAccess,
-        oldLayout: oldLayout,
-        newLayout: newLayout,
-        srcQueueFamilyIndex: U32(4294967295),
-        dstQueueFamilyIndex: U32(4294967295),
-        image: image,
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: vulkanAspectColor(),
-            levelCount: U32(1),
-            layerCount: U32(1)
+    let view = match vulkanCreateImageView(
+        state,
+        image,
+        VulkanVocabulary.formatDepth24Stencil8,
+        VulkanVocabulary.aspectDepth | VulkanVocabulary.aspectStencil
+    ) {
+        Ok(view) -> view
+        Error(failure) -> {
+            vulkanReleaseObject(state, image)
+            return .Error(failure)
         }
     }
-    vkCmdPipelineBarrier(state.commandBuffer, actualSourceStage, dstStage, U32(0), U32(0), nullPointer(), U32(0), nullPointer(), U32(1), barrier)
-    state.swapchainLayouts[Int(index)] = newLayout
-    return
+    return .Ok(VulkanManagedDepth { image: image, view: view, extent: copy extent })
 }
 
-public function vulkanWaitForFrame(state: borrow mut VulkanState) -> Bool {
-    let fenceSlot = vulkanPointerSlot()
-    writePointer(fenceSlot, U64(0), state.inFlightFence)
-    let waitResult = vkWaitForFences(state.device, U32(1), fenceSlot, U32(1), U64(9223372036854775807))
-    freeBytes(fenceSlot)
-    if waitResult != vulkanSuccess() {
-        graphicsFail(.Frame, "waiting on the frame fence failed (" + vulkanResultName(waitResult) + ")")
-        return false
+public function vulkanWaitForFrame(state: borrow VulkanState) -> Result<Void, VulkanFrameFailure> {
+    let fence = boxed<RawPtr>(state.inFlightFence)
+    let waitResult = vulkanResultOf(
+        vkWaitForFences(state.device, U32(1), fence.pointer(), U32(1), VulkanVocabulary.waitForever)
+    )
+    if waitResult != .Success {
+        return .Error(.FenceWaitFailed(waitResult))
     }
-    return true
+    return .Ok
 }
 
-public function vulkanAcquireFrame(state: borrow mut VulkanState) -> Bool {
-    if !vulkanWaitForFrame(state) { return false }
-    vulkanReleasePendingUploads(state)
-    vulkanReleaseRetiredObjects(state)
-    if !pointerIsNull(state.descriptorPool) {
-        vkResetDescriptorPool(state.device, state.descriptorPool, U32(0))
+// A windowed frame open for recording, once the last one has retired.
+public function vulkanAcquireFrame(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
+    match vulkanRetireFrame(state) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
     }
-    vkResetCommandBuffer(state.commandBuffer, U32(0))
-    let beginResult = vkBeginCommandBuffer(state.commandBuffer, VkCommandBufferBeginInfo {
-        sType: vulkanStructureCommandBufferBeginInfo(),
-        flags: U32(0)
-    })
-    if beginResult != vulkanSuccess() {
-        graphicsFail(.Frame, "could not begin the frame command buffer (" + vulkanResultName(beginResult) + ")")
-        return false
+    match vulkanRestartCommandBuffer(state, .Reused) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
     }
     state.frameActive = true
     state.acquired = false
     state.acquireWaitPending = false
     state.dynamicFrame = state.dynamicFrame + 1
-    return true
+    return .Ok
+}
+
+// Waits for the next presentable image with no timeout, as the frame cannot
+// continue without one.
+function vulkanAcquireNextImage(
+    state: borrow VulkanState,
+    imageIndex: borrow Boxed<U32>
+) -> VulkanResult {
+    return vulkanResultOf(
+        vkAcquireNextImageKHR(
+            state.device,
+            state.swapchain,
+            VulkanVocabulary.waitForever,
+            state.imageAvailable,
+            nullPointer(),
+            imageIndex.pointer()
+        )
+    )
 }
 
 // The swapchain image is taken only when a pass first draws to it. A frame
 // that never does presents nothing, and the window keeps the image it showed
 // last; presenting an image nothing was drawn into would show its undefined
 // contents instead.
-public function vulkanAcquireSwapchainImage(state: borrow mut VulkanState) -> Bool {
-    if state.acquired { return true }
+public function vulkanAcquireSwapchainImage(
+    state: borrow mut VulkanState
+) -> Result<Void, VulkanFrameFailure> {
+    if state.acquired {
+        return .Ok
+    }
     if !state.frameActive {
-        graphicsFail(.Swapchain, "a swapchain image was asked for outside a frame")
-        return false
+        return .Error(.OutsideFrame)
     }
-    let imageIndexSlot = vulkanWordSlot()
-    var result = vkAcquireNextImageKHR(state.device, state.swapchain, U64(9223372036854775807), state.imageAvailable, nullPointer(), imageIndexSlot)
-    if result == vulkanErrorOutOfDate() {
-        if !vulkanRecreateSwapchain(state) {
-            graphicsFail(.Swapchain, "the swapchain went out of date and could not be recreated")
-            freeBytes(imageIndexSlot)
-            return false
+    let imageIndex = boxed<U32>(U32(0))
+    var result = vulkanAcquireNextImage(state, imageIndex)
+    if result == .OutOfDate {
+        match vulkanRecreateSwapchain(state) {
+            Ok -> {}
+            Error(failure) -> return .Error(.SwapchainLost(failure))
         }
-        result = vkAcquireNextImageKHR(state.device, state.swapchain, U64(9223372036854775807), state.imageAvailable, nullPointer(), imageIndexSlot)
+        result = vulkanAcquireNextImage(state, imageIndex)
     }
-    state.currentImageIndex = wordAt(imageIndexSlot, U64(0))
-    freeBytes(imageIndexSlot)
-    if result != vulkanSuccess() && result != vulkanSuboptimal() {
-        graphicsFail(.Swapchain, "could not acquire a swapchain image (" + vulkanResultName(result) + ")")
-        return false
+    if result != .Success && result != .Suboptimal {
+        return .Error(.NoImage(result))
     }
+    state.currentImageIndex = boxedValue<U32>(imageIndex)
     state.acquired = true
     state.acquireWaitPending = true
-    return true
+    return .Ok
 }
 
 public function vulkanReleasePendingUploads(state: borrow mut VulkanState) {
     for buffer in state.pendingUploadBuffers {
-        vulkanReleaseBuffer(state, buffer)
+        vulkanReleaseObject(state, buffer)
     }
     state.pendingUploadBuffers = []
-    return
 }
 
 public function vulkanBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) -> Bool {
     if !vulkanRequireDevice(context, "vulkanBeginRenderPass") {
         return false
     }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     return vulkanBeginRenderPassState(runtime.vulkan, frame)
-}
-
-public function vulkanBeginRenderPassState(state: borrow mut VulkanState, frame: borrow RenderFrame) -> Bool {
-    if !state.frameActive {
-        graphicsFail(.Pass, "a render pass began outside a frame")
-        return false
-    }
-    if state.passActive {
-        graphicsFail(.Pass, "a render pass began while another is still open; end it first")
-        return false
-    }
-    if !frame.attachments.hasColor {
-        graphicsFail(.Pass, "a render pass began with no color attachment")
-        return false
-    }
-    var colorImage = nullPointer()
-    var colorView = nullPointer()
-    var width = frame.attachments.colorWidth()
-    var height = frame.attachments.colorHeight()
-    var format = state.swapchainFormat
-    var swapchain = frame.attachments.color.target.kind == .Swapchain
-    var sampleCount = swapchain ? 1 : frame.attachments.colorSampleCount()
-    if sampleCount <= 0 { sampleCount = 1 }
-    if vulkanSampleCount(sampleCount) == I32(0) {
-        graphicsFail(.Pass, "render pass sampleCount must be one of 1, 2, 4, 8, 16, 32 or 64")
-        return false
-    }
-    if swapchain && !vulkanAcquireSwapchainImage(state) {
-        graphicsFail(.Pass, "a pass to the window has no swapchain image to draw into")
-        return false
-    }
-    var imageIndex = state.currentImageIndex
-    if swapchain {
-        if Int(imageIndex) >= state.swapchainImages.count {
-            graphicsFail(.Swapchain, "acquired image " + String(Int(imageIndex)) + " is outside the swapchain's " + String(state.swapchainImages.count) + " images")
-            return false
-        }
-        colorImage = state.swapchainImages[Int(imageIndex)]
-        colorView = state.swapchainViews[Int(imageIndex)]
-        width = state.swapchainWidth
-        height = state.swapchainHeight
-        vulkanTransitionSwapchainImage(state, colorImage, imageIndex, vulkanImageLayoutColorAttachment(), vulkanStageTopOfPipe(), vulkanStageColorAttachmentOutput(), vulkanAccessNone(), vulkanAccessColorAttachmentWrite())
-    } else {
-        let colorId = frame.attachments.color.target.texture.id
-        colorImage = vulkanObject(state, colorId)
-        colorView = vulkanObject(state, frame.attachments.colorViewId())
-        format = vulkanObjectFormat(state, colorId)
-        if pointerIsNull(colorImage) || pointerIsNull(colorView) {
-            graphicsFail(.Pass, "the pass's color target, texture " + String(Int(colorId)) + ", has no live image or view; it was destroyed or never created")
-            return false
-        }
-        vulkanTransitionImage(state, colorId, vulkanImageLayoutColorAttachment(), vulkanStageTopOfPipe(), vulkanStageColorAttachmentOutput(), vulkanAccessNone(), vulkanAccessColorAttachmentWrite(), vulkanAspectColor())
-    }
-    if width <= 0 || height <= 0 || pointerIsNull(colorView) {
-        graphicsFail(.Pass, "the pass's color target is " + String(width) + "x" + String(height) + (pointerIsNull(colorView) ? " with no view" : "") + "; nothing can be drawn into it")
-        return false
-    }
-    var depthView = nullPointer()
-    var depthImageId = U32(0)
-    if frame.attachments.hasDepth {
-        depthImageId = frame.attachments.depth.texture.id
-        if depthImageId != 0 {
-            let depthSamples = frame.attachments.depth.texture.sampleCount <= 0 ? 1 : frame.attachments.depth.texture.sampleCount
-            if depthSamples != sampleCount {
-                graphicsFail(.Pass, "depth attachment sampleCount must match the color attachment")
-                return false
-            }
-            depthView = vulkanObject(state, frame.attachments.depthViewId())
-        } else {
-            depthView = vulkanEnsureDepthTarget(state, width, height, sampleCount)
-            depthImageId = state.managedDepthId
-        }
-        if pointerIsNull(depthView) {
-            graphicsFail(.Pass, "the pass's depth target has no live view")
-            return false
-        }
-        vulkanTransitionImage(state, depthImageId, vulkanImageLayoutDepthAttachment(), vulkanStageTopOfPipe(), vulkanStageEarlyFragmentTests(), vulkanAccessNone(), vulkanAccessDepthStencilWrite(), vulkanAspectDepth() | vulkanAspectStencil())
-    }
-    var resolveView = nullPointer()
-    if frame.attachments.color.hasResolveTarget {
-        if sampleCount <= 1 {
-            graphicsFail(.Pass, "resolve targets require a multisampled color attachment")
-            return false
-        }
-        let resolveTexture = frame.attachments.color.resolveTarget.texture
-        let resolveSamples = resolveTexture.sampleCount <= 0 ? 1 : resolveTexture.sampleCount
-        if resolveSamples != 1 || resolveTexture.width != width || resolveTexture.height != height {
-            graphicsFail(.Pass, "resolve target must be single-sampled and match the color attachment extent")
-            return false
-        }
-        let resolveId = resolveTexture.id
-        resolveView = vulkanObject(state, frame.attachments.resolveViewId())
-        if resolveId == 0 || pointerIsNull(resolveView) || vulkanObjectFormat(state, resolveId) != format {
-            graphicsFail(.Pass, "resolve target must match the color attachment format")
-            return false
-        }
-        vulkanTransitionImage(state, resolveId, vulkanImageLayoutColorAttachment(), vulkanStageTopOfPipe(), vulkanStageColorAttachmentOutput(), vulkanAccessNone(), vulkanAccessColorAttachmentWrite(), vulkanAspectColor())
-    }
-    let colorAttachment = VkRenderingAttachmentInfo {
-        sType: vulkanStructureRenderingAttachmentInfo(),
-        imageView: colorView,
-        imageLayout: vulkanImageLayoutColorAttachment(),
-        resolveMode: pointerIsNull(resolveView) ? vulkanResolveNone() : vulkanResolveAverage(),
-        resolveImageView: resolveView,
-        resolveImageLayout: vulkanImageLayoutColorAttachment(),
-        loadOp: vulkanLoadOp(frame.attachments.color.loadAction),
-        storeOp: vulkanStoreOp(frame.attachments.color.storeAction),
-        clearValue: vulkanClearValue(frame.attachments.color.clearColor)
-    }
-    let infoBase = VkRenderingInfo {
-        sType: vulkanStructureRenderingInfo(),
-        renderArea: VkRect2D {
-            extent: VkExtent2D { width: U32(width), height: U32(height) }
-        },
-        layerCount: U32(1),
-        colorAttachmentCount: U32(1),
-        pColorAttachments: colorAttachment
-    }
-    if pointerIsNull(depthView) {
-        vulkanBeginRendering(state.device, state.commandBuffer, infoBase)
-    } else {
-        let depthAttachment = VkRenderingAttachmentInfo {
-            sType: vulkanStructureRenderingAttachmentInfo(),
-            imageView: depthView,
-            imageLayout: vulkanImageLayoutDepthAttachment(),
-            resolveMode: vulkanResolveNone(),
-            loadOp: vulkanLoadOp(frame.attachments.depth.loadAction),
-            storeOp: vulkanStoreOp(frame.attachments.depth.storeAction),
-            clearValue: vulkanDepthClearValue(frame.attachments.depth.clearDepth, frame.attachments.stencil.clearStencil)
-        }
-        let info = VkRenderingInfo {
-            sType: vulkanStructureRenderingInfo(),
-            renderArea: VkRect2D {
-                extent: VkExtent2D { width: U32(width), height: U32(height) }
-            },
-            layerCount: U32(1),
-            colorAttachmentCount: U32(1),
-            pColorAttachments: colorAttachment,
-            pDepthAttachment: depthAttachment
-        }
-        vulkanBeginRendering(state.device, state.commandBuffer, info)
-    }
-    state.passActive = true
-    state.passWidth = width
-    state.passHeight = height
-    state.passFormat = format
-    state.passColorImage = colorImage
-    state.passColorView = colorView
-    state.passResolveImage = pointerIsNull(resolveView) ? nullPointer() : vulkanObject(state, frame.attachments.color.resolveTarget.texture.id)
-    state.passDepthImage = depthImageId == 0 ? nullPointer() : vulkanObject(state, depthImageId)
-    state.passDepthView = depthView
-    state.passSampleCount = sampleCount
-    state.passIsSwapchain = swapchain
-    state.framePassCount = state.framePassCount + 1
-    return true
 }
 
 public function vulkanEndPassAndCommit(context: RawPtr) {
     if !vulkanHasDevice(context) { return }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     vulkanEndPassAndCommitState(runtime.vulkan)
-    return
 }
 
 public function vulkanEndPassAndCommitState(state: borrow mut VulkanState) {
     if !state.passActive { return }
     vulkanEndRendering(state.device, state.commandBuffer)
     if !state.passIsSwapchain {
-        let imageId = frameImageId(state, state.passColorImage)
-        if imageId != 0 {
-            vulkanTransitionImage(state, imageId, vulkanImageLayoutShaderRead(), vulkanStageColorAttachmentOutput(), vulkanStageFragmentShader() | vulkanStageComputeShader(), vulkanAccessColorAttachmentWrite(), vulkanAccessShaderRead(), vulkanAspectColor())
-        }
+        vulkanReadyForSampling(state, state.passColorImage)
     }
-    if !pointerIsNull(state.passResolveImage) {
-        let resolveId = frameImageId(state, state.passResolveImage)
-        if resolveId != 0 {
-            vulkanTransitionImage(state, resolveId, vulkanImageLayoutShaderRead(), vulkanStageColorAttachmentOutput(), vulkanStageFragmentShader() | vulkanStageComputeShader(), vulkanAccessColorAttachmentWrite(), vulkanAccessShaderRead(), vulkanAspectColor())
-        }
+    if !isNull(state.passResolveImage) {
+        vulkanReadyForSampling(state, state.passResolveImage)
     }
     state.passActive = false
     state.passWidth = 0
     state.passHeight = 0
     state.passResolveImage = nullPointer()
     state.passSampleCount = 1
-    return
 }
 
-public function frameImageId(state: borrow VulkanState, image: RawPtr) -> U32 {
-    for index in 0..state.objects.count {
-        if state.objects[index] == image && state.objectKinds[index] == vulkanObjectKindImage() {
-            return U32(index + 1)
+// A render target the pass drew into, moved to the layout a later pass or
+// kernel samples it in.
+function vulkanReadyForSampling(state: borrow mut VulkanState, image: RawPtr) {
+    match vulkanImageId(state, image) {
+        Some(imageId) -> vulkanTransitionImage(
+            state,
+            imageId,
+            .ShaderRead,
+            VulkanVocabulary.aspectColor
+        )
+        // A swapchain image is not in the table; its layout is tracked apart.
+        None -> {}
+    }
+}
+
+// The id of the registered image whose handle is `image`.
+public function vulkanImageId(state: borrow VulkanState, image: RawPtr) -> U32? {
+    for slot in 0..state.objects.count {
+        match state.objects[slot] {
+            Some(object) -> if object.kind == .Image && object.handle == image {
+                return .Some(U32(slot + 1))
+            }
+            None -> {}
         }
     }
-    return U32(0)
+    return .None
 }

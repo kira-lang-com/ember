@@ -1,9 +1,10 @@
 import Foundation
+import Heap
 // Uniforms and bind groups on WebGPU.
 //
 // # A uniform is a buffer here
 //
-// On sokol a `EMUniform` is CPU-side bookkeeping applied at the draw, because
+// On sokol a `GraphicsUniform` is CPU-side bookkeeping applied at the draw, because
 // sokol has no uniform object at all. WebGPU does: a uniform block is an
 // ordinary buffer bound at a binding, so `createUniform` allocates one and
 // `updateUniform` writes through the queue. The Kira-side values stay beside it
@@ -23,67 +24,86 @@ import Foundation
 public @FFI.Array { element: WGPUBindGroupEntry, count: 16 }
 struct WGPUBindGroupEntryArray16 {}
 
-public function dawnMaxBindGroupEntries() -> Int { return 16 }
-
 // A uniform buffer's size: its floats, rounded up to the 16-byte multiple WGSL
 // lays a uniform block out in, and never zero — WebGPU refuses an empty buffer.
-public function dawnUniformByteSize(floatCount: Int) -> Int {
-    if floatCount <= 0 {
-        return 16
-    }
-    return (floatCount * 4 + 15) / 16 * 16
+public function dawnUniformByteSize(floatCount: Number) -> Number {
+    return alignedUp(max(floatCount, 1) * sizeOf<F32>(), DawnBindGroup.uniformAlignment)
 }
 
-public function dawnCreateUniform(context: RawPtr, descriptor: borrow UniformDescriptor) -> UniformResult {
+namespace DawnBindGroup {
+    // WGSL lays a uniform block out in 16-byte multiples.
+    let uniformAlignment: UNumber = 16
+}
+
+public function dawnCreateUniform(
+    context: RawPtr,
+    descriptor: borrow UniformDescriptor
+) -> UniformResult {
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    if descriptor.expectedFloatCount <= 0 {
-        graphicsFail(.Binding, "uniform buffer '" + descriptor.label + "' needs a positive expected float count")
-        return .Error(.DeviceRefused)
-    }
-    if descriptor.data.count != descriptor.expectedFloatCount {
-        graphicsFail(.Binding, "uniform buffer '" + descriptor.label + "' upload size does not match its expected float count")
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let byteCount = dawnUniformByteSize(descriptor.expectedFloatCount)
-    let id = dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Uniform), byteCount)
-    if id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), descriptor.data, U64(descriptor.data.count * 4))
-    return .Ok(EMUniform {
-        storage: nativeState(UniformState {
+    if descriptor.expectedFloatCount <= 0 || descriptor.data.count != descriptor.expectedFloatCount {
+        log fault(
+            "a uniform was given a different number of floats than it declared",
             label: descriptor.label,
             expectedFloatCount: descriptor.expectedFloatCount,
-            values: descriptor.data
-        }),
-        id: id
-    })
+            count: descriptor.data.count
+        )
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = dawnUniformByteSize(descriptor.expectedFloatCount)
+    let id = match dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Uniform), byteCount) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    let floats = narrowFloats(descriptor.data)
+    let bytes = U64(floats.count * sizeOf<F32>())
+    wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), floats, bytes)
+    return .Ok(
+        GraphicsUniform {
+            storage: nativeState(
+                UniformState {
+                    label: descriptor.label,
+                    expectedFloatCount: descriptor.expectedFloatCount,
+                    values: descriptor.data
+                }
+            ),
+            id: UniformId(id)
+        }
+    )
 }
 
-public function dawnUpdateUniform(context: RawPtr, uniform: borrow EMUniform, data: borrow [F32]) {
+public function dawnUpdateUniform(
+    context: RawPtr,
+    uniform: borrow GraphicsUniform,
+    data: borrow[Number]
+) {
     setUniformValues(uniform, data)
     if !dawnHasDevice(context) || uniform.id == 0 || data.count <= 0 {
         return
     }
-    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    let buffer = dawnObject(state, uniform.id)
-    if pointerIsNull(buffer) {
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    let buffer = dawnObject(state, uniform.id.raw)
+    if isNull(buffer) {
         return
     }
-    wgpuQueueWriteBuffer(state.dawn.queue, buffer, U64(0), data, U64(data.count * 4))
-    return
+    let floats = narrowFloats(data)
+    wgpuQueueWriteBuffer(
+        state.dawn.queue,
+        buffer,
+        U64(0),
+        floats,
+        U64(floats.count * sizeOf<F32>())
+    )
 }
 
-public function dawnDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
+public function dawnDestroyUniform(context: RawPtr, uniform: borrow GraphicsUniform) {
     if !dawnHasDevice(context) || uniform.id == 0 {
         return
     }
-    var state = nativeRecover<EMGraphicsAppRuntimeState>(context)
-    dawnDestroyBufferId(state, uniform.id)
-    return
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    dawnDestroyBufferId(state, uniform.id.raw)
 }
 
 // --- bind groups ---------------------------------------------------------
@@ -92,84 +112,87 @@ public function dawnDestroyUniform(context: RawPtr, uniform: borrow EMUniform) {
 // keys on it, and every `*Result` lifter in this repo reads only whether it is
 // zero. The real WebGPU object arrives at the first draw.
 public function dawnBeginBindGroup(label: borrow String) -> BindGroupResult {
-    return .Ok(BindGroup {
-        storage: nativeState(BindGroupState {
-            label: label
-        }),
-        id: 1
-    })
+    return .Ok(
+        BindGroup { storage: nativeState(BindGroupState { label: label }), id: BindGroupId(1) }
+    )
 }
 
-public function dawnBindGroupAddUniform(group: borrow BindGroup, slot: Int, uniform: borrow EMUniform) {
+public function dawnBindGroupAddUniform(
+    group: borrow BindGroup,
+    slot: UN32,
+    uniform: borrow GraphicsUniform
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if uniform.id == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a uniform the device refused")
+        log fault("bind group cannot bind a uniform the device refused", label: state.label)
         return
     }
-    state.uniformEntries.append(StoredUniformBindEntry {
-        uniformSlot: slot,
-        uniformId: uniform.id,
-        storage: nativeUserData(uniform.storage)
-    })
+    state.uniformEntries.append(
+        StoredUniformBindEntry {
+            uniformSlot: slot,
+            uniformId: uniform.id,
+            storage: nativeUserData(uniform.storage)
+        }
+    )
     state.revision = state.revision + 1
-    return
 }
 
-public function dawnBindGroupAddTexture(group: borrow BindGroup, slot: Int, texture: borrow EMGraphicsTexture) {
+public function dawnBindGroupAddTexture(
+    group: borrow BindGroup,
+    slot: UN32,
+    texture: borrow GraphicsTexture
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if texture.viewId == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a texture with no sampled view")
+        log fault("bind group cannot bind a texture with no sampled view", label: state.label)
         return
     }
-    state.textureEntries.append(TextureBindEntry {
-        textureSlot: slot,
-        texture: texture
-    })
+    state.textureEntries.append(TextureBindEntry { textureSlot: slot, texture: texture })
     state.revision = state.revision + 1
-    return
 }
 
-public function dawnBindGroupAddSampler(group: borrow BindGroup, slot: Int, sampler: borrow EMGraphicsSampler) {
+public function dawnBindGroupAddSampler(
+    group: borrow BindGroup,
+    slot: UN32,
+    sampler: borrow GraphicsSampler
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if sampler.id == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a sampler the device refused")
+        log fault("bind group cannot bind a sampler the device refused", label: state.label)
         return
     }
-    state.samplerEntries.append(SamplerBindEntry {
-        samplerSlot: slot,
-        sampler: sampler
-    })
+    state.samplerEntries.append(SamplerBindEntry { samplerSlot: slot, sampler: sampler })
     state.revision = state.revision + 1
-    return
 }
 
-public function dawnBindGroupAddStorageBuffer(group: borrow BindGroup, slot: Int, bufferId: U32, byteSize: Int) {
+public function dawnBindGroupAddStorageBuffer(
+    group: borrow BindGroup,
+    slot: UN32,
+    bufferId: U32,
+    byteSize: Number
+) {
     var state = nativeRecover<BindGroupState>(group.storage)
     if bufferId == 0 {
-        graphicsFail(.Binding, "bind group '" + state.label + "' cannot bind a storage buffer the device refused")
+        log fault("bind group cannot bind a storage buffer the device refused", label: state.label)
         return
     }
-    state.storageEntries.append(StorageBindEntry {
-        storageSlot: slot,
-        viewId: bufferId,
-        byteSize: byteSize
-    })
+    state.storageEntries.append(
+        StorageBindEntry { storageSlot: slot, bufferId: BufferId(bufferId), byteSize: byteSize }
+    )
     state.revision = state.revision + 1
-    return
 }
 
-public function dawnCreateBindGroup(context: RawPtr, descriptor: borrow BindGroupDescriptor) -> BindGroupResult {
+public function dawnCreateBindGroup(
+    context: RawPtr,
+    descriptor: borrow BindGroupDescriptor
+) -> BindGroupResult {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let tracing = state.tracing.bind
     match dawnBeginBindGroup(descriptor.label) {
         Error(reason) -> return .Error(reason)
         Ok(group) -> {
-            var uniformIndex = 0
-            while uniformIndex < descriptor.uniformEntries.count {
-                dawnBindGroupAddUniform(
-                    group,
-                    descriptor.uniformEntries[uniformIndex].uniformSlot,
-                    descriptor.uniformEntries[uniformIndex].uniform
-                )
-                uniformIndex = uniformIndex + 1
+            for entry in descriptor.uniformEntries {
+                dawnBindGroupAddUniform(group, entry.uniformSlot, entry.uniform)
             }
             for entry in descriptor.textureEntries {
                 dawnBindGroupAddTexture(group, entry.textureSlot, entry.texture)
@@ -177,12 +200,28 @@ public function dawnCreateBindGroup(context: RawPtr, descriptor: borrow BindGrou
             for entry in descriptor.samplerEntries {
                 dawnBindGroupAddSampler(group, entry.samplerSlot, entry.sampler)
             }
+            if tracing {
+                log debug(
+                    "Ember created a bind group",
+                    area: "bind",
+                    label: descriptor.label,
+                    group: group.id,
+                    uniforms: descriptor.uniformEntries.count,
+                    textures: descriptor.textureEntries.count,
+                    samplers: descriptor.samplerEntries.count
+                )
+            }
             return .Ok(group)
         }
     }
 }
 
-public function dawnCreateUniformBindGroup(context: RawPtr, label: borrow String, uniformSlot: Int, uniform: borrow EMUniform) -> BindGroupResult {
+public function dawnCreateUniformBindGroup(
+    context: RawPtr,
+    label: borrow String,
+    uniformSlot: UN32,
+    uniform: borrow GraphicsUniform
+) -> BindGroupResult {
     match dawnBeginBindGroup(label) {
         Error(reason) -> return .Error(reason)
         Ok(group) -> {
@@ -192,24 +231,31 @@ public function dawnCreateUniformBindGroup(context: RawPtr, label: borrow String
     }
 }
 
-public function dawnCreateTextureSamplerBindGroup(context: RawPtr, label: borrow String, textureSlot: Int, texture: borrow EMGraphicsTexture, samplerSlot: Int, sampler: borrow EMGraphicsSampler) -> BindGroupResult {
-    match dawnBeginBindGroup(label) {
+public function dawnCreateTextureSamplerBindGroup(
+    binding: borrow TextureSamplerBinding
+) -> BindGroupResult {
+    match dawnBeginBindGroup(binding.label) {
         Error(reason) -> return .Error(reason)
         Ok(group) -> {
-            dawnBindGroupAddTexture(group, textureSlot, texture)
-            dawnBindGroupAddSampler(group, samplerSlot, sampler)
+            dawnBindGroupAddTexture(group, binding.textureSlot, binding.texture)
+            dawnBindGroupAddSampler(group, binding.samplerSlot, binding.sampler)
             return .Ok(group)
         }
     }
 }
 
-public function dawnCreateStorageBufferBindGroup(context: RawPtr, label: borrow String, slot: Int, bufferId: U32) -> BindGroupResult {
+public function dawnCreateStorageBufferBindGroup(
+    context: RawPtr,
+    label: borrow String,
+    slot: UN32,
+    bufferId: U32
+) -> BindGroupResult {
     if !dawnHasDevice(context) {
         return .Error(.DeviceRefused)
     }
-    let state = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    let state = nativeRecover<GraphicsRuntimeState>(context)
     let buffer = dawnObject(state, bufferId)
-    if pointerIsNull(buffer) {
+    if isNull(buffer) {
         return .Error(.DeviceRefused)
     }
     match dawnBeginBindGroup(label) {
@@ -221,29 +267,113 @@ public function dawnCreateStorageBufferBindGroup(context: RawPtr, label: borrow 
     }
 }
 
+// A storage buffer added to a begun group, sized from the device's own record
+// of it.
+public function dawnBindGroupAddStorageBufferOf(
+    context: RawPtr,
+    group: borrow BindGroup,
+    slot: UN32,
+    bufferId: U32
+) {
+    if !dawnHasDevice(context) {
+        return
+    }
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    let buffer = dawnObject(state, bufferId)
+    if isNull(buffer) {
+        return
+    }
+    dawnBindGroupAddStorageBuffer(group, slot, bufferId, Int(wgpuBufferGetSize(buffer)))
+}
+
 // Releases the device object a group cached, without disturbing its entries.
 public function dawnDestroyBindGroup(context: RawPtr, group: borrow BindGroup) {
     if !dawnHasDevice(context) {
         return
     }
-    var runtime = nativeRecover<EMGraphicsAppRuntimeState>(context)
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
     dawnReleaseCachedGroup(runtime, group.storage)
-    return
 }
 
-public function dawnReleaseCachedGroup(runtime: borrow mut EMGraphicsAppRuntimeState, stateToken: borrow NativeState<BindGroupState>) {
+public function dawnReleaseCachedGroup(
+    runtime: borrow mut GraphicsRuntimeState,
+    stateToken: borrow NativeState<BindGroupState>
+) {
     var state = nativeRecover<BindGroupState>(stateToken)
-    if state.deviceGroupId == 0 {
-        return
+    let groupId = match state.deviceGroupId {
+        Some(id) -> id
+        None -> return
     }
-    let handle = dawnObject(runtime, state.deviceGroupId)
-    if !pointerIsNull(handle) {
+    let handle = dawnObject(runtime, groupId)
+    if !isNull(handle) {
         wgpuBindGroupRelease(handle)
-        dawnForgetObject(runtime, state.deviceGroupId)
+        dawnForgetObject(runtime, groupId)
     }
-    state.deviceGroupId = 0
-    state.deviceRevision = 0 - 1
-    return
+    state.deviceGroupId = .None
+    // The cache is gone with it, and what it was built for goes with that.
+    state.deviceSlot = .None
+    state.deviceRevision = .None
+}
+
+// The group's uniform and storage buffers that are still live.
+function dawnBufferEntries(
+    runtime: borrow GraphicsRuntimeState,
+    state: borrow BindGroupState,
+    entries: borrow mut [WGPUBindGroupEntry]
+) {
+    for uniform in state.uniformEntries {
+        let buffer = dawnObject(runtime, uniform.uniformId.raw)
+        if !isNull(buffer) {
+            entries.append(
+                WGPUBindGroupEntry {
+                    binding: U32(uniform.uniformSlot),
+                    buffer: buffer,
+                    offset: U64(0),
+                    size: U64(
+                        dawnUniformByteSize(
+                            nativeRecover<UniformState>(uniform.storage).expectedFloatCount
+                        )
+                    )
+                }
+            )
+        }
+    }
+    for entry in state.storageEntries {
+        let buffer = dawnObject(runtime, entry.bufferId.raw)
+        if isNull(buffer) {
+            continue
+        }
+        entries.append(
+            WGPUBindGroupEntry {
+                binding: U32(entry.storageSlot),
+                buffer: buffer,
+                offset: U64(0),
+                size: U64(entry.byteSize > 0 ? entry.byteSize : Int(wgpuBufferGetSize(buffer)))
+            }
+        )
+    }
+}
+
+// The group's texture views and samplers that are still live.
+function dawnImageEntries(
+    runtime: borrow GraphicsRuntimeState,
+    state: borrow BindGroupState,
+    entries: borrow mut [WGPUBindGroupEntry]
+) {
+    for entry in state.textureEntries {
+        let view = dawnObject(runtime, entry.texture.viewId.raw)
+        if isNull(view) {
+            continue
+        }
+        entries.append(WGPUBindGroupEntry { binding: U32(entry.textureSlot), textureView: view })
+    }
+    for entry in state.samplerEntries {
+        let sampler = dawnObject(runtime, entry.sampler.id.raw)
+        if isNull(sampler) {
+            continue
+        }
+        entries.append(WGPUBindGroupEntry { binding: U32(entry.samplerSlot), sampler: sampler })
+    }
 }
 
 // Every resource a group holds, as the `WGPUBindGroupEntry` list WebGPU takes.
@@ -252,87 +382,105 @@ public function dawnReleaseCachedGroup(runtime: borrow mut EMGraphicsAppRuntimeS
 // global `@binding(n)` of the resource — not a position within this group. That
 // is what lets the four slots an encoder carries be merged into the one group a
 // WGSL `@group(0)` actually is (see `DawnBindLayout.kira`).
-public function dawnBindGroupEntries(runtime: borrow EMGraphicsAppRuntimeState, stateToken: borrow NativeState<BindGroupState>) -> [WGPUBindGroupEntry] {
+public function dawnBindGroupEntries(
+    runtime: borrow GraphicsRuntimeState,
+    stateToken: borrow NativeState<BindGroupState>
+) -> [WGPUBindGroupEntry] {
     let state = nativeRecover<BindGroupState>(stateToken)
     var entries: [WGPUBindGroupEntry] = []
-    var uniformIndex = 0
-    while uniformIndex < state.uniformEntries.count {
-        let buffer = dawnObject(runtime, state.uniformEntries[uniformIndex].uniformId)
-        if !pointerIsNull(buffer) {
-            entries.append(WGPUBindGroupEntry {
-                binding: U32(state.uniformEntries[uniformIndex].uniformSlot),
-                buffer: buffer,
-                offset: U64(0),
-                size: U64(dawnUniformByteSize(
-                    nativeRecover<UniformState>(state.uniformEntries[uniformIndex].storage).expectedFloatCount
-                ))
-            })
-        }
-        uniformIndex = uniformIndex + 1
-    }
-    for entry in state.storageEntries {
-        let buffer = dawnObject(runtime, entry.viewId)
-        if pointerIsNull(buffer) {
-            continue
-        }
-        entries.append(WGPUBindGroupEntry {
-            binding: U32(entry.storageSlot),
-            buffer: buffer,
-            offset: U64(0),
-            size: U64(entry.byteSize > 0 ? entry.byteSize : Int(wgpuBufferGetSize(buffer)))
-        })
-    }
-    for entry in state.textureEntries {
-        let view = dawnObject(runtime, entry.texture.viewId)
-        if pointerIsNull(view) {
-            continue
-        }
-        entries.append(WGPUBindGroupEntry {
-            binding: U32(entry.textureSlot),
-            textureView: view
-        })
-    }
-    for entry in state.samplerEntries {
-        let sampler = dawnObject(runtime, entry.sampler.id)
-        if pointerIsNull(sampler) {
-            continue
-        }
-        entries.append(WGPUBindGroupEntry {
-            binding: U32(entry.samplerSlot),
-            sampler: sampler
-        })
-    }
+    dawnBufferEntries(runtime, state, entries)
+    dawnImageEntries(runtime, state, entries)
     return entries
 }
 
-// The `WGPUBindGroup` for this group against `pipelineId` at `slot`, built on
-// first use and kept until one of the three changes.
-public function dawnDeviceBindGroup(runtime: borrow mut EMGraphicsAppRuntimeState, group: borrow BindGroup, pipelineId: U32, slot: Int, layout: RawPtr) -> RawPtr {
+// Where a group is bound: the pipeline, the group index, and that index's
+// layout.
+public struct DawnGroupTarget {
+    let pipelineId: U32
+    let slot: UN32
+    let layout: RawPtr
+}
+
+// The device object cached on `state`, where it was built for `target` and the
+// entries have not changed since.
+function dawnCachedDeviceGroup(
+    runtime: borrow GraphicsRuntimeState,
+    state: borrow BindGroupState,
+    target: borrow DawnGroupTarget
+) -> RawPtr? {
+    let groupId = match state.deviceGroupId {
+        Some(groupId) -> groupId
+        None -> return .None
+    }
+    if state.devicePipeline == target.pipelineId
+        && state.deviceSlot == .Some(target.slot)
+        && state.deviceRevision == .Some(state.revision) {
+        return .Some(dawnObject(runtime, groupId))
+    }
+    return .None
+}
+
+// The group's live entries, where WebGPU can bind them as one group. Logs why
+// not.
+function dawnBindableEntries(
+    runtime: borrow GraphicsRuntimeState,
+    group: borrow BindGroup,
+    label: borrow String
+) -> [WGPUBindGroupEntry]? {
+    let entries = dawnBindGroupEntries(runtime, group.storage)
+    if entries.count == 0 {
+        log fault("a bind group holds no live resource", label: label)
+        return .None
+    }
+    if entries.count > DawnBindGroup.maxBindGroupEntries {
+        log fault(
+            "a bind group holds more resources than WebGPU binds as one group",
+            label: label,
+            count: entries.count
+        )
+        return .None
+    }
+    return .Some(entries)
+}
+
+// The `WGPUBindGroup` for this group at `target`, built on first use and kept
+// until the pipeline, the slot or the entries change.
+public function dawnDeviceBindGroup(
+    runtime: borrow mut GraphicsRuntimeState,
+    group: borrow BindGroup,
+    target: borrow DawnGroupTarget
+) -> RawPtr? {
     var state = nativeRecover<BindGroupState>(group.storage)
-    if state.deviceGroupId != 0
-        && state.devicePipeline == pipelineId
-        && state.deviceSlot == slot
-        && state.deviceRevision == state.revision {
-        return dawnObject(runtime, state.deviceGroupId)
+    match dawnCachedDeviceGroup(runtime, state, target) {
+        Some(handle) -> return .Some(handle)
+        // Never minted, or minted for something else: build it below.
+        None -> {}
     }
     dawnReleaseCachedGroup(runtime, group.storage)
-    let entries = dawnBindGroupEntries(runtime, group.storage)
-    if entries.count == 0 || entries.count > dawnMaxBindGroupEntries() {
-        graphicsFail(.Binding, "bind group '" + state.label + "' holds " + String(entries.count) + " resources, which WebGPU will not bind as one group")
-        return nullPointer()
+    let entries = match dawnBindableEntries(runtime, group, state.label) {
+        Some(entries) -> entries
+        None -> return .None
     }
-    let handle = wgpuDeviceCreateBindGroup(runtime.dawn.device, WGPUBindGroupDescriptor {
-        label: dawnText(state.label),
-        layout: layout,
-        entryCount: U64(entries.count),
-        entries: WGPUBindGroupEntryArray16 { elements: entries }
-    })
-    if pointerIsNull(handle) {
-        return nullPointer()
+    let handle = wgpuDeviceCreateBindGroup(
+        runtime.dawn.device,
+        WGPUBindGroupDescriptor {
+            label: dawnText(state.label),
+            layout: target.layout,
+            entryCount: U64(entries.count),
+            entries: WGPUBindGroupEntryArray16 { elements: entries }
+        }
+    )
+    if isNull(handle) {
+        log fault("the device refused a bind group", label: state.label)
+        return .None
     }
-    state.deviceGroupId = dawnRegisterObject(runtime, handle, dawnFormatUndefined())
-    state.devicePipeline = pipelineId
-    state.deviceSlot = slot
-    state.deviceRevision = state.revision
-    return handle
+    state.deviceGroupId = .Some(dawnRegisterObject(runtime, handle, DawnVocabulary.formatUndefined))
+    state.devicePipeline = target.pipelineId
+    state.deviceSlot = .Some(target.slot)
+    state.deviceRevision = .Some(state.revision)
+    return .Some(handle)
+}
+
+public namespace DawnBindGroup {
+    let maxBindGroupEntries: UNumber = 16
 }

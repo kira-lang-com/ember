@@ -1,10 +1,12 @@
-public struct EMGraphicsBuffer {
-    var id: U32 = 0
+import Heap
+
+public struct GraphicsBuffer {
+    var id: BufferId = NoBufferId
     // The GPU storage this buffer occupies. Carried because releasing it has to
     // subtract the same number creating it added, and a destroy is handed the
     // buffer rather than the descriptor it was made from. Zero on a backend
     // that reads its allocated bytes off the device instead (Metal does).
-    var byteSize: Int = 0
+    var byteSize: UNumber = 0
 }
 
 // A buffer the CPU rewrites every frame, and the memory it writes into.
@@ -18,22 +20,17 @@ public struct EMGraphicsBuffer {
 // buffer id — exactly the kind of side table this backend spent its migration
 // deleting.
 public struct DynamicBuffer {
-    var buffer: EMGraphicsBuffer
+    var buffer: GraphicsBuffer
     var contents: RawPtr
 }
 
-public function emptyGraphicsBuffer() -> EMGraphicsBuffer {
-    return EMGraphicsBuffer {
-        id: 0
-    }
+public function emptyGraphicsBuffer() -> GraphicsBuffer {
+    return GraphicsBuffer { id: NoBufferId }
 }
 
 // The placeholder a host's state struct holds before its first frame creates
 // the real one — id 0 and a null pointer, so a write that reaches it before
 // creation is refused rather than landing somewhere.
 public function emptyDynamicBuffer() -> DynamicBuffer {
-    return DynamicBuffer {
-        buffer: emptyGraphicsBuffer(),
-        contents: nullPointer()
-    }
+    return DynamicBuffer { buffer: emptyGraphicsBuffer(), contents: nullPointer() }
 }

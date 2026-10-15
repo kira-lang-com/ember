@@ -1,10 +1,6 @@
-Package triangle {
-    let version = "0.1.0"
-    let kira = "0.1.0"
-    let kind = PackageKind.App
-    let defaults = Defaults { executionMode: Backend.Hybrid, buildTarget: BuildTarget.Host }
-    let assets = ["generated/Shaders"]
-    let dependencies = [
-        Dependency { name: "Ember", path: "../.." }
-    ]
+construct triangle extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .App
+    let assets: [String] = ["generated/Shaders"]
+    let dependencies: [Dependency] = [Dependency { name: "Ember", path: "../.." }]
 }

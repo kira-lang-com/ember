@@ -3,6 +3,4 @@ import Ember
 
 @Main
 @Runtime
-function main() {
-    return
-}
+function main() {}

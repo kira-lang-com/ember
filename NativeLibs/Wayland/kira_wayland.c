@@ -143,6 +143,8 @@ static struct {
     void *surface;
     int32_t width;
     int32_t height;
+    // Buffer pixels per surface point; zero until a scale is set, which is 1.
+    int32_t scale;
 } kira_wayland_surface_sizes[KIRA_WAYLAND_MAX_SURFACES];
 
 void kira_wayland_surface_note_size(void *surface, int32_t width, int32_t height) {
@@ -157,6 +159,32 @@ void kira_wayland_surface_note_size(void *surface, int32_t width, int32_t height
             return;
         }
     }
+}
+
+// Has `surface` draw `scale` buffer pixels for each of its points: the
+// compositor shows a buffer `scale` times the surface's size at that size.
+void kira_wayland_surface_set_scale(void *surface, int32_t scale) {
+    if (surface == NULL || scale < 1) {
+        return;
+    }
+    for (int i = 0; i < KIRA_WAYLAND_MAX_SURFACES; i++) {
+        if (kira_wayland_surface_sizes[i].surface == surface || kira_wayland_surface_sizes[i].surface == NULL) {
+            kira_wayland_surface_sizes[i].surface = surface;
+            kira_wayland_surface_sizes[i].scale = scale;
+            wl_surface_set_buffer_scale(surface, scale);
+            return;
+        }
+    }
+}
+
+// 1 for a surface no scale was set on.
+int32_t kira_wayland_surface_scale(void *surface) {
+    for (int i = 0; i < KIRA_WAYLAND_MAX_SURFACES; i++) {
+        if (kira_wayland_surface_sizes[i].surface == surface && kira_wayland_surface_sizes[i].scale > 0) {
+            return kira_wayland_surface_sizes[i].scale;
+        }
+    }
+    return 1;
 }
 
 // Zero for a surface nothing noted, which is what a caller that cannot answer

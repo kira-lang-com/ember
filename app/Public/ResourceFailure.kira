@@ -26,8 +26,9 @@
 // one is `KSEM234` at build time rather than a `Result` a caller branches on at
 // run time. A reason here is something the *device* or the *asset* did.
 import Foundation
+import Heap
 
-public enum EMResourceFailure {
+public enum ResourceFailure {
     // The backend was asked correctly and said no: an allocation it would not
     // make, a view it would not mint. Out of memory, past a device limit, or a
     // descriptor the driver rejected.
@@ -40,11 +41,22 @@ public enum EMResourceFailure {
     ShaderRejected
 }
 
+// Why a word could not be read back out of a buffer.
+public enum BufferReadFailure {
+    // The buffer is not live, or the index is outside it.
+    NoSuchWord
+    // A render pass is still open, and the word cannot be read until it ends.
+    PassOpen
+    // The device would not finish the work before the read, or would not map
+    // the bytes for the CPU.
+    DeviceRefused
+}
+
 // What a caller reads when it wants the reason in a message rather than a
 // branch. The ONE place a reason is turned into words: every `*OrReport` below
 // routes its failure through here rather than naming the reasons itself, so a
 // fourth reason is one arm added in one function.
-public function resourceFailureReason(failure: EMResourceFailure) -> String {
+public function resourceFailureReason(failure: ResourceFailure) -> String {
     match failure {
         DeviceRefused -> return "the device refused it"
         AssetUnreadable -> return "the bytes could not be read"
@@ -55,61 +67,15 @@ public function resourceFailureReason(failure: EMResourceFailure) -> String {
 // The outcomes the surface answers with. Named rather than written out at every
 // signature, so a reader sees one vocabulary instead of a generic instantiation
 // spelled six ways.
-public type TextureResult = Result<EMGraphicsTexture, EMResourceFailure>
-public type BufferResult = Result<EMGraphicsBuffer, EMResourceFailure>
-public type DynamicBufferResult = Result<DynamicBuffer, EMResourceFailure>
-public type ShaderResult = Result<EMGraphicsShader, EMResourceFailure>
-public type PipelineResult = Result<RenderPipeline, EMResourceFailure>
-public type SamplerResult = Result<EMGraphicsSampler, EMResourceFailure>
-public type BindGroupResult = Result<BindGroup, EMResourceFailure>
-public type UniformResult = Result<EMUniform, EMResourceFailure>
-
-// Lifting a backend's id into an outcome.
-//
-// The backends answer with a resource whose id is 0 when the device declined —
-// that is the protocol they already speak, and it stays theirs. These are the
-// one place it becomes a reason.
-public function shaderResult(shader: EMGraphicsShader) -> ShaderResult {
-    if shader.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(shader)
-}
-
-public function pipelineResult(pipeline: RenderPipeline) -> PipelineResult {
-    if pipeline.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(pipeline)
-}
-
-public function bufferResult(buffer: EMGraphicsBuffer) -> BufferResult {
-    if buffer.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(buffer)
-}
-
-public function uniformResult(uniform: EMUniform) -> UniformResult {
-    if uniform.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(uniform)
-}
-
-public function bindGroupResult(group: BindGroup) -> BindGroupResult {
-    if group.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(group)
-}
-
-public function samplerResult(sampler: EMGraphicsSampler) -> SamplerResult {
-    if sampler.id == 0 {
-        return .Error(.DeviceRefused)
-    }
-    return .Ok(sampler)
-}
+public type TextureResult = Result<GraphicsTexture, ResourceFailure>
+public type BufferResult = Result<GraphicsBuffer, ResourceFailure>
+public type DynamicBufferResult = Result<DynamicBuffer, ResourceFailure>
+public type ShaderResult = Result<GraphicsShader, ResourceFailure>
+public type PipelineResult = Result<RenderPipeline, ResourceFailure>
+public type SamplerResult = Result<GraphicsSampler, ResourceFailure>
+public type BindGroupResult = Result<BindGroup, ResourceFailure>
+public type UniformResult = Result<GraphicsUniform, ResourceFailure>
+public type BufferReadResult = Result<UN32, BufferReadFailure>
 
 // The resource, or an empty one and a line saying why there is none.
 //
@@ -126,7 +92,7 @@ public function samplerResult(sampler: EMGraphicsSampler) -> SamplerResult {
 // eight of these sites and did the same thing in every arm — 24 arms whose only
 // content was which reason to hand to `resourceFailureReason`. `Error(failure)`
 // binds the reason instead, so the eight sites carry none of them.
-public function textureOrReport(outcome: TextureResult, what: borrow String) -> EMGraphicsTexture {
+public function textureOrReport(outcome: TextureResult, what: borrow String) -> GraphicsTexture {
     match outcome {
         Ok(texture) -> return texture
         Error(failure) -> {
@@ -136,7 +102,7 @@ public function textureOrReport(outcome: TextureResult, what: borrow String) -> 
     }
 }
 
-public function shaderOrReport(outcome: ShaderResult, what: borrow String) -> EMGraphicsShader {
+public function shaderOrReport(outcome: ShaderResult, what: borrow String) -> GraphicsShader {
     match outcome {
         Ok(shader) -> return shader
         Error(failure) -> {
@@ -156,7 +122,7 @@ public function pipelineOrReport(outcome: PipelineResult, what: borrow String) -
     }
 }
 
-public function bufferOrReport(outcome: BufferResult, what: borrow String) -> EMGraphicsBuffer {
+public function bufferOrReport(outcome: BufferResult, what: borrow String) -> GraphicsBuffer {
     match outcome {
         Ok(buffer) -> return buffer
         Error(failure) -> {
@@ -166,20 +132,20 @@ public function bufferOrReport(outcome: BufferResult, what: borrow String) -> EM
     }
 }
 
-public function dynamicBufferOrReport(outcome: DynamicBufferResult, what: borrow String) -> DynamicBuffer {
+public function dynamicBufferOrReport(
+    outcome: DynamicBufferResult,
+    what: borrow String
+) -> DynamicBuffer {
     match outcome {
         Ok(buffer) -> return buffer
         Error(failure) -> {
             reportMissingResource(what, move failure)
-            return DynamicBuffer {
-                buffer: emptyGraphicsBuffer(),
-                contents: nullPointer()
-            }
+            return DynamicBuffer { buffer: emptyGraphicsBuffer(), contents: nullPointer() }
         }
     }
 }
 
-public function uniformOrReport(outcome: UniformResult, what: borrow String) -> EMUniform {
+public function uniformOrReport(outcome: UniformResult, what: borrow String) -> GraphicsUniform {
     match outcome {
         Ok(uniform) -> return uniform
         Error(failure) -> {
@@ -199,7 +165,7 @@ public function bindGroupOrReport(outcome: BindGroupResult, what: borrow String)
     }
 }
 
-public function samplerOrReport(outcome: SamplerResult, what: borrow String) -> EMGraphicsSampler {
+public function samplerOrReport(outcome: SamplerResult, what: borrow String) -> GraphicsSampler {
     match outcome {
         Ok(sampler) -> return sampler
         Error(failure) -> {
@@ -209,7 +175,6 @@ public function samplerOrReport(outcome: SamplerResult, what: borrow String) -> 
     }
 }
 
-public function reportMissingResource(what: borrow String, failure: EMResourceFailure) {
-    graphicsFail(.Resource, "no " + what + " — " + resourceFailureReason(move failure))
-    return
+public function reportMissingResource(what: borrow String, failure: ResourceFailure) {
+    log fault("no", what: what, resourceFailureReason: resourceFailureReason(move failure))
 }

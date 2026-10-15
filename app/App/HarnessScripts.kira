@@ -1,0 +1,299 @@
+import Foundation
+
+// Scripted input a harness replays through the ordinary event handler, so a
+// driven run stays honest: Foundation still updates hover and press state, finds
+// the hit region, invokes the callback and rebuilds before anything renders.
+//
+// Each script arrives as a flat list of integers — an environment variable can
+// carry nothing richer — and is read into its records once, here, so no backend
+// indexes into the list.
+
+// A press and release of the primary button at a point.
+public struct ScriptedClick {
+    var frame: Number = 0
+    var x: Number = 0
+    var y: Number = 0
+}
+
+// A wheel turn at a point. The pointer is moved onto the point first, because a
+// wheel goes to whatever is under the pointer.
+public struct ScriptedScroll {
+    var frame: Number = 0
+    var x: Number = 0
+    var y: Number = 0
+    var notches: Number = 0
+}
+
+// A press at a point, the move along `deltaX`, `deltaY` spread one step per
+// frame over `steps` frames, and the release on the frame after the last step.
+// Spreading the moves over frames is what a hand does, and what the drag
+// threshold measures.
+public struct ScriptedDrag {
+    var frame: Number = 0
+    var x: Number = 0
+    var y: Number = 0
+    var deltaX: Number = 0
+    var deltaY: Number = 0
+    var button: PointerButton = .Left
+    var steps: Number = 0
+}
+
+// A key going down or up. A field is driven with keys and text both: the
+// characters are what lands in it, and the keys are what a caret and a commit
+// are made of — Enter is a key, not a character.
+public struct ScriptedKey {
+    var frame: Number = 0
+    var key: Key = .None
+    var kind: AppEventKind = .KeyDown
+}
+
+public struct ScriptedText {
+    var frame: Number = 0
+    var codepoint: Number = 0
+}
+
+public struct InputScript {
+    var clicks: [ScriptedClick] = []
+    var scrolls: [ScriptedScroll] = []
+    var drags: [ScriptedDrag] = []
+    var keys: [ScriptedKey] = []
+    var texts: [ScriptedText] = []
+}
+
+// How many integers each script's records take, in the order the environment
+// writes them.
+namespace ScriptRecord {
+    // (frame, x, y)
+    let click: UNumber = 3
+    // (frame, x, y, deltaYTenths)
+    let scroll: UNumber = 4
+    // (startFrame, x, y, dx, dy, button, steps)
+    let drag: UNumber = 7
+    // (frame, key, down), the key as its `Key` code
+    let key: UNumber = 3
+    // (frame, codepoint)
+    let text: UNumber = 2
+    // A wheel delta is written in tenths because a script carries integers and
+    // a notch is not one.
+    let scrollUnitsPerNotch: Number = 10
+}
+
+// `values` read as records of `width` each. A trailing partial record is
+// dropped, which is what a script cut short means.
+public function scriptRecords(values: borrow [Number], width: UNumber) -> [[Number]] {
+    var records: [[Number]] = []
+    var record: [Number] = []
+    for value in values {
+        record.append(value)
+        if record.count == width {
+            records.append(move record)
+            record = []
+        }
+    }
+    return records
+}
+
+// The button a script names: 1 is the secondary button, 2 the middle one, and
+// anything else the primary one.
+function scriptedButton(code: Number) -> PointerButton {
+    return match code {
+        1 -> .Right
+        2 -> .Middle
+        else -> .Left
+    }
+}
+
+public function scriptedClicks(values: borrow [Number]) -> [ScriptedClick] {
+    var clicks: [ScriptedClick] = []
+    for record in scriptRecords(values, ScriptRecord.click) {
+        clicks.append(ScriptedClick { frame: record[0], x: record[1], y: record[2] })
+    }
+    return clicks
+}
+
+public function scriptedScrolls(values: borrow [Number]) -> [ScriptedScroll] {
+    var scrolls: [ScriptedScroll] = []
+    for record in scriptRecords(values, ScriptRecord.scroll) {
+        scrolls.append(
+            ScriptedScroll {
+                frame: record[0],
+                x: record[1],
+                y: record[2],
+                notches: record[3] / ScriptRecord.scrollUnitsPerNotch
+            }
+        )
+    }
+    return scrolls
+}
+
+public function scriptedDrags(values: borrow [Number]) -> [ScriptedDrag] {
+    var drags: [ScriptedDrag] = []
+    for record in scriptRecords(values, ScriptRecord.drag) {
+        drags.append(
+            ScriptedDrag {
+                frame: record[0],
+                x: record[1],
+                y: record[2],
+                deltaX: record[3],
+                deltaY: record[4],
+                button: scriptedButton(record[5]),
+                steps: record[6]
+            }
+        )
+    }
+    return drags
+}
+
+public function scriptedKeys(values: borrow [Number]) -> [ScriptedKey] {
+    var keys: [ScriptedKey] = []
+    for record in scriptRecords(values, ScriptRecord.key) {
+        let kind: AppEventKind = match record[2] {
+            1 -> .KeyDown
+            else -> .KeyUp
+        }
+        keys.append(
+            ScriptedKey { frame: record[0], key: fromCode<Key>(U32(record[1])), kind: kind }
+        )
+    }
+    return keys
+}
+
+public function scriptedTexts(values: borrow [Number]) -> [ScriptedText] {
+    var texts: [ScriptedText] = []
+    for record in scriptRecords(values, ScriptRecord.text) {
+        texts.append(ScriptedText { frame: record[0], codepoint: record[1] })
+    }
+    return texts
+}
+
+// The scripts the `KIRA_UI_*_SCRIPT` variables carry.
+public function inputScriptFromEnvironment() -> InputScript {
+    return InputScript {
+        clicks: scriptedClicks(harnessEnvInts(environmentValue("KIRA_UI_CLICK_SCRIPT"))),
+        scrolls: scriptedScrolls(harnessEnvInts(environmentValue("KIRA_UI_SCROLL_SCRIPT"))),
+        drags: scriptedDrags(harnessEnvInts(environmentValue("KIRA_UI_DRAG_SCRIPT"))),
+        keys: scriptedKeys(harnessEnvInts(environmentValue("KIRA_UI_KEY_SCRIPT"))),
+        texts: scriptedTexts(harnessEnvInts(environmentValue("KIRA_UI_TEXT_SCRIPT")))
+    }
+}
+
+function driveClicks(
+    clicks: borrow [ScriptedClick],
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    for click in clicks {
+        if click.frame == frame {
+            onEvent(
+                AppEvent {
+                    kind: .PointerDown,
+                    pointerButton: .Left,
+                    pointerX: click.x,
+                    pointerY: click.y
+                }
+            )
+            onEvent(
+                AppEvent {
+                    kind: .PointerUp,
+                    pointerButton: .Left,
+                    pointerX: click.x,
+                    pointerY: click.y
+                }
+            )
+        }
+    }
+}
+
+function driveScrolls(
+    scrolls: borrow [ScriptedScroll],
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    for scroll in scrolls {
+        if scroll.frame == frame {
+            onEvent(AppEvent { kind: .PointerMoved, pointerX: scroll.x, pointerY: scroll.y })
+            onEvent(
+                AppEvent {
+                    kind: .Scroll,
+                    pointerX: scroll.x,
+                    pointerY: scroll.y,
+                    scrollY: scroll.notches
+                }
+            )
+        }
+    }
+}
+
+// What one drag does on `frame`: the press on its first frame, a step of the
+// move on each of the next `steps`, and the release on the one after.
+function driveDrag(
+    drag: borrow ScriptedDrag,
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    let step = frame - drag.frame
+    if step == 0 {
+        onEvent(AppEvent { kind: .PointerMoved, pointerX: drag.x, pointerY: drag.y })
+        onEvent(
+            AppEvent {
+                kind: .PointerDown,
+                pointerButton: drag.button,
+                pointerX: drag.x,
+                pointerY: drag.y
+            }
+        )
+        return
+    }
+    if step >= 1 && step <= drag.steps {
+        let progress = step / drag.steps
+        onEvent(
+            AppEvent {
+                kind: .PointerMoved,
+                pointerX: drag.x + drag.deltaX * progress,
+                pointerY: drag.y + drag.deltaY * progress
+            }
+        )
+        return
+    }
+    if step == drag.steps + 1 {
+        onEvent(
+            AppEvent {
+                kind: .PointerUp,
+                pointerButton: drag.button,
+                pointerX: drag.x + drag.deltaX,
+                pointerY: drag.y + drag.deltaY
+            }
+        )
+    }
+}
+
+function driveTyping(
+    script: borrow InputScript,
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    for key in script.keys {
+        if key.frame == frame {
+            onEvent(AppEvent { kind: key.kind, key: key.key })
+        }
+    }
+    for text in script.texts {
+        if text.frame == frame {
+            onEvent(AppEvent { kind: .TextInput, textCodepoint: UN32(text.codepoint) })
+        }
+    }
+}
+
+// Every scripted event that lands on `frame`, delivered through `onEvent`.
+public function driveInputScript(
+    script: borrow InputScript,
+    frame: Number,
+    onEvent: borrow (borrow AppEvent) -> Void
+) {
+    driveClicks(script.clicks, frame, onEvent)
+    driveScrolls(script.scrolls, frame, onEvent)
+    for drag in script.drags {
+        driveDrag(drag, frame, onEvent)
+    }
+    driveTyping(script, frame, onEvent)
+}

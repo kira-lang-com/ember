@@ -1,0 +1,576 @@
+import Foundation
+import Heap
+
+// Device images, and the uploads and layout transitions they need.
+//
+// The opposite of the buffers in `VulkanResources.kira`: an optimal-tiled image
+// is the portable Vulkan path for a sampled texture, and the hardware cannot be
+// written to directly. Every upload here is therefore a short transfer
+// submission into a host-visible staging buffer followed by a copy, and every
+// read and write of the image itself is bracketed by an explicit layout
+// transition — which is the Vulkan rule that makes pass ordering visible to the
+// driver rather than something the API infers.
+
+namespace VulkanImage {
+    // `VK_IMAGE_TILING_OPTIMAL`: the driver's own layout, which only a transfer
+    // writes.
+    let tilingOptimal: I32 = I32(0)
+    // Four channels of 16-bit floats, and of 8-bit integers.
+    let halfFloatPixelBytes: UNumber = 8
+    let eightBitPixelBytes: UNumber = 4
+}
+
+// The format a texture's image is made in. Never `VK_FORMAT_UNDEFINED` for a
+// swapchain-format texture on a headless device: that image is invalid, and ANV
+// divides by its zero block size the first time it is copied.
+function vulkanImageFormat(state: borrow VulkanState, format: borrow TextureFormat) -> I32 {
+    return match format {
+        Swapchain -> vulkanSwapchainFormatOrDefault(state)
+        Rgba8Unorm -> vulkanTextureFormat(format)
+        Rgba16Float -> vulkanTextureFormat(format)
+        Depth24Stencil8 -> vulkanTextureFormat(format)
+        R32Uint -> vulkanTextureFormat(format)
+        None -> vulkanTextureFormat(format)
+    }
+}
+
+function vulkanImageRequirements(state: borrow VulkanState, image: RawPtr) -> VkMemoryRequirements {
+    let requirements = boxed<VkMemoryRequirements>(VkMemoryRequirements())
+    vkGetImageMemoryRequirements(state.device, image, requirements.pointer())
+    return boxedValue<VkMemoryRequirements>(requirements)
+}
+
+function vulkanNewImage(
+    state: borrow VulkanState,
+    descriptor: borrow TextureDescriptor,
+    format: I32,
+    samples: I32
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let info = VkImageCreateInfo {
+        sType: VulkanVocabulary.structureImageCreateInfo,
+        imageType: VulkanVocabulary.imageType2d,
+        format: format,
+        extent: VkExtent3D {
+            width: U32(descriptor.width),
+            height: U32(descriptor.height),
+            depth: U32(1)
+        },
+        mipLevels: U32(1),
+        arrayLayers: U32(1),
+        samples: samples,
+        tiling: VulkanImage.tilingOptimal,
+        usage: vulkanImageUsage(descriptor.usage),
+        sharingMode: VulkanVocabulary.sharingExclusive,
+        initialLayout: VulkanVocabulary.imageLayoutUndefined
+    }
+    let imageSlot = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(imageSlot))
+}
+
+// Allocates and binds device-local memory behind `image`. An image is never
+// mapped: the CPU never writes one directly, and every upload is a transfer
+// from a staging buffer (see `vulkanUploadTexture`). Frees that memory, but not
+// the image, when the bind is refused.
+function vulkanBackImage(
+    state: borrow VulkanState,
+    image: RawPtr
+) -> Result<VulkanAllocation, VulkanResourceFailure> {
+    let requirements = vulkanImageRequirements(state, image)
+    let allocation = match vulkanAllocateMatching(
+        state,
+        requirements,
+        VulkanVocabulary.memoryDeviceLocal
+    ) {
+        Ok(allocation) -> allocation
+        Error(failure) -> return .Error(failure)
+    }
+    let bindResult = vulkanResultOf(
+        vkBindImageMemory(state.device, image, allocation.memory, U64(0))
+    )
+    if bindResult != .Success {
+        vkFreeMemory(state.device, allocation.memory, nullPointer())
+        return .Error(.BindRefused(bindResult))
+    }
+    return .Ok(allocation)
+}
+
+public function vulkanCreateImageHandle(
+    state: borrow mut VulkanState,
+    descriptor: borrow TextureDescriptor
+) -> Result<U32, VulkanResourceFailure> {
+    let samples = match vulkanSampleCount(max(descriptor.sampleCount, 1)) {
+        Some(samples) -> samples
+        None -> return .Error(.UnsupportedSampleCount(descriptor.sampleCount))
+    }
+    let format = vulkanImageFormat(state, descriptor.format)
+    let image = match vulkanNewImage(state, descriptor, format, samples) {
+        Ok(image) -> image
+        Error(failure) -> return .Error(failure)
+    }
+    let allocation = match vulkanBackImage(state, image) {
+        Ok(allocation) -> allocation
+        Error(failure) -> {
+            vkDestroyImage(state.device, image, nullPointer())
+            return .Error(failure)
+        }
+    }
+    return .Ok(
+        vulkanRegisterObject(
+            state,
+            VulkanObject {
+                kind: .Image,
+                handle: image,
+                memory: .Some(allocation.memory),
+                size: allocation.size,
+                allocationSize: allocation.size,
+                format: format
+            }
+        )
+    )
+}
+
+public function vulkanCreateImageView(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    format: I32,
+    aspect: U32
+) -> Result<U32, VulkanResourceFailure> {
+    let image = match vulkanObjectRecord(state, imageId) {
+        Some(object) -> object.handle
+        None -> return .Error(.ImageNotLive)
+    }
+    let info = VkImageViewCreateInfo {
+        sType: VulkanVocabulary.structureImageViewCreateInfo,
+        image: image,
+        viewType: VulkanVocabulary.imageViewType2d,
+        format: format,
+        components: VkComponentMapping {},
+        subresourceRange: VkImageSubresourceRange {
+            aspectMask: aspect,
+            levelCount: U32(1),
+            layerCount: U32(1)
+        }
+    }
+    let view = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateImageView(state.device, info, nullPointer(), view.pointer())
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(
+        vulkanRegisterObject(
+            state,
+            VulkanObject { kind: .ImageView, handle: boxedValue<RawPtr>(view), format: format }
+        )
+    )
+}
+
+// The views a texture's usage needs of its image.
+struct VulkanTextureViews {
+    var sampled: U32? = .None
+    var color: U32? = .None
+    var depth: U32? = .None
+    var storage: U32? = .None
+}
+
+// The aspects each of a usage's views looks through.
+struct VulkanViewAspects {
+    var sampled: U32? = .None
+    var color: U32? = .None
+    var depth: U32? = .None
+    var storage: U32? = .None
+}
+
+function vulkanViewAspects(usage: borrow TextureUsage) -> VulkanViewAspects {
+    let color = VulkanVocabulary.aspectColor
+    return match usage {
+        Sampled -> VulkanViewAspects { sampled: .Some(color) }
+        SampledStreaming -> VulkanViewAspects { sampled: .Some(color) }
+        RenderTarget -> VulkanViewAspects { color: .Some(color) }
+        RenderTargetSampled -> VulkanViewAspects { sampled: .Some(color), color: .Some(color) }
+        DepthStencil -> VulkanViewAspects {
+            sampled: .Some(VulkanVocabulary.aspectDepth),
+            depth: .Some(VulkanVocabulary.aspectDepth | VulkanVocabulary.aspectStencil)
+        }
+        SampledStorage -> VulkanViewAspects { sampled: .Some(color), storage: .Some(color) }
+    }
+}
+
+// A view through `aspect`, where the usage asks for one.
+function vulkanOptionalView(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    aspect: U32?
+) -> Result<U32?, VulkanResourceFailure> {
+    return match aspect {
+        Some(aspect) -> match vulkanCreateImageView(
+            state,
+            imageId,
+            vulkanObjectFormat(state, imageId),
+            aspect
+        ) {
+            Ok(view) -> .Ok(.Some(view))
+            Error(failure) -> .Error(failure)
+        }
+        None -> .Ok(.None)
+    }
+}
+
+function vulkanReleaseViews(state: borrow mut VulkanState, views: borrow VulkanTextureViews) {
+    for view in [views.storage, views.depth, views.color, views.sampled] {
+        match view {
+            Some(id) -> vulkanReleaseObject(state, id)
+            None -> {}
+        }
+    }
+}
+
+// Every view `usage` needs of the image, or none of them.
+function vulkanCreateTextureViews(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    usage: borrow TextureUsage
+) -> Result<VulkanTextureViews, VulkanResourceFailure> {
+    let aspects = vulkanViewAspects(usage)
+    var views = VulkanTextureViews()
+    match vulkanOptionalView(state, imageId, aspects.sampled) {
+        Ok(view) -> views.sampled = view
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanOptionalView(state, imageId, aspects.color) {
+        Ok(view) -> views.color = view
+        Error(failure) -> {
+            vulkanReleaseViews(state, views)
+            return .Error(failure)
+        }
+    }
+    match vulkanOptionalView(state, imageId, aspects.depth) {
+        Ok(view) -> views.depth = view
+        Error(failure) -> {
+            vulkanReleaseViews(state, views)
+            return .Error(failure)
+        }
+    }
+    match vulkanOptionalView(state, imageId, aspects.storage) {
+        Ok(view) -> views.storage = view
+        Error(failure) -> {
+            vulkanReleaseViews(state, views)
+            return .Error(failure)
+        }
+    }
+    return .Ok(views)
+}
+
+public function vulkanCreateTexture(
+    context: RawPtr,
+    descriptor: borrow TextureDescriptor
+) -> TextureResult {
+    if !vulkanRequireDevice(context, "vulkanCreateTexture") {
+        return .Error(.DeviceRefused)
+    }
+    if descriptor.width <= 0 || descriptor.height <= 0 || descriptor.format == .None {
+        log fault(
+            "a texture needs a size and a format",
+            width: descriptor.width,
+            height: descriptor.height,
+            format: descriptor.format
+        )
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let imageId = match vulkanCreateImageHandle(state.vulkan, descriptor) {
+        Ok(imageId) -> imageId
+        Error(failure) -> {
+            log fault("could not create a texture", failure, label: descriptor.label)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let views = match vulkanCreateTextureViews(state.vulkan, imageId, descriptor.usage) {
+        Ok(views) -> views
+        Error(failure) -> {
+            vulkanReleaseObject(state.vulkan, imageId)
+            log fault(
+                "could not create a view the texture's usage needs",
+                failure,
+                label: descriptor.label
+            )
+            return .Error(.DeviceRefused)
+        }
+    }
+    return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
+}
+
+function vulkanGraphicsTexture(
+    descriptor: borrow TextureDescriptor,
+    imageId: U32,
+    views: borrow VulkanTextureViews
+) -> GraphicsTexture {
+    return GraphicsTexture {
+        id: TextureId(imageId),
+        viewId: vulkanViewId(views.sampled),
+        colorViewId: vulkanViewId(views.color),
+        depthViewId: vulkanViewId(views.depth),
+        storageViewId: vulkanViewId(views.storage),
+        width: descriptor.width,
+        height: descriptor.height,
+        sampleCount: UN8(max(descriptor.sampleCount, 1))
+    }
+}
+
+function vulkanViewId(view: U32?) -> ViewId {
+    return match view {
+        Some(id) -> ViewId(id)
+        None -> NoViewId
+    }
+}
+
+public function vulkanCreateTextureFromPixels(
+    context: RawPtr,
+    descriptor: borrow TextureDescriptor,
+    pixels: borrow[U8]
+) -> TextureResult {
+    if pixels.count != descriptor.width * descriptor.height * TexelBytes.rgba8 {
+        log fault(
+            "an RGBA texture was given a different number of bytes than its size holds",
+            label: descriptor.label,
+            width: descriptor.width,
+            height: descriptor.height,
+            expectedBytes: descriptor.width * descriptor.height * TexelBytes.rgba8,
+            givenBytes: pixels.count
+        )
+        return .Error(.DeviceRefused)
+    }
+    match vulkanCreateTexture(context, descriptor) {
+        Error(reason) -> return .Error(reason)
+        Ok(texture) -> {
+            vulkanUploadTexture(context, texture, .Array(pixels))
+            return .Ok(texture)
+        }
+    }
+}
+
+// Replaces every pixel of `texture`, whose size `pixels` has to match.
+public function vulkanUpdateTexture(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    pixels: borrow[U8]
+) {
+    if pixels.count != texture.width * texture.height * VulkanImage.eightBitPixelBytes {
+        log fault("texture update byte count does not match the texture")
+        return
+    }
+    vulkanUploadTexture(context, texture, .Array(pixels))
+}
+
+public function vulkanUpdateTextureBytes(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    bytes: RawPtr,
+    byteCount: Number
+) {
+    vulkanUploadTexture(context, texture, .Memory(memoryView(bytes, byteCount)))
+}
+
+// Where an upload's pixels come from: a Kira array, or memory the caller owns
+// for the length of the call.
+public enum UploadPixels {
+    Array([U8])
+    Memory(MemoryView)
+}
+
+function uploadByteCount(pixels: borrow UploadPixels) -> UNumber {
+    return match pixels {
+        Array(bytes) -> bytes.count
+        Memory(view) -> view.count
+    }
+}
+
+function uploadCopy(pixels: borrow UploadPixels, destination: RawPtr) {
+    match pixels {
+        Array(bytes) -> for index in 0..bytes.count {
+            heapStore<U8>(destination, index, bytes[index])
+        }
+        Memory(view) -> for index in 0..view.count {
+            heapStore<U8>(destination, index, view.readU8(index))
+        }
+    }
+}
+
+// The bytes one pixel of an image in `format` takes, for the formats an upload
+// writes.
+function vulkanUploadPixelSize(format: I32) -> UNumber? {
+    if format == VulkanVocabulary.formatDepth24Stencil8 {
+        return .None
+    }
+    if format == VulkanVocabulary.formatRgba16Float {
+        return .Some(VulkanImage.halfFloatPixelBytes)
+    }
+    return .Some(VulkanImage.eightBitPixelBytes)
+}
+
+// Whether `byteCount` bytes fill `texture` exactly at its format's pixel size.
+// Logs why not.
+function vulkanUploadFits(
+    state: borrow VulkanState,
+    texture: borrow GraphicsTexture,
+    byteCount: UNumber
+) -> Bool {
+    let format = vulkanObjectFormat(state, texture.id.raw)
+    let pixelSize = match vulkanUploadPixelSize(format) {
+        Some(size) -> size
+        None -> {
+            log fault("a depth texture cannot be uploaded to", texture: texture.id)
+            return false
+        }
+    }
+    if byteCount != texture.width * texture.height * pixelSize {
+        log fault(
+            "an upload's byte count does not match the texture",
+            bytes: byteCount,
+            width: texture.width,
+            height: texture.height,
+            pixelSize: pixelSize
+        )
+        return false
+    }
+    return true
+}
+
+// A mapped staging buffer holding `pixels`, or nothing when one could not be
+// made.
+function vulkanStageUpload(
+    state: borrow mut VulkanState,
+    pixels: borrow UploadPixels,
+    byteCount: UNumber
+) -> U32? {
+    let request = VulkanBufferRequest {
+        label: "kira-texture-upload",
+        usage: VulkanVocabulary.bufferUsageTransferSource,
+        byteSize: byteCount
+    }
+    let staging = match vulkanHostBuffer(state, request) {
+        Some(id) -> id
+        None -> return .None
+    }
+    match vulkanObjectMapped(state, staging) {
+        Some(mapped) -> uploadCopy(pixels, mapped)
+        None -> {
+            log fault("an upload's staging buffer was not mapped", buffer: staging)
+            vulkanReleaseObject(state, staging)
+            return .None
+        }
+    }
+    return .Some(staging)
+}
+
+// Copies `staging` into the texture: recorded into the frame in flight, which
+// releases it once the frame completes, or submitted on its own and released
+// at once.
+function vulkanCopyStaged(
+    state: borrow mut VulkanState,
+    staging: U32,
+    texture: borrow GraphicsTexture
+) {
+    if state.frameActive {
+        vulkanRecordBufferToImage(state, staging, texture)
+        state.pendingUploadBuffers.append(staging)
+        return
+    }
+    match vulkanCopyBufferToImageNow(state, staging, texture) {
+        Ok -> {}
+        Error(failure) -> log fault("a texture upload outside a frame failed", failure)
+    }
+    vulkanReleaseObject(state, staging)
+}
+
+public function vulkanUploadTexture(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    pixels: borrow UploadPixels
+) {
+    if !vulkanRequireDevice(context, "vulkanUploadTexture") {
+        return
+    }
+    let byteCount = uploadByteCount(pixels)
+    if texture.id == 0 || byteCount == 0 {
+        log fault(
+            "an upload needs a live texture and at least one byte",
+            texture: texture.id,
+            bytes: byteCount
+        )
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    if state.vulkan.passActive {
+        log fault("end the Vulkan render pass before uploading a texture")
+        return
+    }
+    if !vulkanUploadFits(state.vulkan, texture, byteCount) {
+        return
+    }
+    let staging = match vulkanStageUpload(state.vulkan, pixels, byteCount) {
+        Some(staging) -> staging
+        None -> return
+    }
+    vulkanCopyStaged(state.vulkan, staging, texture)
+}
+
+public function vulkanRecordBufferToImage(
+    state: borrow mut VulkanState,
+    stagingId: U32,
+    texture: borrow GraphicsTexture
+) {
+    let imageId = texture.id.raw
+    let source = vulkanObject(state, stagingId)
+    let target = vulkanObject(state, imageId)
+    if isNull(source) || isNull(target) {
+        return
+    }
+    vulkanTransitionImage(state, imageId, .TransferDestination, VulkanVocabulary.aspectColor)
+    let region = VkBufferImageCopy {
+        imageSubresource: VkImageSubresourceLayers {
+            aspectMask: VulkanVocabulary.aspectColor,
+            layerCount: U32(1)
+        },
+        imageExtent: VkExtent3D {
+            width: U32(texture.width),
+            height: U32(texture.height),
+            depth: U32(1)
+        }
+    }
+    vkCmdCopyBufferToImage(
+        state.commandBuffer,
+        source,
+        target,
+        VulkanVocabulary.imageLayoutTransferDestination,
+        U32(1),
+        region
+    )
+    vulkanTransitionImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+}
+
+// The copy recorded and submitted on its own, and waited for: an upload made
+// while no frame is open.
+function vulkanCopyBufferToImageNow(
+    state: borrow mut VulkanState,
+    stagingId: U32,
+    texture: borrow GraphicsTexture
+) -> Result<Void, VulkanFrameFailure> {
+    let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
+    if idle != .Success {
+        return .Error(.QueueWaitFailed(idle))
+    }
+    match vulkanRestartCommandBuffer(state, .OneTime) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    vulkanRecordBufferToImage(state, stagingId, texture)
+    return vulkanFlushCommands(state)
+}
