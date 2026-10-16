@@ -53,6 +53,8 @@ public struct GraphicsRuntimeState {
     // Pixels per point the run fixes for its window; zero leaves them to the
     // display.
     var scale: UNumber = 0
+    // A run with no window (`HarnessConfig.headless`).
+    var headless: Bool = false
     var capture: FrameCapture? = .None
     // The scripted input, read once at init and injected through the normal
     // AppEvent handler before a frame draws.

@@ -3,7 +3,8 @@
 //
 // These were environment variables read once at init — KIRA_GRAPHICS_CAPTURE_FRAME,
 // KIRA_GRAPHICS_CAPTURE_AT, KIRA_GRAPHICS_QUIT_AFTER_FRAMES, KIRA_GRAPHICS_RESIZE_SWEEP,
-// KIRA_GRAPHICS_LOG_FPS, KIRA_GRAPHICS_SCALE, and the KIRA_UI_*_SCRIPT family. A caller that builds one
+// KIRA_GRAPHICS_LOG_FPS, KIRA_GRAPHICS_SCALE, KIRA_GRAPHICS_HEADLESS, and the
+// KIRA_UI_*_SCRIPT family. A caller that builds one
 // hands the run its settings directly; a run given none reads the environment as
 // before, so a driven run and an environment-driven run resolve to the same knobs.
 public struct HarnessConfig {
@@ -14,6 +15,10 @@ public struct HarnessConfig {
     // rather than the display: 3 draws a phone's 3x screen on a 1x display.
     // Zero leaves them to the display.
     var scale: UNumber = 0
+    // Run with no window: the application draws into an offscreen image the
+    // size of the window it asked for, which a capture reads back. What lets a
+    // session with no display show what a frame contained.
+    var headless: Bool = false
     var capture: FrameCapture? = .None
     var script: InputScript = InputScript()
 }

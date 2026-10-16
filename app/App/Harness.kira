@@ -151,6 +151,7 @@ public struct HarnessKnobs {
     var resizeSweep: UNumber = 0
     var logFps: Bool = false
     var scale: UNumber = 0
+    var headless: Bool = false
     // Its frame always set.
     var capture: FrameCapture? = .None
     var script: InputScript = InputScript()
@@ -192,9 +193,12 @@ function environmentCapture() -> FrameCapture? {
     return .Some(FrameCapture { path: move path, frame: frame })
 }
 
-function environmentKnobs() -> HarnessKnobs {
+// The knobs the environment asks for: a run's, when it was handed none, and a
+// host's that draws headless with no run of Ember's, so both read one set.
+public function environmentHarnessKnobs() -> HarnessKnobs {
     let quitAfterFrames = environmentNumber("KIRA_GRAPHICS_QUIT_AFTER_FRAMES", 0)
     let logFps = environmentValue("KIRA_GRAPHICS_LOG_FPS")
+    let headless = environmentValue("KIRA_GRAPHICS_HEADLESS")
     return HarnessKnobs {
         quitAfterFrames: quitAfterFrames,
         // How many points the window's size sweeps by each frame, for measuring
@@ -202,6 +206,7 @@ function environmentKnobs() -> HarnessKnobs {
         resizeSweep: environmentNumber("KIRA_GRAPHICS_RESIZE_SWEEP", 0),
         logFps: logFps.count > 0 && logFps != "0",
         scale: environmentNumber("KIRA_GRAPHICS_SCALE", 0),
+        headless: headless.count > 0 && headless != "0",
         capture: settledCapture(environmentCapture(), quitAfterFrames),
         script: inputScriptFromEnvironment()
     }
@@ -215,10 +220,11 @@ public function harnessKnobs(app: borrow GraphicsApplication) -> HarnessKnobs {
             resizeSweep: harness.resizeSweep,
             logFps: harness.logFps,
             scale: harness.scale,
+            headless: harness.headless,
             capture: settledCapture(harness.capture, harness.quitAfterFrames),
             script: copy harness.script
         }
-        None -> environmentKnobs()
+        None -> environmentHarnessKnobs()
     }
 }
 
@@ -237,6 +243,7 @@ public function readHarnessKnobs(state: borrow mut GraphicsRuntimeState) {
     state.resizeSweep = knobs.resizeSweep
     state.logFps = knobs.logFps
     state.scale = knobs.scale
+    state.headless = knobs.headless
     state.capture = knobs.capture
     state.inputScript = knobs.script
 }

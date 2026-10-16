@@ -1,0 +1,150 @@
+import Foundation
+import Heap
+
+// The headless Vulkan run: no window, no compositor and no display. One
+// offscreen image stands where the swapchain's images would, so every pass
+// that draws to the window draws into it, and a capture reads it back the way
+// it reads a swapchain image. A frame that draws nothing leaves the image as
+// the last frame left it, as a window keeps showing its last frame, so a
+// capture always holds what the application last drew.
+//
+// A run asks for it through the harness (`HarnessConfig.headless`, or
+// `KIRA_GRAPHICS_HEADLESS=1`): a session with no screen can still say what an
+// application's frame contained.
+
+public function vulkanRunHeadlessApplication(
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+) {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    match vulkanSetUpHeadless(runtime.vulkan) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not set up Vulkan without a window", failure)
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
+    }
+    runtime.vulkan.headless = true
+    let scale = max(runtime.scale, 1)
+    match vulkanAdoptHeadlessImage(runtimeUserData, app.width * scale, app.height * scale) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not create the image a headless run draws into", failure)
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
+    }
+    runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
+    runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
+    runtime.vulkan.initialized = true
+    emberLiveBackendInitialized()
+    let onInit: (Graphics) -> Void = runtime.app.initHandler
+    onInit(vulkanGraphics(runtime, runtimeUserData))
+    vulkanDriveHeadlessFrames(runtimeUserData)
+    vulkanSettleDevice(runtime.vulkan, "the application's resources")
+    let onCleanup: (Graphics) -> Void = runtime.app.cleanupHandler
+    onCleanup(vulkanGraphics(runtime, runtimeUserData))
+    // The image and its view are objects of the run, which shutdown releases;
+    // the swapchain's lists only lent them.
+    runtime.vulkan.swapchainImages = []
+    runtime.vulkan.swapchainViews = []
+    runtime.vulkan.swapchainLayouts = []
+    vulkanShutdownState(runtime.vulkan)
+}
+
+// Why the image a headless run draws into could not be made.
+public enum VulkanHeadlessFailure {
+    ImageRefused
+    ImageNotLive
+}
+
+// A render target the size of the window the application asked for, adopted
+// as the one image of a swapchain that never presents.
+function vulkanAdoptHeadlessImage(
+    runtimeUserData: RawPtr,
+    width: UNumber,
+    height: UNumber
+) -> Result<Void, VulkanHeadlessFailure> {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    // The windowed format, so a pipeline made for the window is made for this.
+    runtime.vulkan.swapchainFormat = VulkanVocabulary.formatBgra8
+    let texture = match vulkanCreateTexture(
+        runtimeUserData,
+        TextureDescriptor {
+            label: "kira-vulkan-headless-window",
+            width: UN32(width),
+            height: UN32(height),
+            format: .Swapchain,
+            usage: .RenderTarget
+        }
+    ) {
+        Ok(created) -> created
+        Error(failure) -> {
+            log fault("the device refused the headless image", failure)
+            return .Error(.ImageRefused)
+        }
+    }
+    let image = vulkanObject(runtime.vulkan, texture.id.raw)
+    let view = vulkanObject(runtime.vulkan, texture.colorViewId.raw)
+    if isNull(image) || isNull(view) {
+        return .Error(.ImageNotLive)
+    }
+    runtime.vulkan.swapchainImages = [image]
+    runtime.vulkan.swapchainViews = [view]
+    runtime.vulkan.swapchainLayouts = [.Undefined]
+    runtime.vulkan.swapchainWidth = width
+    runtime.vulkan.swapchainHeight = height
+    runtime.vulkan.captureSupported = true
+    return .Ok
+}
+
+// The frame loop with no window: no events to pump and no size to follow.
+// Scripted input still arrives, through the frame itself.
+function vulkanDriveHeadlessFrames(runtimeUserData: RawPtr) {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    while !runtime.vulkan.quitRequested {
+        match vulkanAcquireFrame(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not begin a headless frame; the run ends", failure)
+                return
+            }
+        }
+        vulkanRunFrame(runtime, runtimeUserData)
+        if runtime.quitAfterFrames > 0 && runtime.frameIndex >= runtime.quitAfterFrames {
+            return
+        }
+    }
+}
+
+// A frame that drew into the headless image: submitted, waited for, and
+// counted as shown. Nothing is presented, and the image stays ready to be
+// drawn into again.
+public function vulkanSubmitHeadlessImageFrame(state: borrow mut VulkanState) {
+    let encodingSeconds = secondsFromNanoseconds(
+        vulkanMonotonicNanoseconds() - state.frameStartedAt
+    )
+    state.frameActive = false
+    state.acquired = false
+    match vulkanSubmitFrameCommands(state, .None) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not submit the headless frame; quitting", failure)
+            state.quitRequested = true
+            return
+        }
+    }
+    state.presentedThisFrame = true
+    if !state.announcedFramePresented {
+        state.announcedFramePresented = true
+        emberLiveFramePresented()
+        emberLiveFirstFrame()
+    }
+    vulkanRecordPresentedStats(state, encodingSeconds)
+}
+
+public function vulkanRunsHeadless(context: RawPtr) -> Bool {
+    if !vulkanHasDevice(context) { return false }
+    return nativeRecover<GraphicsRuntimeState>(context).vulkan.headless
+}

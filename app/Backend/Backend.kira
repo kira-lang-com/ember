@@ -40,6 +40,8 @@ function platformDefaultBackend(platform: TargetPlatform) -> RenderBackendKind {
         // Tessera has no window system: a program draws headless into a
         // texture the display server composites, which Vulkan does directly.
         Tessera -> return .Vulkan
+        // Vulkan is the graphics API Android itself ships.
+        Android -> return .Vulkan
         Wasm -> return .Dawn
         Unknown -> return .Dawn
     }
@@ -61,6 +63,8 @@ public function graphicsUsesWaylandClientWindowControls() -> Bool {
         Windows -> return false
         // No window at all: a Tessera program draws headless.
         Tessera -> return false
+        // The system draws an Android window's furniture.
+        Android -> return false
         Wasm -> return false
         Unknown -> return false
     }

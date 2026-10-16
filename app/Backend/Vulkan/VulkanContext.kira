@@ -29,6 +29,9 @@ public struct VulkanState {
     var swapchainHeight: UNumber = 0
     var swapchainFormat: I32 = 0
     var captureSupported: Bool = false
+    // A run with no window: one offscreen image stands where the swapchain's
+    // images would (see VulkanHeadlessRun.kira).
+    var headless: Bool = false
     var swapchainImages: [RawPtr] = []
     var swapchainViews: [RawPtr] = []
     var swapchainPresentSemaphores: [RawPtr] = []

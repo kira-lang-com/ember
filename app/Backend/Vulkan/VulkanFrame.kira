@@ -141,6 +141,9 @@ public function vulkanSubmitFrameState(state: borrow mut VulkanState) {
         vulkanSubmitUnpresentedFrame(state)
         return
     }
+    if state.headless {
+        return vulkanSubmitHeadlessImageFrame(state)
+    }
     vulkanTransitionSwapchainImage(state, state.currentImageIndex, .Present)
     let encodingSeconds = secondsFromNanoseconds(
         vulkanMonotonicNanoseconds() - state.frameStartedAt

@@ -49,6 +49,9 @@ public function vulkanRunApplication(app: borrow GraphicsApplication, runtimeUse
     var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
     runtime.vulkan = VulkanState()
     readHarnessKnobs(runtime)
+    if runtime.headless {
+        return vulkanRunHeadlessApplication(app, runtimeUserData)
+    }
     if targetPlatform!() == .Windows && app.highDpi {
         markProcessDpiAware()
     }

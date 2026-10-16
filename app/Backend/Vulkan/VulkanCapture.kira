@@ -138,7 +138,10 @@ public function vulkanRecordFrameCapture(
     let image = state.swapchainImages[Number(state.currentImageIndex)]
     vulkanTransitionSwapchainImage(state, state.currentImageIndex, .TransferSource)
     vulkanCopyImageToStaging(state, image, vulkanSwapchainStaged(state, staging))
-    vulkanTransitionSwapchainImage(state, state.currentImageIndex, .Present)
+    // A headless image is never presented, and a device with no window has no
+    // present layout: it goes back to being drawn into.
+    let resting: VulkanImageLayout = state.headless ? .ColorAttachment : .Present
+    vulkanTransitionSwapchainImage(state, state.currentImageIndex, resting)
     return .Ok(staging)
 }
 

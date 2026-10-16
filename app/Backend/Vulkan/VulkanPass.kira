@@ -8,6 +8,7 @@ import Heap
 public function vulkanWindowScale(context: RawPtr) -> Number {
     if !vulkanHasDevice(context) { return 1 }
     let state = nativeRecover<GraphicsRuntimeState>(context)
+    if state.vulkan.headless { return max(state.scale, 1) }
     return vulkanWindowFor(vulkanWindowPlatformForHost()).scale(state.vulkan.window)
 }
 
@@ -54,6 +55,7 @@ public function vulkanSetWindowMode(context: RawPtr, mode: borrow WindowMode) {
 }
 
 public function vulkanMinimizeWindow(context: RawPtr) {
+    if vulkanRunsHeadless(context) { return }
     if targetPlatform!() == .Windows && vulkanHasDevice(context) {
         let runtime = nativeRecover<GraphicsRuntimeState>(context)
         showWindow(runtime.vulkan.window, I32(6))
@@ -65,6 +67,7 @@ public function vulkanMinimizeWindow(context: RawPtr) {
 }
 
 public function vulkanToggleMaximizeWindow(context: RawPtr) {
+    if vulkanRunsHeadless(context) { return }
     if targetPlatform!() == .Windows && vulkanHasDevice(context) {
         let runtime = nativeRecover<GraphicsRuntimeState>(context)
         if dawnReadWindowMode(runtime.vulkan.window) == .Windowed {
@@ -291,6 +294,13 @@ public function vulkanAcquireSwapchainImage(
     }
     if !state.frameActive {
         return .Error(.OutsideFrame)
+    }
+    // Headless, the one image is always there to draw into, and nothing has
+    // to be waited for before drawing.
+    if state.headless {
+        state.currentImageIndex = U32(0)
+        state.acquired = true
+        return .Ok
     }
     let imageIndex = boxed<U32>(U32(0))
     var result = vulkanAcquireNextImage(state, imageIndex)

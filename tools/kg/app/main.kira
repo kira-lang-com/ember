@@ -27,7 +27,7 @@ construct PngCommand() extends ParsableCommand {
         )]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         let parsed = parse_PngArguments(arguments)
         match convertPpmFileToPng(parsed.input, parsed.output) {
             Ok -> {
@@ -60,7 +60,7 @@ construct BackendsCommand() extends ParsableCommand {
         return[]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         print("metal  — native Metal, Apple platforms")
         print("vulkan — native Vulkan, Windows and Linux")
         print("dawn   — WebGPU, Windows/Linux/Apple/Web")
@@ -82,7 +82,7 @@ construct RootCommand() extends ParsableCommand {
         return[]
     }
 
-    function run(arguments: borrow ParsedArguments) -> Int {
+    function run(arguments: borrow ParsedArguments) -> Number {
         return ExitCode.success
     }
 }

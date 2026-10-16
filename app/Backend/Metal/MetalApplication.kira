@@ -45,7 +45,7 @@ public function metalRunApplication(
     var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
     let userData = state.userData
 
-    if metalEnvIsSet("KIRA_METAL_OFFSCREEN") {
+    if metalEnvIsSet("KIRA_METAL_OFFSCREEN") || harnessKnobs(app).headless {
         metalRunOffscreenApplication(app, ctxPtr, userData, pool)
         return
     }
@@ -137,13 +137,11 @@ function metalDriveWindow(
     let onFrame: (borrow mut RenderFrame) -> Void = app.frameHandler
     let onWindowEvent: (borrow AppEvent) -> Void = app.eventHandler
     let windowDragRegion: (Number, Number) -> Bool = app.windowDragRegion
-    let renderNextFrame: () -> Bool = {
-        in
+    let renderNextFrame: () -> Bool = { in
         return metalRenderWindowFrame(run, onFrame, onWindowEvent, windowDragRegion)
     }
     let onCleanup: (Graphics) -> Void = app.cleanupHandler
-    let cleanup: () -> Void = {
-        in
+    let cleanup: () -> Void = { in
         metalEndWindowRun(run)
         onCleanup(Graphics { userData: run.userData, backend: .Metal, backendContext: run.ctx })
         metalContextFree(run.ctx)
