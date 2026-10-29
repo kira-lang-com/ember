@@ -1,0 +1,65 @@
+import Foundation
+import Ember
+// Metal's render self-tests, each one drawing offscreen and reading a pixel back.
+//
+// The self-test reports whether the draw came out as the shader says it should.
+// `true` is the whole answer, so each case's expectation is that one `Bool`.
+
+// What every case expects: `true` where Metal exists, a skip everywhere else,
+// since no other host has a Metal device to draw on.
+function metalExpectation() -> Result<Any, TestFailure> {
+    match targetPlatform!() {
+        MacOS -> return .Ok(true)
+        else -> return .Error(.Compile("Metal GPU test requires macOS"))
+    }
+}
+
+construct ClearRendersExactColor() extends Test {
+    test { return metalSelfTestClearOk() }
+    expect { return metalExpectation() }
+}
+
+construct TriangleRasterizes() extends Test {
+    test { return metalSelfTestTriangleOk() }
+    expect { return metalExpectation() }
+}
+
+construct IndexedQuadRasterizes() extends Test {
+    test { return metalSelfTestIndexedOk() }
+    expect { return metalExpectation() }
+}
+
+construct UniformDrivesFragmentColor() extends Test {
+    test { return metalSelfTestUniformOk() }
+    expect { return metalExpectation() }
+}
+
+construct DepthOccludesFarSurface() extends Test {
+    test { return metalSelfTestDepthOk() }
+    expect { return metalExpectation() }
+}
+
+construct TextureSampling() extends Test {
+    test { return metalSelfTestTextureOk() }
+    expect { return metalExpectation() }
+}
+
+construct BindGroupBindsUniform() extends Test {
+    test { return metalSelfTestBindGroupOk() }
+    expect { return metalExpectation() }
+}
+
+construct VertexUniformTransform() extends Test {
+    test { return metalSelfTestVertexUniformOk() }
+    expect { return metalExpectation() }
+}
+
+construct DynamicBufferContentsDraw() extends Test {
+    test { return metalSelfTestDynamicOk() }
+    expect { return metalExpectation() }
+}
+
+construct CustomBlendSubtracts() extends Test {
+    test { return metalSelfTestBlendOk() }
+    expect { return metalExpectation() }
+}

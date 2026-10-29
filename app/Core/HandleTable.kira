@@ -1,0 +1,9 @@
+// The next id a backend hands out.
+//
+// A counter rather than a random or time-based value: an id that grows by one is
+// one a debug dump can be read against, and a collision means the table grew
+// without the counter moving, which is a bug worth seeing rather than papering
+// over with a wider number.
+public struct HandleTable {
+    var nextId: UNumber
+}

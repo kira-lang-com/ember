@@ -1,0 +1,127 @@
+public function graphicsApplicationDefaultInit(graphics: Graphics) {}
+
+public function graphicsApplicationDefaultFrame(frame: borrow mut RenderFrame) {}
+
+public function graphicsApplicationDefaultEvent(event: borrow AppEvent) {}
+
+public function graphicsApplicationDefaultCleanup(graphics: Graphics) {}
+
+public function graphicsApplicationNoWindowDragRegion(x: Number, y: Number) -> Bool {
+    return false
+}
+
+// An undecorated window must never become immovable merely because its content
+// did not supply a titlebar. This is an invisible emergency handle, not rendered
+// chrome; richer UI layers replace it with their real toolbar region. The first
+// four points are also the top resize edge on Wayland, so twelve leaves an
+// eight-point move handle instead of the effectively two-point handle a six-
+// point strip produced.
+public function graphicsApplicationFallbackWindowDragRegion(x: Number, y: Number) -> Bool {
+    return x >= 0 && y >= 0 && y < 12
+}
+
+public struct GraphicsApplication {
+    var title: String = "Ember"
+    var width: UN32 = 640
+    var height: UN32 = 480
+    var sampleCount: UN8 = 1
+    // Request a full-resolution framebuffer on HighDPI/Retina displays. When true
+    // (the default), a desktop backend makes its drawable pixel-sized and reports
+    // the backing factor; UI layout
+    // stays in logical points (pixels / dpi_scale) so nothing shrinks, while the
+    // framebuffer is rendered at native resolution for crisp text and vector edges.
+    var highDpi: Bool = true
+    // The mode the window OPENS in. `width`/`height` are what a windowed mode is
+    // given; a fullscreen window takes the display's size instead, so a program
+    // that starts there reads its viewport back off the frame.
+    var windowMode: WindowMode = .Windowed
+    // What the window's title bar is. See Public/WindowTitlebar.kira.
+    var titlebar: WindowTitlebar = .Standard
+    // The radius a decorated window's corners are rounded to, in points. Zero
+    // keeps the platform's own corner; a larger one rounds the window by its
+    // content -- the window shows through past the curve, and its shadow
+    // follows -- for a toolkit drawing another platform's windows. A backend
+    // that cannot shape its window keeps its own corner.
+    var cornerRadius: Number = 0
+    // A window the desktop shows through: every pixel left at
+    // `TransparentKey.color` is a hole rather than a color, so the
+    // application's own drawing is the window's shape. See
+    // Public/WindowComposition.kira.
+    var transparent: Bool = false
+    // How opaque the WHOLE window is composited, before anything it draws is
+    // considered. One is an ordinary window; a lower value fades the window and
+    // everything on it against what is behind, which is the "sheet of glass"
+    // an overlay wants and not the same thing as a translucent surface inside
+    // an opaque window.
+    var opacity: Number = 1
+    // Optional fixed frame cadence in nanoseconds. Zero keeps the backend
+    // uncapped; a positive value uses absolute deadlines and never emits catch-up
+    // bursts after an overrun.
+    var targetFrameDurationNs: UNumber = 0
+    // Offscreen color-target format (Metal). Default swapchain (BGRA8); set to
+    // the `R32Uint` texture format to render a visibility buffer.
+    var colorFormat: TextureFormat = .Swapchain
+    // The renderer, which `KIRA_GRAPHICS_BACKEND` overrides.
+    //
+    // The platform's own default without one. The override is what lets one
+    // program be run on several backends without being edited between the runs —
+    // and a comparison is only worth anything when the
+    // program either one drew is the same program.
+    var backend: RenderBackendKind = graphicsDefaultBackend()
+    // Launch-time harness settings — capture, quit-after, input scripts — as a
+    // value rather than the environment. Without one the backend reads the
+    // environment; with one it drives the run without any environment variable.
+    var harness: HarnessConfig? = .None
+    var initHandler: (Graphics) -> Void = graphicsApplicationDefaultInit
+    var frameHandler: (borrow mut RenderFrame) -> Void = graphicsApplicationDefaultFrame
+    var eventHandler: (borrow AppEvent) -> Void = graphicsApplicationDefaultEvent
+    var cleanupHandler: (Graphics) -> Void = graphicsApplicationDefaultCleanup
+    // Client-side window furniture describes the part of its CONTENT that acts
+    // as a titlebar. Raw graphics apps retain a narrow invisible fallback at the
+    // top so an undecorated window cannot become impossible to move.
+    var windowDragRegion: (Number, Number) -> Bool = graphicsApplicationFallbackWindowDragRegion
+
+    function onInit(body: (Graphics) -> Void) {
+        self.initHandler = body
+    }
+
+    function onFrame(body: (borrow mut RenderFrame) -> Void) {
+        self.frameHandler = body
+    }
+
+    function onEvent(body: (borrow AppEvent) -> Void) {
+        self.eventHandler = body
+    }
+
+    function onCleanup(body: (Graphics) -> Void) {
+        self.cleanupHandler = body
+    }
+
+    function run(userData: RawPtr) {
+        graphicsRuntimeRun(self, userData)
+    }
+
+    // The window this application asks for.
+    function windowRequest(borrow self) -> WindowRequest {
+        return WindowRequest {
+            title: self.title,
+            width: self.width,
+            height: self.height,
+            windowMode: self.windowMode,
+            transparent: self.transparent,
+            opacity: self.opacity
+        }
+    }
+}
+
+// The window a program asks a backend to open: what of `GraphicsApplication` a
+// window is made from. The application's handlers stay with the application,
+// so a window family's members carry only values that cross a library.
+public struct WindowRequest {
+    var title: String = "Ember"
+    var width: UN32 = 640
+    var height: UN32 = 480
+    var windowMode: WindowMode = .Windowed
+    var transparent: Bool = false
+    var opacity: Number = 1
+}

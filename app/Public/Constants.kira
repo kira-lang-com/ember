@@ -1,0 +1,19 @@
+// What is left of the constant tables.
+//
+// Closed sets are enums, not numbers: see `Formats.kira` and `PassVocabulary.kira`.
+// Each carries the wire code the backends speak.
+//
+// What stays here is what is genuinely a number rather than a closed set, and it
+// is a namespace rather than functions: a function that answers a constant is a
+// call to be traced where a folded `let` is not.
+
+// The two uniform slots a shader with no reflection string binds: the scene
+// block, then the per-object block.
+//
+// Not a closed set — a shader that does reflect numbers its own bindings from
+// zero — but the legacy layout every backend still has to honour for a shader
+// that carries no digest.
+public namespace UniformSlot {
+    let scene: UN32 = 0
+    let object: UN32 = 1
+}

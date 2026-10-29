@@ -1,0 +1,27 @@
+import Foundation
+
+// Where a value from the public surface takes the width a device reads.
+//
+// The public surface speaks `Number`, `UNumber` and the sized aliases (`UN8`
+// for a pixel channel, `UN32` for an index or storage word). A vertex, a
+// uniform or a storage word still reaches the GPU as 32 bits and a pixel as 8,
+// so each backend narrows here, at the point it writes the bytes, and nowhere
+// before.
+
+function narrowFloats(values: borrow [Number]) -> [F32] {
+    var floats: [F32] = []
+    for value in values { floats.append(F32(value)) }
+    return floats
+}
+
+function narrowWords(values: borrow [UN32]) -> [U32] {
+    var words: [U32] = []
+    for value in values { words.append(U32(value)) }
+    return words
+}
+
+function narrowBytes(values: borrow [UN8]) -> [U8] {
+    var bytes: [U8] = []
+    for value in values { bytes.append(U8(value)) }
+    return bytes
+}

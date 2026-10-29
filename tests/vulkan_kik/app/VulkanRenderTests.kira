@@ -1,0 +1,226 @@
+import Foundation
+import Heap
+import Ember
+// Vulkan's one render test: clear an offscreen frame to a known colour, capture
+// it as a PPM, and read the middle pixel back.
+//
+// The colour is checked as the three bytes a PPM stores rather than as a float,
+// because that is what survives the round trip — a capture that came out of the
+// renderer is a file, and a file holds bytes.
+
+// The colour the clear runs at, as the bytes a PPM stores: the fractions 0.125,
+// 0.25 and 0.5 multiplied by the maximum sample value.
+public namespace ClearColor {
+    let red: Number = 32
+    let green: Number = 64
+    let blue: Number = 128
+}
+
+// A binary PPM stores three bytes per pixel — no alpha, no row padding — and
+// opens with `P6`, the dimensions and the maximum sample value, one per line.
+public namespace Ppm {
+    let bytesPerPixel: Number = 3
+    let lineCount: Number = 3
+    // Enough for a magic, two dimensions and a maximum at any frame size this
+    // runs at.
+    let headerProbeBytes: Number = 128
+    let newline: UN8 = 10
+    let magic: String = "P6"
+    let sampleMaximum: String = "255"
+}
+
+// The three header lines of a capture, and how many bytes they took with
+// their newlines — where the pixels start.
+public struct CapturedHeader {
+    var magic: String = ""
+    var dimensions: String = ""
+    var sampleMaximum: String = ""
+    var byteCount: Number = 0
+}
+
+public struct CapturedSize {
+    var width: Number = 0
+    var height: Number = 0
+}
+
+// The frame the clear renders: tiny, because one pixel is all it reads.
+public namespace ClearTarget {
+    let side: UN32 = 8
+}
+
+// Where the capture goes. The directory is the test's own: a build no longer
+// leaves one behind in the package, and the capture writer does not make one.
+public namespace CaptureLocation {
+    let directory: String = ".kira-build"
+    let file: String = "vulkan-clear-test.ppm"
+}
+
+public function vulkanSelfTestCapturePath() -> String {
+    return CaptureLocation.directory + "/" + CaptureLocation.file
+}
+
+// The capture's directory, made if it is not there yet.
+public function vulkanSelfTestPrepareCaptureDirectory() -> Bool {
+    if isDirectory(CaptureLocation.directory) { return true }
+    match makeDirectory(CaptureLocation.directory) {
+        Ok -> return true
+        Error(failure) -> {
+            log warn("could not make the capture directory", failure)
+            return false
+        }
+    }
+}
+
+// A stale capture would be read as this run's, so a path is cleared before the
+// run rather than trusted after it.
+public function vulkanSelfTestClearCapture(path: borrow String) {
+    match removePath(path) {
+        Ok -> {}
+        // A path that was never there is what clearing one means.
+        Error(reason) -> log debug("no capture to clear", path, reason)
+    }
+}
+
+// The first three lines of a capture, split the way a PPM puts them, or None
+// where the bytes are not a PPM header at all.
+public function vulkanSelfTestPpmHeader(path: borrow String) -> CapturedHeader? {
+    let bytes = try readFileRange(path, 0, Ppm.headerProbeBytes) otherwise return .None
+    var lines: [String] = []
+    var line = ""
+    for (index, byte) in bytes.enumerated() {
+        if byte == Ppm.newline {
+            lines.append(line)
+            if lines.count == Ppm.lineCount {
+                return .Some(
+                    CapturedHeader {
+                        magic: lines[0],
+                        dimensions: lines[1],
+                        sampleMaximum: lines[2],
+                        byteCount: index + 1
+                    }
+                )
+            }
+            line = ""
+            continue
+        }
+        match scalarText(Number(byte)) {
+            Some(character) -> line = line + character
+            None -> return .None
+        }
+    }
+    return .None
+}
+
+// A dimension as the capture spells it, or None where it spells none.
+public function vulkanSelfTestDimension(text: borrow String) -> Number? {
+    return match text.toNumber() {
+        Some(value) -> .Some(floor(value))
+        None -> .None
+    }
+}
+
+// The dimensions a header declares, or None where it is not a binary 8-bit PPM
+// or declares no usable size.
+public function vulkanSelfTestCapturedSize(header: borrow CapturedHeader) -> CapturedSize? {
+    if header.magic != Ppm.magic || header.sampleMaximum != Ppm.sampleMaximum { return .None }
+    let dimensions = header.dimensions.split(" ")
+    if dimensions.count != 2 { return .None }
+    let width = match vulkanSelfTestDimension(dimensions[0]) {
+        Some(width) -> width
+        None -> return .None
+    }
+    let height = match vulkanSelfTestDimension(dimensions[1]) {
+        Some(height) -> height
+        None -> return .None
+    }
+    if width <= 0 || height <= 0 { return .None }
+    return .Some(CapturedSize { width: width, height: height })
+}
+
+// The middle pixel of a captured frame, as the three bytes a PPM stores there.
+//
+// One interior pixel is enough to tell a clear that ran from one that did not,
+// and the edges are where a different bug would show. The header is skipped by
+// measuring it rather than assuming a width, so a capture that is not a PPM
+// cannot be read at the wrong offset.
+public function vulkanSelfTestMiddlePixel(path: borrow String) -> [UN8]? {
+    let header = match vulkanSelfTestPpmHeader(path) {
+        Some(header) -> header
+        None -> return .None
+    }
+    let size = match vulkanSelfTestCapturedSize(header) {
+        Some(size) -> size
+        None -> return .None
+    }
+    let middle = floor(size.height / 2) * size.width + floor(size.width / 2)
+    let at = header.byteCount + middle * Ppm.bytesPerPixel
+    let raw = try readFileRange(path, at, Ppm.bytesPerPixel) otherwise return .None
+    // Foundation reads file bytes as the C byte run `[U8]`; the pixel is compared as `[UN8]`.
+    var pixels: [UN8] = []
+    for byte in raw {
+        pixels.append(UN8(byte))
+    }
+    return .Some(pixels)
+}
+
+// The clear itself: one pass at the known colour, then quit.
+public function vulkanSelfTestClearFrame(frame: borrow mut RenderFrame) {
+    let encoder = frame.beginPass(RGBAColor { r: 0.125, g: 0.25, b: 0.5 })
+    frame.endPass()
+    frame.requestQuit()
+}
+
+// One Vulkan frame, captured to `path` on its first frame.
+public function vulkanSelfTestClearApp(path: borrow String) -> GraphicsApplication {
+    return GraphicsApplication {
+        title: "Kira Vulkan test",
+        width: ClearTarget.side,
+        height: ClearTarget.side,
+        sampleCount: 1,
+        highDpi: false,
+        backend: .Vulkan,
+        harness: .Some(
+            HarnessConfig {
+                quitAfterFrames: 1,
+                capture: .Some(FrameCapture { path: copy path, frame: .Some(1) })
+            }
+        ),
+        frameHandler: vulkanSelfTestClearFrame
+    }
+}
+
+public function vulkanSelfTestClear() -> Bool {
+    if targetPlatform!() != .Linux && targetPlatform!() != .Windows {
+        log info("Vulkan rendering requires Linux or Windows; no GPU test was executed")
+        return false
+    }
+    if !vulkanSelfTestPrepareCaptureDirectory() { return false }
+    let path = vulkanSelfTestCapturePath()
+    vulkanSelfTestClearCapture(path)
+    var app = vulkanSelfTestClearApp(path)
+    app.run(nullPointer())
+    let pixel = vulkanSelfTestMiddlePixel(path)
+    vulkanSelfTestClearCapture(path)
+    match pixel {
+        None -> return false
+        Some(bytes) -> {
+            return bytes[0] == ClearColor.red
+                && bytes[1] == ClearColor.green
+                && bytes[2] == ClearColor.blue
+        }
+    }
+}
+
+construct ClearRendersExactColor() extends Test {
+    test { return vulkanSelfTestClear() }
+    expect {
+        if targetPlatform!() != .Linux && targetPlatform!() != .Windows {
+            let skipped: Result<Any, TestFailure> = .Error(
+                .Compile("Vulkan GPU test requires Linux or Windows")
+            )
+            return skipped
+        }
+        let e: Result<Any, TestFailure> = .Ok(true)
+        return e
+    }
+}

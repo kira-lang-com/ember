@@ -1,0 +1,6 @@
+import Foundation
+import Ember
+
+@Main
+@Runtime
+function main() {}

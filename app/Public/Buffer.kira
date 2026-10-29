@@ -1,0 +1,36 @@
+import Heap
+
+public struct GraphicsBuffer {
+    var id: BufferId = NoBufferId
+    // The GPU storage this buffer occupies. Carried because releasing it has to
+    // subtract the same number creating it added, and a destroy is handed the
+    // buffer rather than the descriptor it was made from. Zero on a backend
+    // that reads its allocated bytes off the device instead (Metal does).
+    var byteSize: UNumber = 0
+}
+
+// A buffer the CPU rewrites every frame, and the memory it writes into.
+//
+// The two arrive together because on one backend they are the same storage and
+// on the other they are not, and a caller cannot tell which without being told.
+// Metal's `contents` IS the buffer — a write lands in memory the GPU reads, and
+// `commitDynamicBuffer` has nothing to do. A staging backend can upload the
+// commit is the upload. Asking for the memory in a second call would have to
+// answer "the block I allocated for you last time", which needs a table keyed by
+// buffer id — exactly the kind of side table this backend spent its migration
+// deleting.
+public struct DynamicBuffer {
+    var buffer: GraphicsBuffer
+    var contents: RawPtr
+}
+
+public function emptyGraphicsBuffer() -> GraphicsBuffer {
+    return GraphicsBuffer { id: NoBufferId }
+}
+
+// The placeholder a host's state struct holds before its first frame creates
+// the real one — id 0 and a null pointer, so a write that reaches it before
+// creation is refused rather than landing somewhere.
+public function emptyDynamicBuffer() -> DynamicBuffer {
+    return DynamicBuffer { buffer: emptyGraphicsBuffer(), contents: nullPointer() }
+}

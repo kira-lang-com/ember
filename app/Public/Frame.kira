@@ -1,0 +1,253 @@
+import Foundation
+// One frame of rendering, from the caller's side.
+//
+// The frame holds two things and nothing else: what its current pass is
+// attached to (`attachments`, see `PassAttachments.kira`) and where it is in
+// its own life — whether a pass was begun, whether one is still open, the
+// encoder that pass handed out, and whether the application asked to quit.
+//
+// Everything a backend does with a frame it does through `renderBackend()`.
+public class RenderFrame {
+    var attachments: PassAttachments
+
+    var hasRenderPass: Bool = false
+    // The label of the pass begun last, for a backend timing its passes.
+    var passLabel: String = ""
+    var renderPassActive: Bool = false
+    var passSubmitted: Bool = false
+    var shouldQuit: Bool = false
+    var userData: RawPtr
+    var backend: RenderBackendKind = .Dawn
+    var backendContext: RawPtr
+
+    // The backend this frame belongs to, as a value that answers rather than as
+    // a tag to switch on. See `RenderBackend.kira`.
+    function renderBackend() -> Any RenderBackend {
+        return renderBackendFor(self.backend, self.backendContext)
+    }
+
+    // The graphics the frame is drawn with, as `Graphics.frame()` made it:
+    // what a host's frame hook creates its textures and buffers on.
+    function graphics() -> Graphics {
+        return Graphics {
+            userData: self.userData,
+            backend: self.backend,
+            backendContext: self.backendContext
+        }
+    }
+
+    // Nanoseconds on a monotonic clock — what a host times its own frame with.
+    //
+    // Asked of the frame for the same reason `framesInFlight` is: reading a
+    // clock is a platform call, and a host that named one platform's clock
+    // directly would refuse to start on every other.
+    function monotonicNanoseconds() -> Number {
+        return self.renderBackend().monotonicNanoseconds()
+    }
+
+    // How many frames this backend keeps in flight — the depth of its pacing
+    // ring, and what a telemetry readout means by "frames in flight".
+    //
+    // Asked of the frame rather than imported from a backend's own module, so a
+    // caller that only wants the number does not have to name the backend that
+    // happens to answer it.
+    function framesInFlight() -> Number {
+        return self.renderBackend().framesInFlight()
+    }
+
+    // The live viewport in logical points — what a UI lays out and hit-tests
+    // against. Both backends answer; neither is named at the call site.
+    function viewportWidth() -> Number {
+        return self.renderBackend().viewportWidth()
+    }
+
+    function viewportHeight() -> Number {
+        return self.renderBackend().viewportHeight()
+    }
+
+    // Viewport edges reserved for system controls, in logical points.
+    function safeAreaInsets() -> ViewportInsets {
+        return self.renderBackend().safeAreaInsets()
+    }
+
+    // The drawable in DEVICE pixels, and how many of them one point buys.
+    //
+    // A viewport in points already divides one by the other, so a caller that
+    // wants to divide them differently — anything rendering at a scale other
+    // than the display's — needs both numbers rather than their quotient.
+    function drawableWidth() -> Number {
+        return self.renderBackend().contextWidth()
+    }
+
+    function drawableHeight() -> Number {
+        return self.renderBackend().contextHeight()
+    }
+
+    function backingScale() -> Number {
+        return self.renderBackend().backingScale()
+    }
+
+    // How the window is presented, and moving it to another mode. This is where
+    // a library reaches fullscreen from: the frame is what an event handler and
+    // a render pass both already hold, and neither has to name a backend.
+    //
+    // Read rather than remembered — a user can leave fullscreen through the
+    // window manager without the program hearing about it — so this is also the
+    // way to find out whether a `setWindowMode` request was honored.
+    function windowMode() -> WindowMode {
+        return self.renderBackend().windowMode()
+    }
+
+    function setWindowMode(mode: borrow WindowMode) -> Void {
+        self.renderBackend().setWindowMode(mode)
+    }
+
+    function minimizeWindow() -> Void {
+        self.renderBackend().minimizeWindow()
+    }
+
+    function toggleMaximizeWindow() -> Void {
+        self.renderBackend().toggleMaximizeWindow()
+    }
+
+    // What the frame BEFORE this one cost. An application lays its HUD out
+    // while the frame the HUD will appear in is still being built, so the last
+    // completed frame is what there is to report.
+    function statistics() -> FrameStatistics {
+        return self.renderBackend().statistics()
+    }
+
+    // Whether the GPU time of each pass is measured, from this frame on, and
+    // reported in `statistics().gpuPasses`. Off by default: it costs the
+    // timestamps and reading them back each frame.
+    function measureGpu(on: Bool) {
+        self.renderBackend().measureGpu(on)
+    }
+
+    function beginRenderPass(descriptor: borrow RenderPassDescriptor) -> RenderEncoder {
+        var colorAttachment = descriptor.primaryColorAttachment
+        var hasColor = descriptor.hasPrimaryColorAttachment
+        if (!hasColor) {
+            if (descriptor.colorAttachments.count > 0) {
+                colorAttachment = descriptor.colorAttachments[0]
+                hasColor = true
+            }
+        }
+        self.attachments = PassAttachments {
+            hasColor: hasColor,
+            color: move colorAttachment,
+            hasDepth: descriptor.hasDepthAttachment,
+            depth: descriptor.depthAttachment,
+            hasStencil: descriptor.hasStencilAttachment,
+            stencil: descriptor.stencilAttachment
+        }
+        self.hasRenderPass = true
+        self.passLabel = copy descriptor.label
+        self.passSubmitted = false
+        self.renderPassActive = self.renderBackend().beginRenderPass(self)
+
+        if (!self.renderPassActive) {
+            log fault("skipped render pass because the backend could not begin it")
+        }
+
+        // The pass encoder has a single owner: the caller that draws with it,
+        // which releases its affine callback state when its own scope ends. The
+        // frame keeps no second copy — that copy would run the release twice.
+        return self.renderBackend().makeEncoder(self.renderPassActive)
+    }
+
+    function endPass() {
+        self.passSubmitted = true
+        if (self.renderPassActive) {
+            self.renderBackend().endPassAndCommit(self)
+        }
+        self.renderPassActive = false
+    }
+
+    // Run a two-axis separable blur over `mix(source, secondSource, blend)`, one
+    // dispatch per axis, encoded on this frame's command buffer. See
+    // `TextureComputePair` for what each half reads and writes.
+    function dispatchTextureComputePair(pair: borrow TextureComputePair) {
+        self.renderBackend().dispatchTextureComputePair(pair)
+    }
+
+    // One dispatch over buffers, encoded on this frame's command buffer.
+    //
+    // On the frame rather than on `Graphics` when the step belongs to a frame's
+    // ordering: a step that has to land between two passes needs the frame, and
+    // the frame is what a caller holds at that point.
+    function dispatchComputeBuffers(
+        pipeline: ComputePipelineId,
+        bufferIds: borrow[BufferId],
+        threadCount: UN32,
+        threadsPerGroup: UN32
+    ) {
+        self.renderBackend().dispatchComputeBuffers(
+            BufferDispatch {
+                pipeline: pipeline,
+                bufferIds: bufferIds,
+                threadCount: threadCount,
+                threadsPerGroup: threadsPerGroup
+            }
+        )
+    }
+
+    // The same dispatch with this pass's DEPTH attachment bound ahead of the
+    // buffers, for a kernel that reads the depth the frame just rasterized —
+    // seeding a Hi-Z pyramid is what needs it.
+    //
+    // The texture comes from the frame's own attachments rather than from an
+    // argument, because the depth such a kernel wants is the depth the pass
+    // wrote, and a caller passing it separately can only get that wrong.
+    function dispatchDepthComputeBuffers(
+        pipeline: ComputePipelineId,
+        bufferIds: borrow[BufferId],
+        threadCount: UN32,
+        threadsPerGroup: UN32
+    ) {
+        self.renderBackend().dispatchDepthComputeBuffers(
+            self.attachments.depth.texture,
+            BufferDispatch {
+                pipeline: pipeline,
+                bufferIds: bufferIds,
+                threadCount: threadCount,
+                threadsPerGroup: threadsPerGroup
+            }
+        )
+    }
+
+    // One 32-bit word out of a buffer a kernel dispatched on this frame has
+    // written — what a gate checks after stepping — or why it could not be
+    // read.
+    function readStorageU32(buffer: borrow GraphicsBuffer, index: UN32) -> BufferReadResult {
+        return self.renderBackend().readBufferU32(buffer, index)
+    }
+
+    // Put a texture a compute pass has just written back into the layout later
+    // samples read fastest, ordered after everything already encoded this frame.
+    // Called on the outputs of `dispatchTextureComputePair`, which are the
+    // textures it exists to repair. What that costs is the backend's answer:
+    // a blit on Metal, nothing under GL, and each says so in its own body.
+    function optimizeTexture(textureId: UN32) {
+        self.renderBackend().optimizeTexture(textureId)
+    }
+
+    function renderPass(descriptor: borrow RenderPassDescriptor, body: (RenderEncoder) -> Void) {
+        let encoder = beginRenderPass(descriptor)
+        let callbackEncoder = encoder
+        body(move callbackEncoder)
+        endPass()
+    }
+
+    function beginPass(clearColor: borrow RGBAColor) -> RenderEncoder {
+        return beginRenderPass(clearSwapchainRenderPass(clearColor))
+    }
+
+    function pass(clearColor: borrow RGBAColor, body: (RenderEncoder) -> Void) {
+        renderPass(clearSwapchainRenderPass(clearColor), move body)
+    }
+
+    function requestQuit() {
+        self.shouldQuit = true
+    }
+}

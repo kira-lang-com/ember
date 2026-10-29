@@ -1,0 +1,238 @@
+import Heap
+
+// Metal texture and sampler resources, built from Objective-C messages via FFI and
+// registered in the context's id->pointer table.
+
+// Create an RGBA8 sampled texture (shared storage so pixels can be uploaded from
+// the CPU) and register it.
+public function metalCreateTexture(ctx: RawPtr, width: Number, height: Number) -> Number? {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let descClass = metalObjcGetClass("MTLTextureDescriptor")
+    let desc: RawPtr = metalMsgSend(
+        descClass,
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        MetalTexture.pixelFormatRGBA8Unorm,
+        width,
+        height,
+        false
+    )
+    metalMsgSend(desc, metalSel("setUsage:"), MetalTexture.textureUsageShaderRead)
+    metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModeShared)
+    let texture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+    return metalRegisterNew(ctx, texture)
+}
+
+// The `GraphicsTexture` the public API hands back, so a caller never learns
+// which backend minted the id. Metal has one object where sokol has an image
+// and separate views onto it, so the view fields repeat the texture rather than
+// sit at zero: code that reads `viewId` gets something that works on both.
+//
+// The extent travels with the texture, as it does on the other backend: a pass
+// sized to this target, a managed depth buffer matched to it and a whole-image
+// upload into it all need the numbers, and asking Metal for them later means an
+// Objective-C round trip for something the caller just said.
+public function metalGraphicsTexture(
+    textureId: Number,
+    descriptor: borrow TextureDescriptor
+) -> GraphicsTexture {
+    let id = U32(textureId)
+    return GraphicsTexture {
+        id: TextureId(id),
+        viewId: ViewId(id),
+        colorViewId: ViewId(id),
+        depthViewId: ViewId(id),
+        storageViewId: ViewId(id),
+        width: descriptor.width,
+        height: descriptor.height
+    }
+}
+
+// Render-target-capable and sampled, in the requested format — what a
+// multi-pass renderer needs, e.g. the deferred-resolve visibility texture. The
+// format and extent were already checked by the caller, so the device declining
+// is the only way this fails.
+public function metalCreateGraphicsTexture(
+    ctx: RawPtr,
+    descriptor: borrow TextureDescriptor
+) -> TextureResult {
+    return match metalCreateColorTargetTexture(ctx, descriptor) {
+        Some(id) -> .Ok(metalGraphicsTexture(id, descriptor))
+        None -> .Error(.DeviceRefused)
+    }
+}
+
+// Create a sampled texture and give it its pixels.
+//
+// The upload needs the CPU-writable linear rows a shared-storage texture has,
+// and every later sample would keep paying for that layout — so one blit
+// re-tiles it afterwards, which is the right trade for contents loaded once.
+public function metalCreateGraphicsTextureFromPixels(
+    ctx: RawPtr,
+    descriptor: borrow TextureDescriptor,
+    pixels: borrow[U8]
+) -> TextureResult {
+    let textureId = match metalCreateTexture(ctx, descriptor.width, descriptor.height) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    let texture = metalGraphicsTexture(textureId, descriptor)
+    metalUpdateTexture(ctx, texture, pixels)
+    metalOptimizeTextureForGpu(ctx, textureId)
+    return .Ok(move texture)
+}
+
+// The rows of an image that changed: `count` of them from `first`.
+public struct MetalRowRange {
+    var first: UNumber = 0
+    var count: UNumber = 0
+}
+
+// Replaces `rows` of `texture` with the same rows of the whole image at
+// `image`. `replaceRegion:` reads the region's first row from where it is
+// handed, so the address is moved down to that row first.
+function metalReplaceRows(
+    ctx: RawPtr,
+    texture: borrow GraphicsTexture,
+    image: RawPtr,
+    rows: borrow MetalRowRange
+) {
+    let bytesPerRow = texture.width * UN32(sizeOf<U32>())
+    let region = boxed<MetalRegion>(
+        MetalRegion { y: U64(rows.first), width: U64(texture.width), height: U64(rows.count) }
+    )
+    // The row's address: written as a pointer, read back as a word, moved, and
+    // read as a pointer again.
+    let slot = metalMemAlloc(U64(sizeOf<RawPtr>()))
+    metalMemWritePtr(slot, 0, image)
+    metalMemWriteU64(slot, 0, metalMemReadU64(slot, 0) + U64(rows.first * bytesPerRow))
+    let start = metalMemReadPtr(slot, 0)
+    metalMsgSend(
+        metalLookup(ctx, texture.id.raw),
+        metalSel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
+        region.pointer(),
+        0,
+        start,
+        bytesPerRow
+    )
+    metalMemFree(slot)
+}
+
+// Replace a texture's pixels (RGBA8, row-major) with `data`, leaving it
+// CPU-writable for the next write.
+//
+// No re-tiling here, unlike the create path: a texture being updated is one
+// that will be updated again — a glyph atlas — and optimizing it would undo the
+// linear layout the next upload needs.
+public function metalUpdateTexture(ctx: RawPtr, texture: borrow GraphicsTexture, data: borrow[U8]) {
+    let bytes = metalMemAlloc(data.count)
+    for (index, byte) in data.enumerated() {
+        metalMemWriteU8(bytes, index, byte)
+    }
+    metalReplaceRows(ctx, texture, bytes, MetalRowRange { count: texture.height })
+    metalMemFree(bytes)
+}
+
+// Replace a texture's contents from raw memory the caller already owns.
+//
+// The bytes go straight to `replaceRegion:` — nothing is staged, because the
+// caller's block is already C storage. That is the whole reason the API takes a
+// pointer rather than a Kira array: the one texture written this way is a glyph
+// atlas, whose CPU side has to exist anyway so a new glyph can be packed beside
+// the old ones, and copying it into an array to hand it back would cost a
+// megabyte-scale loop on every frame that adds a glyph.
+public function metalUpdateTextureBytes(
+    ctx: RawPtr,
+    texture: borrow GraphicsTexture,
+    bytes: RawPtr,
+    byteCount: UNumber
+) {
+    if texture.id == 0 || byteCount == 0 || texture.width == 0 || texture.height == 0 {
+        return
+    }
+    metalReplaceRows(ctx, texture, bytes, MetalRowRange { count: texture.height })
+}
+
+// Replace `rows` of a texture, out of the whole image at `bytes`.
+public function metalUpdateTextureRows(
+    ctx: RawPtr,
+    texture: borrow GraphicsTexture,
+    bytes: RawPtr,
+    rows: borrow MetalRowRange
+) {
+    if texture.id == 0 || texture.width == 0 || rows.count == 0 || rows.first + rows.count > texture.height {
+        return
+    }
+    metalReplaceRows(ctx, texture, bytes, rows)
+}
+
+// Re-tile a sampled texture's contents into the GPU-optimal layout. A
+// shared-storage texture keeps the CPU-writable linear rows `replaceRegion:`
+// needs, and every sample of it pays for that layout. After the last CPU
+// upload, one blit pass lets Metal re-lay the pixels out (and losslessly
+// compress them on Apple GPUs). One-shot and synchronous, so a caller can
+// treat the upload as complete when this returns; wrong for textures that
+// keep taking CPU writes, like the glyph atlas.
+public function metalOptimizeTextureForGpu(ctx: RawPtr, textureId: Number) {
+    let texture = metalLookup(ctx, textureId)
+    let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
+    let commandBuffer: RawPtr = metalMsgSend(queue, metalSel("commandBuffer"))
+    let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
+    metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), texture)
+    metalMsgSend(blit, metalSel("endEncoding"))
+    metalMsgSend(commandBuffer, metalSel("commit"))
+    metalMsgSend(commandBuffer, metalSel("waitUntilCompleted"))
+}
+
+// As metalOptimizeTextureForGpu, but encoded on the FRAME's active command
+// buffer, ordered after whatever the frame already encoded — the shape a
+// mid-frame producer (the blur compute) needs, where a separate committed
+// buffer would race the uncommitted writes it must follow.
+public function metalContextOptimizeTextureInFrame(ctx: RawPtr, textureId: Number) {
+    let commandBuffer = metalContextActiveCommandBuffer(ctx)
+    let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
+    metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), metalLookup(ctx, textureId))
+    metalMsgSend(blit, metalSel("endEncoding"))
+}
+
+// Create an MTLSamplerState with the given min/mag filters and address mode.
+public function metalCreateSampler(
+    ctx: RawPtr,
+    minFilter: U64,
+    magFilter: U64,
+    addressMode: U64
+) -> Number? {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let descClass = metalObjcGetClass("MTLSamplerDescriptor")
+    let desc: RawPtr = metalMsgSend(metalMsgSend(descClass, metalSel("alloc")), metalSel("init"))
+    metalMsgSend(desc, metalSel("setMinFilter:"), minFilter)
+    metalMsgSend(desc, metalSel("setMagFilter:"), magFilter)
+    metalMsgSend(desc, metalSel("setSAddressMode:"), addressMode)
+    metalMsgSend(desc, metalSel("setTAddressMode:"), addressMode)
+    let sampler: RawPtr = metalMsgSend(device, metalSel("newSamplerStateWithDescriptor:"), desc)
+    // The descriptor is a +1-owned alloc/init temporary; the sampler state does not
+    // retain it, so release it here rather than leaking one per sampler.
+    metalMsgSend(desc, metalSel("release"))
+    return metalRegisterNew(ctx, sampler)
+}
+
+// Bind a texture / sampler to a fragment-shader slot on the active encoder.
+public function metalEncoderBindFragmentTexture(ctx: RawPtr, textureId: Number, index: Number) {
+    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+    let texture = metalLookup(ctx, textureId)
+    metalMsgSend(encoder, metalSel("setFragmentTexture:atIndex:"), texture, index)
+}
+
+public function metalEncoderBindFragmentSampler(ctx: RawPtr, samplerId: Number, index: Number) {
+    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+    let sampler = metalLookup(ctx, samplerId)
+    metalMsgSend(encoder, metalSel("setFragmentSamplerState:atIndex:"), sampler, index)
+}
+
+public namespace MetalTexture {
+    let pixelFormatRGBA8Unorm: U64 = 70
+    let textureUsageShaderRead: U64 = 1
+    let textureUsageShaderWrite: U64 = 2
+    let samplerFilterNearest: U64 = 0
+    let samplerFilterLinear: U64 = 1
+    let samplerAddressClampToEdge: U64 = 0
+}

@@ -1,0 +1,118 @@
+import Foundation
+import Heap
+
+// Everything a Vulkan run created, destroyed in the reverse of the order it
+// was made: the objects that reference a device before the device, and the
+// device before the instance it came from.
+
+function vulkanDestroyShaders(state: borrow mut VulkanState) {
+    for shader in state.shaders {
+        if !shader.live {
+            continue
+        }
+        if !isNull(shader.vertexModule) {
+            vkDestroyShaderModule(state.device, shader.vertexModule, nullPointer())
+        }
+        if !isNull(shader.fragmentModule) {
+            vkDestroyShaderModule(state.device, shader.fragmentModule, nullPointer())
+        }
+        if !isNull(shader.computeModule) {
+            vkDestroyShaderModule(state.device, shader.computeModule, nullPointer())
+        }
+    }
+    state.shaders = []
+}
+
+function vulkanDestroyPipelines(state: borrow mut VulkanState) {
+    for pipeline in state.pipelines {
+        if !pipeline.live {
+            continue
+        }
+        vkDestroyPipeline(state.device, pipeline.pipeline, nullPointer())
+        vkDestroyPipelineLayout(state.device, pipeline.layout, nullPointer())
+        for layout in pipeline.groupLayouts {
+            vkDestroyDescriptorSetLayout(state.device, layout, nullPointer())
+        }
+    }
+    state.pipelines = []
+}
+
+// Every registered object. Views reference their images, so every view goes
+// before any image.
+function vulkanDestroyObjects(state: borrow mut VulkanState) {
+    for entry in state.objects {
+        match entry {
+            Some(object) -> if object.kind == .ImageView { vulkanDestroyObject(state, object) }
+            None -> {}
+        }
+    }
+    for entry in state.objects {
+        match entry {
+            Some(object) -> if object.kind != .ImageView { vulkanDestroyObject(state, object) }
+            None -> {}
+        }
+    }
+    state.objects = []
+}
+
+// The pools and the frame's synchronization, then the swapchain they served.
+function vulkanDestroyFrameResources(state: borrow mut VulkanState) {
+    vulkanDestroyGpuTiming(state)
+    if !isNull(state.descriptorPool) {
+        vkDestroyDescriptorPool(state.device, state.descriptorPool, nullPointer())
+        state.descriptorPool = nullPointer()
+    }
+    if !isNull(state.inFlightFence) {
+        vkDestroyFence(state.device, state.inFlightFence, nullPointer())
+        state.inFlightFence = nullPointer()
+    }
+    if !isNull(state.imageAvailable) {
+        vkDestroySemaphore(state.device, state.imageAvailable, nullPointer())
+        state.imageAvailable = nullPointer()
+    }
+    vulkanDestroySwapchain(state)
+    if !isNull(state.commandPool) {
+        vkDestroyCommandPool(state.device, state.commandPool, nullPointer())
+        state.commandPool = nullPointer()
+    }
+}
+
+// The surface, the device and the instance, in the order each was made from
+// the next.
+function vulkanDestroyDevice(state: borrow mut VulkanState) {
+    if !isNull(state.surface) {
+        vulkanDestroySurface(state.instance, state.surface)
+        state.surface = nullPointer()
+    }
+    if !isNull(state.device) {
+        vkDestroyDevice(state.device, nullPointer())
+        state.device = nullPointer()
+    }
+    if !isNull(state.instance) {
+        vkDestroyInstance(state.instance, nullPointer())
+        state.instance = nullPointer()
+    }
+}
+
+function vulkanCloseWindow(state: borrow mut VulkanState) {
+    if !isNull(state.window) {
+        vulkanWindowFor(vulkanWindowPlatformForHost()).close(state.window)
+        state.window = nullPointer()
+    }
+    if !isNull(state.messageBlock) {
+        deallocate(state.messageBlock)
+        state.messageBlock = nullPointer()
+    }
+}
+
+public function vulkanShutdownState(state: borrow mut VulkanState) {
+    if !isNull(state.instance) {
+        vulkanSettleDevice(state, "the device")
+        vulkanDestroyShaders(state)
+        vulkanDestroyPipelines(state)
+        vulkanDestroyObjects(state)
+        vulkanDestroyFrameResources(state)
+        vulkanDestroyDevice(state)
+    }
+    vulkanCloseWindow(state)
+}

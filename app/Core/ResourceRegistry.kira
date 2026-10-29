@@ -1,0 +1,10 @@
+// Counters for how many of each kind of resource a run has made.
+//
+// Carried on the runtime state so a HUD can read them without walking a backend's
+// own tables, and because the number a caller wants is "how much of this have I
+// created", not a list of what.
+public struct ResourceRegistry {
+    var createdShaders: UNumber = 0
+    var createdPipelines: UNumber = 0
+    var createdBuffers: UNumber = 0
+}

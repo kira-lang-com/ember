@@ -1,0 +1,52 @@
+// The launch settings a harness gives a run: which frame to read back, where to
+// write it, when to quit, and any scripted input.
+//
+// These were environment variables read once at init — KIRA_GRAPHICS_CAPTURE_FRAME,
+// KIRA_GRAPHICS_CAPTURE_AT, KIRA_GRAPHICS_QUIT_AFTER_FRAMES, KIRA_GRAPHICS_RESIZE_SWEEP,
+// KIRA_GRAPHICS_LOG_FPS, KIRA_GRAPHICS_SCALE, KIRA_GRAPHICS_HEADLESS, and the
+// KIRA_UI_*_SCRIPT family. A caller that builds one
+// hands the run its settings directly; a run given none reads the environment as
+// before, so a driven run and an environment-driven run resolve to the same knobs.
+public struct HarnessConfig {
+    var quitAfterFrames: UNumber = 0
+    var resizeSweep: UNumber = 0
+    var logFps: Bool = false
+    // The pixels the window draws for each point, where the run fixes them
+    // rather than the display: 3 draws a phone's 3x screen on a 1x display.
+    // Zero leaves them to the display.
+    var scale: UNumber = 0
+    // Run with no window: the application draws into an offscreen image the
+    // size of the window it asked for, which a capture reads back. What lets a
+    // session with no display show what a frame contained.
+    var headless: Bool = false
+    var capture: FrameCapture? = .None
+    var video: VideoCapture? = .None
+    var script: InputScript = InputScript()
+}
+
+// A frame to read back and the file to write it to. A frame left unset takes
+// the last one drawn — the frame the run quits after — so a settle-then-shoot
+// needs only a frame count and a path.
+public struct FrameCapture {
+    var path: String = ""
+    var frame: UNumber? = .None
+}
+
+// A run of frames to encode into one H.264 MP4 at `path`, rather than one image
+// file per frame: a few seconds of a 3x phone screen as PPMs is gigabytes.
+// Frames are counted as `FrameCapture` counts them, from 1. A last frame left
+// unset runs to the frame the run quits after.
+public struct VideoCapture {
+    var path: String = ""
+    var firstFrame: UNumber = 1
+    var lastFrame: UNumber? = .None
+    // The frames per second it plays back at: the run's fixed frame rate,
+    // where it has one, so a second of video is a second of the run.
+    var frameRate: UNumber = 60
+    // The part of the frame it keeps, in physical pixels. A zero size keeps
+    // the whole frame.
+    var cropX: UNumber = 0
+    var cropY: UNumber = 0
+    var cropWidth: UNumber = 0
+    var cropHeight: UNumber = 0
+}

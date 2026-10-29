@@ -1,0 +1,66 @@
+import Foundation
+
+// Single-group KSL shaders number resources globally, while the portable encoder
+// partitions those resources across slots. Several shader groups retain their
+// slot-per-group interpretation; only one shader group combines the slots.
+
+// Every slot's entries, as one group.
+function vulkanMergeBindings(groups: borrow[BindGroup?]) -> BindGroupState {
+    var merged = BindGroupState()
+    for slot in groups {
+        match slot {
+            Some(group) -> {
+                let source = nativeRecover<BindGroupState>(group.storage)
+                for entry in source.uniformEntries { merged.uniformEntries.append(entry) }
+                for entry in source.textureEntries { merged.textureEntries.append(entry) }
+                for entry in source.samplerEntries { merged.samplerEntries.append(entry) }
+                for entry in source.storageEntries { merged.storageEntries.append(entry) }
+            }
+            None -> {}
+        }
+    }
+    return merged
+}
+
+// Whether the merged slots supply each binding the shader reads at most once.
+function vulkanSuppliedOnce(
+    group: borrow BindGroupState,
+    reflection: borrow KslResourceReflection
+) -> Result<Void, VulkanBindingFailure> {
+    for item in vulkanGroupBindings(reflection, 0) {
+        if vulkanSuppliedCount(group, item) > 1 {
+            return .Error(.SuppliedTwice(item.binding))
+        }
+    }
+    return .Ok
+}
+
+function vulkanSuppliedCount(
+    group: borrow BindGroupState,
+    item: borrow VulkanReflectedBinding
+) -> UNumber {
+    var count: UNumber = 0
+    match item.kind {
+        UniformBuffer -> for entry in group.uniformEntries {
+            if entry.uniformSlot == item.binding { count += 1 }
+        }
+        StorageBuffer -> for entry in group.storageEntries {
+            if entry.storageSlot == item.binding { count += 1 }
+        }
+        Sampler -> for entry in group.samplerEntries {
+            if entry.samplerSlot == item.binding { count += 1 }
+        }
+        SampledImage -> count = vulkanTextureBindingCount(group, item.binding)
+        StorageImage -> count = vulkanTextureBindingCount(group, item.binding)
+        CombinedImageSampler -> count = vulkanTextureBindingCount(group, item.binding)
+    }
+    return count
+}
+
+function vulkanTextureBindingCount(group: borrow BindGroupState, binding: UNumber) -> UNumber {
+    var count: UNumber = 0
+    for entry in group.textureEntries {
+        if entry.textureSlot == binding { count += 1 }
+    }
+    return count
+}

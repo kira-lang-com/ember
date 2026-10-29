@@ -1,0 +1,119 @@
+import Ember
+import Foundation
+
+namespace Triangle {
+    let vertexCount: UN32 = 3
+    // Two floats a vertex.
+    let stride: UN32 = 8
+}
+
+function triangleVertices() -> [Number] {
+    return [0.0, 0.55, 0.55, -0.55, -0.55, -0.55]
+}
+
+function triangleVertexLayout() -> VertexLayout {
+    return VertexLayout {
+        stride: Triangle.stride,
+        attributes: [VertexAttribute { name: "position", format: .Float2 }]
+    }
+}
+
+// What the frame draws with, made once at init and destroyed at cleanup.
+struct TriangleResources {
+    var shader: GraphicsShader
+    var pipeline: RenderPipeline
+    var vertices: GraphicsBuffer
+}
+
+// None until init has made the resources, and None for good when it could not:
+// a frame then clears and draws nothing.
+struct TriangleState {
+    var resources: TriangleResources? = .None
+}
+
+function trianglePipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "basic-triangle-pipeline",
+        shader: copy shader,
+        vertexLayout: triangleVertexLayout(),
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+    }
+}
+
+function triangleResources(
+    graphics: borrow Graphics
+) -> Result<TriangleResources, ResourceFailure> {
+    let shader = match graphics.createShaderFromKsl(
+        KslShaderDescriptor {
+            label: "basic-triangle-shader",
+            asset: "BasicTriangle",
+            directory: "generated/Shaders"
+        }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "basic-triangle-vertices", data: triangleVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(trianglePipeline(shader)) {
+        Ok(pipeline) -> .Ok(
+            TriangleResources { shader: shader, pipeline: pipeline, vertices: vertices }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function triangleInit(graphics: Graphics) {
+    var state = nativeRecover<TriangleState>(graphics.userData)
+    match triangleResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the triangle", move failure)
+    }
+}
+
+function triangleFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<TriangleState>(frame.userData)
+    let encoder = frame.beginRenderPass(
+        clearSwapchainRenderPass(RGBAColor { r: 0.04, g: 0.05, b: 0.08 })
+    )
+    match state.resources {
+        Some(resources) -> {
+            encoder.setPipeline(resources.pipeline)
+            encoder.setVertexBuffer(resources.vertices)
+            encoder.draw(Triangle.vertexCount)
+        }
+        None -> {}
+    }
+    frame.endPass()
+}
+
+function triangleCleanup(graphics: Graphics) {
+    let state = nativeRecover<TriangleState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            graphics.destroyBuffer(resources.vertices)
+            graphics.destroyRenderPipeline(resources.pipeline)
+            graphics.destroyShader(copy resources.shader)
+        }
+        None -> {}
+    }
+}
+
+@Main
+function main() {
+    var app = GraphicsApplication {
+        title: "Ember Basic Triangle",
+        width: 640,
+        height: 480,
+        sampleCount: 1,
+        initHandler: triangleInit,
+        frameHandler: triangleFrame,
+        cleanupHandler: triangleCleanup
+    }
+    app.run(nativeUserData(nativeState(TriangleState())))
+}

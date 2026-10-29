@@ -1,0 +1,95 @@
+import Foundation
+import ArgumentParser
+
+// `kg` — the Ember command line. What a graphics run needs from the
+// outside, as typed commands rather than the environment variables these used to
+// be: turn a captured frame into something viewable, and say which backends a
+// build can render with.
+
+@Derive(Parsable)
+struct PngArguments {
+    let input: String
+    let output: String
+}
+
+construct PngCommand() extends ParsableCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "png",
+            abstract: "Convert a captured frame (binary PPM) to a PNG"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return[argument(name: "input", help: "The captured .ppm to read"), argument(
+            name: "output",
+            help: "The .png to write"
+        )]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        let parsed = parse_PngArguments(arguments)
+        match convertPpmFileToPng(parsed.input, parsed.output) {
+            Ok -> {
+                print("wrote \(parsed.output)")
+                return ExitCode.success
+            }
+            Error(failure) -> {
+                log warn("could not convert the PPM to a PNG", parsed.input, parsed.output, failure)
+                return ExitCode.failure
+            }
+        }
+    }
+}
+
+// What `kg` answers its shell.
+namespace ExitCode {
+    let success: Number = 0
+    let failure: Number = 1
+}
+
+construct BackendsCommand() extends ParsableCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "backends",
+            abstract: "List the render backends a build can select"
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return[]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        print("metal  — native Metal, Apple platforms")
+        print("vulkan — native Vulkan, Windows and Linux")
+        print("dawn   — WebGPU, Windows/Linux/Apple/Web")
+        print("The host picks one unless a run names it.")
+        return ExitCode.success
+    }
+}
+
+construct RootCommand() extends ParsableCommand {
+    let configuration: CommandConfiguration {
+        return CommandConfiguration(
+            name: "kg",
+            abstract: "Ember command line",
+            subcommands: ["png", "backends"]
+        )
+    }
+
+    let arguments: [ArgumentSpec] {
+        return[]
+    }
+
+    function run(arguments: borrow ParsedArguments) -> Number {
+        return ExitCode.success
+    }
+}
+
+@Main
+function main() {
+    let root = RootCommand()
+    let children: [Any ParsableCommand] = [PngCommand(), BackendsCommand()]
+    runCommandRouter(root, children, commandLineArguments())
+}

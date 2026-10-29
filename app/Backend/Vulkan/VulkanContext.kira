@@ -1,0 +1,287 @@
+import Foundation
+import Heap
+
+// The Vulkan state owned by one graphics run.
+//
+// Vulkan handles stay behind this state rather than on public Kira values. A
+// public id is one more than a slot in `objects`.
+public struct VulkanState {
+    var window: RawPtr = nullPointer()
+    var messageBlock: RawPtr = nullPointer()
+    var instance: RawPtr = nullPointer()
+    var physicalDevice: RawPtr = nullPointer()
+    var device: RawPtr = nullPointer()
+    var queue: RawPtr = nullPointer()
+    var surface: RawPtr = nullPointer()
+    var swapchain: RawPtr = nullPointer()
+    // Which trace areas this backend prints. Read from the environment as the state
+    // is built, so a trace site here needs no second parameter and no call site
+    // has to thread it — and so a device built before the gates were thought
+    // about still answers to `EMBER_LOG_*` when it is set.
+    var tracing: TraceGates = traceGatesFromEnvironment()
+    var commandPool: RawPtr = nullPointer()
+    var commandBuffer: RawPtr = nullPointer()
+    var imageAvailable: RawPtr = nullPointer()
+    var inFlightFence: RawPtr = nullPointer()
+    var descriptorPool: RawPtr = nullPointer()
+    var queueFamilyIndex: U32 = 0
+    var swapchainWidth: UNumber = 0
+    var swapchainHeight: UNumber = 0
+    var swapchainFormat: I32 = 0
+    var captureSupported: Bool = false
+    // A run with no window: one offscreen image stands where the swapchain's
+    // images would (see VulkanHeadlessRun.kira).
+    var headless: Bool = false
+    var swapchainImages: [RawPtr] = []
+    var swapchainViews: [RawPtr] = []
+    var swapchainPresentSemaphores: [RawPtr] = []
+    var swapchainLayouts: [VulkanImageLayout] = []
+    var currentImageIndex: U32 = 0
+    var frameActive: Bool = false
+    var acquired: Bool = false
+    var acquireWaitPending: Bool = false
+    var presentedThisFrame: Bool = false
+    var input: WindowInput = WindowInput()
+    var mouseVisible: Bool = true
+    var mouseLocked: Bool = false
+    var passActive: Bool = false
+    var passWidth: UN32 = 0
+    var passHeight: UN32 = 0
+    var passColorImage: RawPtr = nullPointer()
+    var passResolveImage: RawPtr = nullPointer()
+    var passSampleCount: UNumber = 1
+    var passIsSwapchain: Bool = false
+    var managedDepth: VulkanManagedDepth? = .None
+    var objects: [VulkanObject?] = []
+    var shaders: [VulkanShaderRecord] = []
+    var pipelines: [VulkanPipelineRecord] = []
+    var allocatedBytes: UNumber = 0
+    var resourceCount: UNumber = 0
+    var dynamicFrame: UNumber = 0
+    var frameStartedAt: UNumber = 0
+    var pendingUploadBuffers: [U32] = []
+    // Texture upload staging, read by the frame in flight, then kept for the
+    // next upload that fits (`VulkanStaging.kira`).
+    var pendingStaging: [U32] = []
+    var freeStaging: [U32] = []
+    // What `vulkanReadTextureRows` reads through, once made.
+    var rowsStaging: U32 = U32(0)
+    // The blur's extent uniforms, one for each two-pass dispatch of a frame,
+    // written again each frame rather than made and released: on a
+    // paravirtual GPU a new host-visible buffer is mapped into the guest,
+    // which took 60-85 ms a frame under QEMU. The count used starts again
+    // once the frame that read them is waited out (`vulkanRetireFrame`).
+    var blurExtents: [U32] = []
+    var blurExtentsUsed: Number = 0
+    var pendingRetireObjects: [U32] = []
+    var pendingRetirePipelines: [Number] = []
+    var initialized: Bool = false
+    var announcedFramePresented: Bool = false
+    var quitRequested: Bool = false
+    var stats: FrameStatistics = FrameStatistics()
+    var framePassCount: UNumber = 0
+    var frameDrawCount: UNumber = 0
+    var frameTriangleCount: UNumber = 0
+    var gpuTiming: VulkanGpuTiming = VulkanGpuTiming()
+    // Whether each format renders into a linear image, as the device first
+    // answered: under venus every question is a round trip to the host.
+    var rendersLinear: Map<Number, Bool> = Map {}
+}
+
+public struct VulkanShaderRecord {
+    var vertexModule: RawPtr = nullPointer()
+    var fragmentModule: RawPtr = nullPointer()
+    var computeModule: RawPtr = nullPointer()
+    var vertexEntry: String = ""
+    var fragmentEntry: String = ""
+    var computeEntry: String = ""
+    var reflection: KslResourceReflection = KslResourceReflection()
+    var live: Bool = false
+}
+
+public struct VulkanPipelineRecord {
+    var pipeline: RawPtr = nullPointer()
+    var layout: RawPtr = nullPointer()
+    var groupLayouts: [RawPtr] = []
+    var groupCount: UNumber = 0
+    var reflection: KslResourceReflection = KslResourceReflection()
+    var sampleCount: UNumber = 1
+    var compute: Bool = false
+    var live: Bool = false
+}
+
+public function vulkanHasDevice(context: RawPtr) -> Bool {
+    if isNull(context) {
+        return false
+    }
+    return !isNull(nativeRecover<GraphicsRuntimeState>(context).vulkan.device)
+}
+
+// `vulkanHasDevice` for an operation that cannot proceed without one: a missing
+// device is reported against the operation that needed it.
+public function vulkanRequireDevice(context: RawPtr, operation: String) -> Bool {
+    if vulkanHasDevice(context) { return true }
+    log fault(
+        "an operation needs a Vulkan device that was never created or is already shut down",
+        operation: operation,
+        context: !isNull(context)
+    )
+    return false
+}
+
+public function vulkanShaderRecord(state: borrow VulkanState, id: U32) -> VulkanShaderRecord {
+    let slot = Number(id) - 1
+    if slot < 0 || slot >= state.shaders.count {
+        return VulkanShaderRecord()
+    }
+    return state.shaders[slot]
+}
+
+public enum VulkanObjectKind {
+    Buffer
+    Image
+    ImageView
+    Sampler
+}
+
+// One live object behind a public id, and what using or releasing it needs.
+public struct VulkanObject {
+    var kind: VulkanObjectKind = .Buffer
+    var handle: RawPtr = nullPointer()
+    // The memory a buffer or image is bound to, freed with it.
+    var memory: RawPtr? = .None
+    // Where a host-visible buffer's memory is mapped.
+    var mapped: RawPtr? = .None
+    // The bytes asked for, and the bytes the driver allocated for them.
+    var size: UNumber = 0
+    var allocationSize: UNumber = 0
+    // The bytes one dynamic slot of a buffer spans, and the slot in use.
+    var stride: UNumber = 0
+    var offset: UNumber = 0
+    var format: I32 = 0
+    // The layout an image is in, as the last recorded transition left it.
+    var layout: VulkanImageLayout = .Undefined
+}
+
+public function vulkanObjectRecord(state: borrow VulkanState, id: U32) -> VulkanObject? {
+    let slot = Number(id) - 1
+    if slot < 0 || slot >= state.objects.count {
+        return .None
+    }
+    return state.objects[slot]
+}
+
+// The object's handle, or `VK_NULL_HANDLE` where the id names none: the value
+// Vulkan itself takes for "no object".
+public function vulkanObject(state: borrow VulkanState, id: U32) -> RawPtr {
+    return match vulkanObjectRecord(state, id) {
+        Some(object) -> object.handle
+        None -> nullPointer()
+    }
+}
+
+public function vulkanObjectMapped(state: borrow VulkanState, id: U32) -> RawPtr? {
+    return match vulkanObjectRecord(state, id) {
+        Some(object) -> object.mapped
+        None -> .None
+    }
+}
+
+// The record behind `id`, for a caller that has already checked the id is
+// live; a stale one reads as an empty object.
+function vulkanLiveObject(state: borrow VulkanState, id: U32) -> VulkanObject {
+    return match vulkanObjectRecord(state, id) {
+        Some(object) -> object
+        None -> VulkanObject()
+    }
+}
+
+public function vulkanObjectOffset(state: borrow VulkanState, id: U32) -> UNumber {
+    return vulkanLiveObject(state, id).offset
+}
+
+public function vulkanObjectFormat(state: borrow VulkanState, id: U32) -> I32 {
+    return vulkanLiveObject(state, id).format
+}
+
+public function vulkanObjectSize(state: borrow VulkanState, id: U32) -> UNumber {
+    return vulkanLiveObject(state, id).size
+}
+
+public function vulkanObjectStride(state: borrow VulkanState, id: U32) -> UNumber {
+    return vulkanLiveObject(state, id).stride
+}
+
+// The first slot a released object left empty.
+function vulkanFreeSlot(state: borrow VulkanState) -> UNumber? {
+    for slot in 0..state.objects.count {
+        match state.objects[slot] {
+            Some(_) -> {}
+            None -> return .Some(slot)
+        }
+    }
+    return .None
+}
+
+// `object` given an id. Its handle is live: a failed create never reaches here.
+public function vulkanRegisterObject(state: borrow mut VulkanState, object: VulkanObject) -> U32 {
+    state.resourceCount = state.resourceCount + 1
+    state.allocatedBytes = state.allocatedBytes + object.allocationSize
+    match vulkanFreeSlot(state) {
+        Some(slot) -> {
+            state.objects[slot] = .Some(object)
+            return U32(slot + 1)
+        }
+        None -> {
+            state.objects.append(.Some(object))
+            return U32(state.objects.count)
+        }
+    }
+}
+
+// `object` stored back over the record `id` names, where it is still live.
+function vulkanReplaceObject(state: borrow mut VulkanState, id: U32, object: VulkanObject) {
+    let slot = Number(id) - 1
+    if slot < 0 || slot >= state.objects.count {
+        return
+    }
+    match state.objects[slot] {
+        Some(_) -> state.objects[slot] = .Some(object)
+        // A stale id has no record left to change.
+        None -> {}
+    }
+}
+
+public function vulkanSetObjectOffset(state: borrow mut VulkanState, id: U32, offset: UNumber) {
+    var object = vulkanLiveObject(state, id)
+    object.offset = offset
+    vulkanReplaceObject(state, id, move object)
+}
+
+public function vulkanSetObjectStride(state: borrow mut VulkanState, id: U32, stride: UNumber) {
+    var object = vulkanLiveObject(state, id)
+    object.stride = stride
+    vulkanReplaceObject(state, id, move object)
+}
+
+public function vulkanSetObjectLayout(
+    state: borrow mut VulkanState,
+    id: U32,
+    layout: VulkanImageLayout
+) {
+    var object = vulkanLiveObject(state, id)
+    object.layout = layout
+    vulkanReplaceObject(state, id, move object)
+}
+
+public function vulkanForgetObject(state: borrow mut VulkanState, id: U32) {
+    match vulkanObjectRecord(state, id) {
+        Some(object) -> {
+            state.allocatedBytes = state.allocatedBytes - object.allocationSize
+            state.resourceCount = state.resourceCount - 1
+            state.objects[Number(id) - 1] = .None
+        }
+        // Already released: forgetting it twice changes nothing.
+        None -> {}
+    }
+}

@@ -1,0 +1,270 @@
+import Foundation
+import Heap
+
+// One on-screen Metal frame, from scripted input to pacing.
+//
+// Split from MetalApplication.kira, which opens the window and owns the loop
+// that calls this once a frame.
+
+// The benchmark an on-screen run collects when KIRA_METAL_ONSCREEN_BENCH=N asks
+// for one: N frames measured after a short warmup, on this same visible,
+// presenting loop, summarised at exit (metalBenchReport).
+public struct MetalOnScreenBench {
+    var frames: Number = 0
+    var warmup: Number = 30
+    var frameNs: [Number] = []
+    var cpuNs: [Number] = []
+    var gpuNs: [Number] = []
+}
+
+// Everything an on-screen run carries from one frame to the next.
+public struct MetalWindowRun {
+    var ctx: RawPtr = nullPointer()
+    var view: RawPtr = nullPointer()
+    var nsApp: RawPtr = nullPointer()
+    var hostWindow: RawPtr = nullPointer()
+    var liveHandle: RawPtr = nullPointer()
+    var userData: RawPtr = nullPointer()
+    // The window-resize delegate that renders during a drag, taken off the
+    // window when the run ends.
+    var resizeDelegate: RawPtr? = .None
+    // The autorelease pool around the whole run, drained by its cleanup.
+    var pool: RawPtr = nullPointer()
+    var knobs: HarnessKnobs = HarnessKnobs()
+    var swipes: [ScriptedSwipe] = []
+    var resizes: [ScriptedResize] = []
+    // The frame about to be drawn, counted from 0 like every input script.
+    var frameIndex: Number = 0
+    // Deterministic shutdown for the real AppKit/CAMetalLayer path. This keeps
+    // on-screen dump and leak probes bounded instead of leaving an orphaned
+    // `main` process rendering forever after its launching shell exits.
+    var frameLimit: Number = 0
+    var liveFramePresented: Bool = false
+    // A visible window is paced by its layer, which presents on the display's
+    // beat (see `metalContextAttachLayer`); the loop adds no limiter of its
+    // own. An app that genuinely wants a cadence sets `targetFrameDurationNs`.
+    var framePacingNs: UNumber = 0
+    var nextFrameDeadlineNs: UNumber = 0
+    // On-screen visual proof: the destination path for the raw BGRA8 bytes of
+    // the drawable this loop presented. A window's own pixels are the only
+    // thing that settles "it renders" for a session that cannot look at the
+    // screen. Each frame overwrites the last.
+    var dumpPath: String? = .None
+    // Per-frame trace for the ON-SCREEN loop, the counterpart of the
+    // benchmark's KIRA_METAL_BENCH_DETAIL: only this measures what a window
+    // does.
+    var traced: Bool = false
+    var bench: MetalOnScreenBench = MetalOnScreenBench()
+    // Deterministic scheduler verification: a test forces one of the window
+    // states without having to automate Finder. `.Untracked` is "not
+    // overridden".
+    var windowStateOverride: WindowState = .Untracked
+    var windowState: WindowState = .Untracked
+}
+
+// The frame limit a run asked for, stretched to cover a benchmark's warmup and
+// its measured frames when it asked for one and no other limit.
+public function metalOnScreenFrameLimit(asked: Number, bench: borrow MetalOnScreenBench) -> Number {
+    if bench.frames > 0 && asked == 0 {
+        return bench.warmup + bench.frames
+    }
+    return asked
+}
+
+// Scripted input, then the window's own queued events, for the frame about to
+// be drawn.
+function metalDeliverWindowInput(
+    run: borrow mut MetalWindowRun,
+    onEvent: borrow (borrow AppEvent) -> Void,
+    dragRegion: borrow (Number, Number) -> Bool
+) {
+    // The same scripts the offscreen harness honors, so on-screen crashes
+    // reproduce deterministically under a debugger.
+    driveInputScript(run.knobs.script, run.frameIndex, onEvent)
+    metalDriveSwipes(run.swipes, run.frameIndex, onEvent)
+    // A programmatic resize drives the REAL AppKit resize path
+    // (windowDidResize, drawable sync).
+    for resize in run.resizes {
+        if resize.frame == run.frameIndex && !isNull(run.hostWindow) {
+            metalMsgSend(
+                run.hostWindow,
+                metalSel("setFrame:display:"),
+                60.0,
+                60.0,
+                Float(resize.width),
+                Float(resize.height),
+                true
+            )
+        }
+    }
+    run.frameIndex = run.frameIndex + 1
+    // Dispatch queued window/input events (activation, title-bar buttons, live
+    // resize); translated AppEvents come back for the app handler.
+    for event in metalPumpEvents(run.nsApp, run.view, run.ctx, dragRegion) {
+        onEvent(event)
+    }
+    run.windowState = run.windowStateOverride != .Untracked ? copy run.windowStateOverride : metalViewWindowState(
+        run.view
+    )
+    metalContextSetWindowState(run.ctx, run.windowState)
+}
+
+// What drawing one frame came to.
+struct MetalDrawnFrame {
+    // Whether the frame drew anything: an app with nothing new to show records
+    // no pass, and then nothing is presented.
+    let presenting: Bool = false
+    let quit: Bool = false
+}
+
+function metalDrawWindowFrame(
+    run: borrow mut MetalWindowRun,
+    onFrame: borrow (borrow mut RenderFrame) -> Void
+) -> MetalDrawnFrame {
+    metalContextBeginFrameTiming(run.ctx)
+    metalContextSyncViewportFromView(run.ctx)
+    var frame = Graphics {
+        userData: run.userData,
+        backend: .Metal,
+        backendContext: run.ctx
+    }.frame()
+    onFrame(frame)
+    // The drawable this frame drew into, taken while the context still holds
+    // it: submitting presents it and hands it back to Core Animation.
+    let capturePath = captureDue(run.knobs.capture, UNumber(run.frameIndex))
+    let capturedTexture = capturePath != .None ? metalContextDrawableTexture(
+        run.ctx
+    ) : nullPointer()
+    let presenting = !isNull(metalMemReadPtr(run.ctx, MetalContext.offsetActiveCommandBuffer))
+    graphicsSubmitFrame(frame)
+    match capturePath {
+        Some(path) -> metalCaptureDrawable(run.ctx, capturedTexture, path)
+        None -> {}
+    }
+    metalContextEndFrameTiming(run.ctx)
+    return MetalDrawnFrame { presenting: presenting, quit: frame.shouldQuit }
+}
+
+function metalCaptureDrawable(ctx: RawPtr, texture: RawPtr, path: borrow String) {
+    if isNull(texture) {
+        log fault("could not read the drawable back", capturePath: path)
+        return
+    }
+    match metalCapturePpm(ctx, texture, path) {
+        Ok -> log fault("wrote the presented frame", capturePath: path)
+        Error(failure) -> log fault("could not read the drawable back", failure, capturePath: path)
+    }
+}
+
+// The frame just presented, reported to whatever is watching: the trace, the
+// benchmark, the live supervisor, and the on-screen dump.
+function metalReportWindowFrame(run: borrow mut MetalWindowRun) {
+    if run.traced {
+        metalReportBenchFrame(run.ctx, run.frameIndex)
+    }
+    if run.bench.frames > 0 && run.frameIndex > run.bench.warmup && run.bench.frameNs.count < run.bench.frames {
+        metalBenchCollect(run.ctx, run.bench.frameNs, run.bench.cpuNs, run.bench.gpuNs)
+    }
+    // The frame's passes ended and committed inside graphicsSubmitFrame, which
+    // presented a real on-screen drawable. Signal the live supervisor once;
+    // without this a macOS live session never sees `live.frame.presented` and
+    // fails with KCL038.
+    if !run.liveFramePresented {
+        run.liveFramePresented = true
+        emberLiveFramePresented()
+        emberLiveFirstFrame()
+    }
+    match run.dumpPath {
+        Some(path) -> metalContextImageDump(run.ctx, path)
+        None -> {}
+    }
+}
+
+// Holds the loop to the app's own cadence. The beat advances rather than
+// restarting from now: a wait overshoots its deadline by a little, and folding
+// that overshoot into the next period makes every frame late by it, which is a
+// cadence that drifts — 17.5 ms against a 16.7 ms display.
+//
+// A deadline already in the past is a real miss, and there the cadence does
+// restart: we deliberately never submit catch-up frames against deadlines that
+// have gone.
+function metalHoldFrameCadence(run: borrow mut MetalWindowRun, frameStartNs: U64) {
+    if run.nextFrameDeadlineNs == 0 {
+        run.nextFrameDeadlineNs = frameStartNs + U64(run.framePacingNs)
+    }
+    metalContextWaitUntilNs(run.ctx, run.nextFrameDeadlineNs)
+    let pacedNow = metalClockNs(MetalForeign.clockUptimeRaw)
+    run.nextFrameDeadlineNs = run.nextFrameDeadlineNs + U64(run.framePacingNs)
+    if run.nextFrameDeadlineNs < pacedNow {
+        run.nextFrameDeadlineNs = pacedNow + U64(run.framePacingNs)
+    }
+}
+
+// What a frame waits out before the next. UIKit's display link paces itself.
+function metalPaceWindowFrame(run: borrow mut MetalWindowRun, frameStartNs: U64, presenting: Bool) {
+    if metalUsesUIKit!() {
+        return
+    }
+    if run.windowState == .Hidden {
+        let remaining = metalWindowRemainingInterval(
+            frameStartNs,
+            metalViewMaximumFramesPerSecond(run.view)
+        )
+        if remaining > 0 {
+            metalSpinRunLoop(remaining)
+        }
+        run.nextFrameDeadlineNs = 0
+        return
+    }
+    if run.framePacingNs > 0 {
+        metalHoldFrameCadence(run, frameStartNs)
+        return
+    }
+    if presenting {
+        return
+    }
+    // A frame that presented nothing never waited on a drawable, which is what
+    // holds the loop to the display. It waits out the rest of one display
+    // interval itself, pumping events meanwhile, instead of asking an idle app
+    // for its next frame at once.
+    let spent = secondsFromNanoseconds(
+        Number(metalClockNs(MetalForeign.clockUptimeRaw) - frameStartNs)
+    )
+    let remaining = 1 / metalViewMaximumFramesPerSecond(run.view) - spent
+    if remaining > 0 {
+        metalSpinRunLoop(remaining)
+    }
+}
+
+// One on-screen frame. Whether the loop goes on to another.
+public function metalRenderWindowFrame(
+    run: borrow mut MetalWindowRun,
+    onFrame: borrow (borrow mut RenderFrame) -> Void,
+    onEvent: borrow (borrow AppEvent) -> Void,
+    dragRegion: borrow (Number, Number) -> Bool
+) -> Bool {
+    if metalUsesUIKit!() && run.frameIndex == 0 {
+        log fault("UIKit rendering its first frame")
+    }
+    let frameStartNs = metalClockNs(MetalForeign.clockUptimeRaw)
+    let framePool = metalAutoreleasePoolPush()
+    metalDeliverWindowInput(run, onEvent, dragRegion)
+    let drawn = metalDrawWindowFrame(run, onFrame)
+    metalReportWindowFrame(run)
+    let limitReached = run.frameLimit > 0 && run.frameIndex >= run.frameLimit
+    let running = !drawn.quit && !limitReached && !metalLiveStateClosed(run.liveHandle)
+    metalAutoreleasePoolPop(framePool)
+    metalPaceWindowFrame(run, frameStartNs, drawn.presenting)
+    return running
+}
+
+// The run's end: the benchmark's summary, and the resize delegate taken off
+// the window before the window goes.
+public function metalEndWindowRun(run: borrow mut MetalWindowRun) {
+    if run.bench.frames > 0 {
+        metalBenchReport(run.ctx, run.bench.frameNs, run.bench.cpuNs, run.bench.gpuNs)
+    }
+    if !isNull(run.hostWindow) {
+        metalRemoveResizeDelegate(run.hostWindow, run.resizeDelegate)
+    }
+}

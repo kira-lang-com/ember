@@ -1,0 +1,150 @@
+import Foundation
+public struct RenderTarget {
+    var kind: RenderTargetKind = .Swapchain
+    var texture: GraphicsTexture = GraphicsTexture()
+    var mipLevel: UN32 = 0
+    var arrayLayer: UN32 = 0
+}
+
+public struct ColorAttachment {
+    var target: RenderTarget = RenderTarget()
+    var loadAction: LoadAction = .Clear
+    var storeAction: StoreAction = .Store
+    var clearColor: RGBAColor = RGBAColor()
+    var resolveTarget: RenderTarget = RenderTarget()
+    var hasResolveTarget: Bool = false
+}
+
+public struct DepthAttachment {
+    var texture: GraphicsTexture = GraphicsTexture()
+    var loadAction: LoadAction = .Clear
+    var storeAction: StoreAction = .Store
+    var clearDepth: UNumber = 1
+    var readOnly: Bool = false
+}
+
+public struct StencilAttachment {
+    var texture: GraphicsTexture = GraphicsTexture()
+    var loadAction: LoadAction = .Clear
+    var storeAction: StoreAction = .Store
+    var clearStencil: UN8 = 0
+    var readOnly: Bool = false
+}
+
+public struct RenderPassDescriptor {
+    var label: String = ""
+    var colorAttachments: [ColorAttachment] = []
+    var primaryColorAttachment: ColorAttachment = ColorAttachment()
+    var hasPrimaryColorAttachment: Bool = false
+    var depthAttachment: DepthAttachment = DepthAttachment()
+    var hasDepthAttachment: Bool = false
+    var stencilAttachment: StencilAttachment = StencilAttachment()
+    var hasStencilAttachment: Bool = false
+}
+
+public function emptyRenderTarget() -> RenderTarget {
+    return RenderTarget {
+        kind: .Swapchain,
+        texture: emptyGraphicsTexture(),
+        mipLevel: 0,
+        arrayLayer: 0
+    }
+}
+
+public function emptyDepthAttachment() -> DepthAttachment {
+    return DepthAttachment {
+        texture: emptyGraphicsTexture(),
+        loadAction: .Clear,
+        storeAction: .Store,
+        clearDepth: 1.0,
+        readOnly: false
+    }
+}
+
+public function swapchainDepthAttachment() -> DepthAttachment {
+    return DepthAttachment {
+        texture: emptyGraphicsTexture(),
+        loadAction: .Clear,
+        storeAction: .DontCare,
+        clearDepth: 1.0,
+        readOnly: false
+    }
+}
+
+public function emptyStencilAttachment() -> StencilAttachment {
+    return StencilAttachment {
+        texture: emptyGraphicsTexture(),
+        loadAction: .Clear,
+        storeAction: .Store,
+        clearStencil: 0,
+        readOnly: false
+    }
+}
+
+public function swapchainRenderTarget() -> RenderTarget {
+    return RenderTarget {
+        kind: .Swapchain,
+        texture: emptyGraphicsTexture(),
+        mipLevel: 0,
+        arrayLayer: 0
+    }
+}
+
+// The same pass, drawn into a TEXTURE instead of into the window.
+//
+// This is what a program with no window of its own presents through: a component
+// whose pixels are composited by another process renders into shared memory, and
+// the only difference from drawing into a swapchain is which image the color
+// attachment names. Everything above it -- the batch, the pipelines, the
+// glyph atlas -- is unchanged, which is the property worth having: a view does
+// not know, and cannot know, whether it is being drawn for a window.
+public function clearTextureRenderPass(
+    target: borrow GraphicsTexture,
+    clearColor: borrow RGBAColor
+) -> RenderPassDescriptor {
+    let attachment = ColorAttachment {
+        target: RenderTarget { kind: .Texture, texture: target, mipLevel: 0, arrayLayer: 0 },
+        loadAction: .Clear,
+        storeAction: .Store,
+        clearColor: clearColor,
+        resolveTarget: emptyRenderTarget(),
+        hasResolveTarget: false
+    }
+    return RenderPassDescriptor {
+        label: "surface-pass",
+        colorAttachments: [attachment],
+        primaryColorAttachment: attachment,
+        hasPrimaryColorAttachment: true,
+        depthAttachment: emptyDepthAttachment(),
+        hasDepthAttachment: false,
+        stencilAttachment: emptyStencilAttachment(),
+        hasStencilAttachment: false
+    }
+}
+
+public function clearSwapchainRenderPass(clearColor: borrow RGBAColor) -> RenderPassDescriptor {
+    return RenderPassDescriptor {
+        label: "swapchain-pass",
+        colorAttachments: [ColorAttachment {
+            target: swapchainRenderTarget(),
+            loadAction: .Clear,
+            storeAction: .Store,
+            clearColor: clearColor,
+            resolveTarget: emptyRenderTarget(),
+            hasResolveTarget: false
+        }],
+        primaryColorAttachment: ColorAttachment {
+            target: swapchainRenderTarget(),
+            loadAction: .Clear,
+            storeAction: .Store,
+            clearColor: clearColor,
+            resolveTarget: emptyRenderTarget(),
+            hasResolveTarget: false
+        },
+        hasPrimaryColorAttachment: true,
+        depthAttachment: emptyDepthAttachment(),
+        hasDepthAttachment: false,
+        stencilAttachment: emptyStencilAttachment(),
+        hasStencilAttachment: false
+    }
+}

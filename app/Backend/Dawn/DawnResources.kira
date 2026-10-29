@@ -1,0 +1,346 @@
+import Foundation
+import Heap
+// Buffers on WebGPU; textures and samplers are in `DawnTextures.kira`.
+//
+// Every one of them is created against the device and recorded in the object
+// table (see `DawnContext.kira`), so the `U32` id Kira carries is a slot and the
+// WebGPU handle stays on this side of the seam.
+//
+// # Uploads go through the queue
+//
+// WebGPU has one way to put CPU bytes into a resource: `wgpuQueueWriteBuffer`
+// and `wgpuQueueWriteTexture`. Both copy immediately into staging the queue
+// owns, so a write is ordered against the submissions around it and the caller's
+// array is free the moment the call returns. That is what makes
+// `dynamicBufferFrameStart` answer 0 on this backend — there is no ring to claim
+// a slot from, because nothing the CPU wrote is still being read when it writes
+// again.
+
+// A buffer's size in bytes, rounded up to the 4-byte multiple WebGPU requires of
+// both a buffer's size and a queue write's length.
+public function dawnAlignedSize(byteCount: Number) -> Number {
+    return alignedUp(max(byteCount, 1), DawnReadback.wordBytes)
+}
+
+// Creates a device buffer of `byteCount` bytes with `usage`, and answers the id
+// it was recorded under.
+public function dawnMakeBuffer(
+    state: borrow mut GraphicsRuntimeState,
+    label: borrow String,
+    usage: U64,
+    byteCount: Number
+) -> U32? {
+    let size = dawnAlignedSize(byteCount)
+    let buffer = wgpuDeviceCreateBuffer(
+        state.dawn.device,
+        WGPUBufferDescriptor { label: dawnText(label), usage: usage, size: U64(size) }
+    )
+    if isNull(buffer) {
+        return .None
+    }
+    state.dawn.allocatedBytes = state.dawn.allocatedBytes + U64(size)
+    return .Some(dawnRegisterObject(state, buffer, DawnVocabulary.formatUndefined))
+}
+
+public function dawnCreateBuffer(
+    context: RawPtr,
+    descriptor: borrow BufferDescriptor
+) -> BufferResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = descriptor.data.count * sizeOf<F32>()
+    let id = match dawnMakeBuffer(
+        state,
+        descriptor.label,
+        dawnBufferUsage(descriptor.usage),
+        byteCount
+    ) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    if descriptor.data.count > 0 {
+        wgpuQueueWriteBuffer(
+            state.dawn.queue,
+            dawnObject(state, id),
+            U64(0),
+            narrowFloats(descriptor.data),
+            U64(byteCount)
+        )
+    }
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
+}
+
+public function dawnCreateIndexBuffer(
+    context: RawPtr,
+    descriptor: borrow IndexBufferDescriptor
+) -> BufferResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = descriptor.data.count * sizeOf<U32>()
+    let id = match dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Index), byteCount) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    if descriptor.data.count > 0 {
+        wgpuQueueWriteBuffer(
+            state.dawn.queue,
+            dawnObject(state, id),
+            U64(0),
+            narrowWords(descriptor.data),
+            U64(byteCount)
+        )
+    }
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
+}
+
+// A buffer whose payload is 32-bit WORDS rather than floats — a kernel's
+// parameter block is counts and flags, and handing those over as floats would
+// give the shader different numbers than the caller wrote.
+public function dawnCreateStorageBufferWords(
+    context: RawPtr,
+    label: borrow String,
+    data: borrow[U32]
+) -> BufferResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = data.count * sizeOf<U32>()
+    let id = match dawnMakeBuffer(state, label, dawnBufferUsage(.Storage), byteCount) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    if data.count > 0 {
+        wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), data, U64(byteCount))
+    }
+    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
+}
+
+// A buffer the CPU rewrites every frame, and the block it writes into.
+//
+// Every usage a compositor might bind it at, because the caller does not say:
+// the same stream is a vertex buffer in one pipeline and a storage array indexed
+// by vertex id in the next, and a buffer created without the bit the shader
+// wants is refused at the draw with nothing in the descriptor to say why.
+public function dawnCreateDynamicBuffer(
+    context: RawPtr,
+    label: borrow String,
+    floatCapacity: Number
+) -> DynamicBufferResult {
+    if !dawnHasDevice(context) || floatCapacity <= 0 {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let byteCount = dawnAlignedSize(floatCapacity * sizeOf<F32>())
+    let usage = DawnVocabulary.bufferUsageCopyDestination
+        | DawnVocabulary.bufferUsageCopySource
+        | DawnVocabulary.bufferUsageVertex
+        | DawnVocabulary.bufferUsageIndex
+        | DawnVocabulary.bufferUsageStorage
+        | DawnVocabulary.bufferUsageUniform
+    let id = match dawnMakeBuffer(state, label, usage, byteCount) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    let contents = allocateZeroed(memoryLayout(byteCount, alignOf<U64>()))
+    if isNull(contents) {
+        dawnDestroyBufferId(state, id)
+        return .Error(.DeviceRefused)
+    }
+    dawnAttachExtra(state, id, contents)
+    return .Ok(
+        DynamicBuffer {
+            buffer: GraphicsBuffer { id: BufferId(id), byteSize: byteCount },
+            contents: contents
+        }
+    )
+}
+
+public function dawnCommitDynamicBuffer(
+    context: RawPtr,
+    buffer: borrow GraphicsBuffer,
+    contents: RawPtr,
+    floatCount: Number
+) {
+    if !dawnHasDevice(context) || buffer.id == 0 || isNull(contents) || floatCount <= 0 {
+        return
+    }
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    let target = dawnObject(state, buffer.id.raw)
+    if isNull(target) {
+        return
+    }
+    wgpuQueueWriteBuffer(
+        state.dawn.queue,
+        target,
+        U64(0),
+        contents,
+        U64(dawnAlignedSize(floatCount * sizeOf<F32>()))
+    )
+}
+
+public function dawnDestroyBufferId(state: borrow mut GraphicsRuntimeState, id: U32) {
+    let buffer = dawnObject(state, id)
+    if isNull(buffer) {
+        return
+    }
+    dawnFreeExtra(state, id)
+    wgpuBufferDestroy(buffer)
+    wgpuBufferRelease(buffer)
+    dawnForgetObject(state, id)
+}
+
+// One 32-bit word out of a buffer a kernel has written.
+//
+// WebGPU cannot map a storage buffer for reading, so the word travels through a
+// staging buffer that can: copy on a command encoder of its own, submit, map,
+// pump the instance until the map completes, read, unmap. The pump is bounded —
+// a map that never completes is a device that has stopped, and spinning on it
+// forever would hang a gate whose whole job is to report.
+public function dawnReadBufferWord(
+    context: RawPtr,
+    buffer: borrow GraphicsBuffer,
+    index: Number
+) -> BufferReadResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    if buffer.id == 0 || index < 0 {
+        return .Error(.NoSuchWord)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let source = dawnObject(state, buffer.id.raw)
+    if isNull(source) || (index + 1) * sizeOf<U32>() > buffer.byteSize {
+        return .Error(.NoSuchWord)
+    }
+    // Everything the frame has recorded so far has to have RUN before its result
+    // can be copied back: the queue orders submissions, but nothing that is still
+    // sitting on the frame's encoder has been submitted at all.
+    dawnSubmitEncoder(state)
+    let staging = match dawnCopyWordOut(state, source, index) {
+        Some(staging) -> staging
+        None -> return .Error(.DeviceRefused)
+    }
+    let outcome = dawnReadStagedWord(state, staging, context)
+    wgpuBufferDestroy(staging)
+    wgpuBufferRelease(staging)
+    return outcome
+}
+
+// The word a staging buffer holds, once the device has mapped it.
+function dawnReadStagedWord(
+    state: borrow mut GraphicsRuntimeState,
+    staging: RawPtr,
+    context: RawPtr
+) -> BufferReadResult {
+    match dawnAwaitReadMap(state, staging, context) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not map the buffer readback", failure)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let mapped = wgpuBufferGetConstMappedRange(staging, U64(0), U64(sizeOf<U32>()))
+    let word = heapLoad<U32>(mapped, 0)
+    wgpuBufferUnmap(staging)
+    return .Ok(word)
+}
+
+// A mappable staging buffer, and a submission that copies word `index` of
+// `source` into it. Nothing where the device refuses the staging buffer.
+function dawnCopyWordOut(
+    state: borrow GraphicsRuntimeState,
+    source: RawPtr,
+    index: Number
+) -> RawPtr? {
+    let staging = wgpuDeviceCreateBuffer(
+        state.dawn.device,
+        WGPUBufferDescriptor {
+            label: dawnText("kira-buffer-readback"),
+            usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+            size: U64(DawnReadback.wordBytes)
+        }
+    )
+    if isNull(staging) {
+        log fault("could not allocate a readback buffer")
+        return .None
+    }
+    let encoder = wgpuDeviceCreateCommandEncoder(
+        state.dawn.device,
+        WGPUCommandEncoderDescriptor { label: dawnText("kira-buffer-readback-encoder") }
+    )
+    wgpuCommandEncoderCopyBufferToBuffer(
+        encoder,
+        source,
+        U64(index * DawnReadback.wordBytes),
+        staging,
+        U64(0),
+        U64(DawnReadback.wordBytes)
+    )
+    let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
+    let submission: [RawPtr] = [commands]
+    wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
+    wgpuCommandBufferRelease(commands)
+    wgpuCommandEncoderRelease(encoder)
+    return .Some(staging)
+}
+
+namespace DawnReadback {
+    // One 32-bit word: what a readback copies, and the multiple WebGPU sizes
+    // every buffer and queue write in.
+    let wordBytes: UNumber = 4
+}
+
+// Why a readback map did not complete.
+enum DawnMapFailure {
+    Refused
+    NeverAnswered
+}
+
+// Maps `staging` for reading, waiting for the map to answer.
+function dawnAwaitReadMap(
+    state: borrow mut GraphicsRuntimeState,
+    staging: RawPtr,
+    context: RawPtr
+) -> Result<Void, DawnMapFailure> {
+    state.dawn.mapResolved = false
+    state.dawn.mapSucceeded = false
+    let map = wgpuBufferMapAsync(
+        staging,
+        DawnVocabulary.mapModeRead,
+        U64(0),
+        U64(4),
+        WGPUBufferMapCallbackInfo {
+            mode: DawnVocabulary.callbackWaitAnyOnly,
+            callback: dawnBufferMapped,
+            userdata1: context
+        }
+    )
+    if !dawnWaitFor(state, map, DawnWait.gpuNanoseconds) || !state.dawn.mapResolved {
+        return .Error(.NeverAnswered)
+    }
+    if !state.dawn.mapSucceeded {
+        return .Error(.Refused)
+    }
+    return .Ok
+}
+
+// The answer to `wgpuBufferMapAsync`, recorded on the runtime state the readback
+// spin is watching.
+public function dawnBufferMapped(
+    status: I32,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+    state.dawn.mapResolved = true
+    state.dawn.mapSucceeded = status == DawnVocabulary.mapSucceeded
+    if !state.dawn.mapSucceeded {
+        log fault("refused a buffer map", view: dawnViewText(message))
+    }
+}

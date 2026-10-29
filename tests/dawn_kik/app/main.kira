@@ -1,0 +1,10 @@
+// Headless Dawn tests: each draws into a texture on a device with no window
+// and reads the pixels back, so a pass proves what the texture holds. Run with:
+//
+//   KIRA_PURE_TEST=1 kira test tests/dawn_kik
+import Foundation
+import Ember
+
+@Main
+@Runtime
+function main() {}

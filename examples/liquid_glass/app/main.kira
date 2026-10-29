@@ -1,0 +1,429 @@
+import Ember
+import Foundation
+
+// Liquid glass in four passes: a backdrop drawn into a scene texture, a
+// two-pass separable blur of it at half size, and a composite of the sharp and
+// blurred scene onto the window. Every pass draws one full-screen triangle.
+
+namespace Glass {
+    let width: UN32 = 1600
+    let height: UN32 = 900
+    // The blur runs at half size: it is a blur, so the lost detail is invisible
+    // and each pass touches a quarter of the pixels.
+    let blurWidth: UN32 = 800
+    let blurHeight: UN32 = 450
+    let vertexCount: UN32 = 3
+    // Two floats a vertex.
+    let stride: UN32 = 8
+    // Every slot is the resource's position in its `.ksl` group, which is what
+    // a shader's reflection reports and what a backend binds against.
+    // `Shaders/LiquidGlassBackground.ksl` and the two blur shaders declare
+    // `texture tex0` then `sampler smp0`, so the sampler is slot 1, not a second
+    // slot 0 in a space of its own.
+    let textureSlot: UN32 = 0
+    let samplerSlot: UN32 = 1
+    // `Shaders/LiquidGlassComposite.ksl` declares tex0, tex1, smp0, smp1 in that
+    // order, so the samplers are slots 2 and 3.
+    let compositeSharpSlot: UN32 = 0
+    let compositeBlurSlot: UN32 = 1
+    let compositeSharpSamplerSlot: UN32 = 2
+    let compositeBlurSamplerSlot: UN32 = 3
+}
+
+// A triangle that covers the whole target, clipped to it.
+function fullScreenVertices() -> [Number] {
+    return [-1.0, -1.0, 3.0, -1.0, -1.0, 3.0]
+}
+
+// One pass's shader, the pipeline built from it, and what it samples.
+struct GlassStage {
+    var shader: GraphicsShader
+    var pipeline: RenderPipeline
+    var bindings: BindGroup
+}
+
+// What a stage is made from.
+struct GlassStageSpec {
+    var label: String = ""
+    var asset: String = ""
+    var colorFormat: TextureFormat = .Rgba8Unorm
+}
+
+// The images the passes draw into and read from, and the one sampler they all
+// read through.
+struct GlassTargets {
+    var backdrop: GraphicsTexture
+    var scene: GraphicsTexture
+    var blurIntermediate: GraphicsTexture
+    var blurFinal: GraphicsTexture
+    var sampler: GraphicsSampler
+}
+
+struct GlassBlurStages {
+    var horizontal: GlassStage
+    var vertical: GlassStage
+}
+
+struct GlassStages {
+    var background: GlassStage
+    var blur: GlassBlurStages
+    var composite: GlassStage
+}
+
+struct GlassResources {
+    var vertices: GraphicsBuffer
+    var targets: GlassTargets
+    var stages: GlassStages
+}
+
+// None until init has made the resources, and None for good when it could not:
+// a frame then draws nothing.
+struct GlassState {
+    var resources: GlassResources? = .None
+}
+
+function glassPipeline(
+    spec: borrow GlassStageSpec,
+    shader: borrow GraphicsShader
+) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: copy spec.label,
+        shader: copy shader,
+        vertexLayout: VertexLayout {
+            stride: Glass.stride,
+            attributes: [VertexAttribute { name: "position", format: .Float2 }]
+        },
+        colorTargets: [ColorTargetDescriptor {
+            format: spec.colorFormat,
+            blend: BlendState { preset: .Replace }
+        }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+    }
+}
+
+function glassStage(
+    graphics: borrow Graphics,
+    spec: borrow GlassStageSpec,
+    bindings: BindGroupResult
+) -> Result<GlassStage, ResourceFailure> {
+    let bindGroup = match bindings {
+        Ok(bindGroup) -> bindGroup
+        Error(failure) -> return .Error(failure)
+    }
+    let shader = match graphics.createShaderFromKsl(
+        KslShaderDescriptor { label: spec.label + "-shader", asset: spec.asset }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(glassPipeline(spec, shader)) {
+        Ok(pipeline) -> .Ok(GlassStage { shader: shader, pipeline: pipeline, bindings: bindGroup })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+// A texture a pass renders into and a later pass samples.
+function glassTarget(graphics: borrow Graphics, label: String) -> TextureResult {
+    return graphics.createTexture(
+        TextureDescriptor {
+            label: label,
+            width: Glass.width,
+            height: Glass.height,
+            usage: .RenderTargetSampled
+        }
+    )
+}
+
+// The same at the blur's half size.
+function glassBlurTarget(graphics: borrow Graphics, label: String) -> TextureResult {
+    return graphics.createTexture(
+        TextureDescriptor {
+            label: label,
+            width: Glass.blurWidth,
+            height: Glass.blurHeight,
+            usage: .RenderTargetSampled
+        }
+    )
+}
+
+function glassBackdrop(graphics: borrow Graphics) -> TextureResult {
+    return graphics.createTextureFromFile("liquid-glass-cubes", "assets/background-cubes.jpg")
+}
+
+function glassSampler() -> SamplerDescriptor {
+    return SamplerDescriptor {
+        label: "liquid-glass-linear-sampler",
+        minFilter: .Linear,
+        magFilter: .Linear
+    }
+}
+
+function glassTargets(graphics: borrow Graphics) -> Result<GlassTargets, ResourceFailure> {
+    let backdrop = match glassBackdrop(graphics) {
+        Ok(texture) -> texture
+        Error(failure) -> return .Error(failure)
+    }
+    let scene = match glassTarget(graphics, "liquid-glass-scene") {
+        Ok(texture) -> texture
+        Error(failure) -> return .Error(failure)
+    }
+    let blurIntermediate = match glassBlurTarget(graphics, "liquid-glass-blur-intermediate") {
+        Ok(texture) -> texture
+        Error(failure) -> return .Error(failure)
+    }
+    let blurFinal = match glassBlurTarget(graphics, "liquid-glass-blur-final") {
+        Ok(texture) -> texture
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createSampler(glassSampler()) {
+        Ok(sampler) -> .Ok(
+            GlassTargets {
+                backdrop: backdrop,
+                scene: scene,
+                blurIntermediate: blurIntermediate,
+                blurFinal: blurFinal,
+                sampler: sampler
+            }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function glassTextureBindings(
+    graphics: borrow Graphics,
+    label: String,
+    texture: borrow GraphicsTexture,
+    sampler: borrow GraphicsSampler
+) -> BindGroupResult {
+    return graphics.createTextureSamplerBindGroup(
+        TextureSamplerBinding {
+            label: label,
+            textureSlot: Glass.textureSlot,
+            texture: copy texture,
+            samplerSlot: Glass.samplerSlot,
+            sampler: copy sampler
+        }
+    )
+}
+
+// The composite samples the sharp scene and the blurred one.
+function glassCompositeBindings(
+    graphics: borrow Graphics,
+    targets: borrow GlassTargets
+) -> BindGroupResult {
+    return graphics.createBindGroup(
+        BindGroupDescriptor {
+            label: "liquid-glass-composite-bindings",
+            textureEntries: [TextureBindEntry {
+                textureSlot: Glass.compositeSharpSlot,
+                texture: copy targets.scene
+            }, TextureBindEntry {
+                textureSlot: Glass.compositeBlurSlot,
+                texture: copy targets.blurFinal
+            }],
+            samplerEntries: [SamplerBindEntry {
+                samplerSlot: Glass.compositeSharpSamplerSlot,
+                sampler: copy targets.sampler
+            }, SamplerBindEntry {
+                samplerSlot: Glass.compositeBlurSamplerSlot,
+                sampler: copy targets.sampler
+            }]
+        }
+    )
+}
+
+// A stage that samples one texture through the shared sampler.
+function glassSampledStage(
+    graphics: borrow Graphics,
+    spec: borrow GlassStageSpec,
+    source: borrow GraphicsTexture,
+    sampler: borrow GraphicsSampler
+) -> Result<GlassStage, ResourceFailure> {
+    return glassStage(
+        graphics,
+        spec,
+        glassTextureBindings(graphics, spec.label + "-bindings", source, sampler)
+    )
+}
+
+// The blur's two passes: across the scene, then down what that left.
+function glassBlurStages(
+    graphics: borrow Graphics,
+    targets: borrow GlassTargets
+) -> Result<GlassBlurStages, ResourceFailure> {
+    let horizontal = match glassSampledStage(
+        graphics,
+        GlassStageSpec {
+            label: "liquid-glass-blur-horizontal",
+            asset: "LiquidGlassBlurHorizontal"
+        },
+        targets.scene,
+        targets.sampler
+    ) {
+        Ok(stage) -> stage
+        Error(failure) -> return .Error(failure)
+    }
+    return match glassSampledStage(
+        graphics,
+        GlassStageSpec { label: "liquid-glass-blur-vertical", asset: "LiquidGlassBlurVertical" },
+        targets.blurIntermediate,
+        targets.sampler
+    ) {
+        Ok(vertical) -> .Ok(GlassBlurStages { horizontal: horizontal, vertical: vertical })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function glassStages(
+    graphics: borrow Graphics,
+    targets: borrow GlassTargets
+) -> Result<GlassStages, ResourceFailure> {
+    let background = match glassSampledStage(
+        graphics,
+        GlassStageSpec { label: "liquid-glass-background", asset: "LiquidGlassBackground" },
+        targets.backdrop,
+        targets.sampler
+    ) {
+        Ok(stage) -> stage
+        Error(failure) -> return .Error(failure)
+    }
+    let blur = match glassBlurStages(graphics, targets) {
+        Ok(blur) -> blur
+        Error(failure) -> return .Error(failure)
+    }
+    let compositeSpec = GlassStageSpec {
+        label: "liquid-glass-composite",
+        asset: "LiquidGlassComposite",
+        colorFormat: .Swapchain
+    }
+    return match glassStage(graphics, compositeSpec, glassCompositeBindings(graphics, targets)) {
+        Ok(composite) -> .Ok(
+            GlassStages { background: background, blur: blur, composite: composite }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function glassResources(graphics: borrow Graphics) -> Result<GlassResources, ResourceFailure> {
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "liquid-glass-fullscreen-triangle", data: fullScreenVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    let targets = match glassTargets(graphics) {
+        Ok(targets) -> targets
+        Error(failure) -> return .Error(failure)
+    }
+    return match glassStages(graphics, targets) {
+        Ok(stages) -> .Ok(GlassResources { vertices: vertices, targets: targets, stages: stages })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function glassInit(graphics: Graphics) {
+    var state = nativeRecover<GlassState>(graphics.userData)
+    match glassResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the liquid glass", move failure)
+    }
+}
+
+function glassTexturePass(label: String, texture: borrow GraphicsTexture) -> RenderPassDescriptor {
+    var pass = clearTextureRenderPass(texture, RGBAColor())
+    pass.label = label
+    return pass
+}
+
+// One stage's full-screen triangle, drawn into `pass`.
+function glassDrawStage(
+    frame: borrow mut RenderFrame,
+    pass: RenderPassDescriptor,
+    stage: borrow GlassStage,
+    vertices: borrow GraphicsBuffer
+) {
+    let encoder = frame.beginRenderPass(pass)
+    encoder.setPipeline(stage.pipeline)
+    encoder.setVertexBuffer(vertices)
+    encoder.setBindGroup(0, stage.bindings)
+    encoder.draw(Glass.vertexCount)
+    frame.endPass()
+}
+
+function glassDraw(frame: borrow mut RenderFrame, resources: borrow GlassResources) {
+    glassDrawStage(
+        frame,
+        glassTexturePass("liquid-glass-scene-pass", resources.targets.scene),
+        resources.stages.background,
+        resources.vertices
+    )
+    glassDrawStage(
+        frame,
+        glassTexturePass("liquid-glass-blur-horizontal-pass", resources.targets.blurIntermediate),
+        resources.stages.blur.horizontal,
+        resources.vertices
+    )
+    glassDrawStage(
+        frame,
+        glassTexturePass("liquid-glass-blur-vertical-pass", resources.targets.blurFinal),
+        resources.stages.blur.vertical,
+        resources.vertices
+    )
+    glassDrawStage(
+        frame,
+        clearSwapchainRenderPass(RGBAColor()),
+        resources.stages.composite,
+        resources.vertices
+    )
+}
+
+function glassFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<GlassState>(frame.userData)
+    match state.resources {
+        Some(resources) -> glassDraw(frame, resources)
+        None -> {}
+    }
+}
+
+function glassDestroyStage(graphics: borrow Graphics, stage: borrow GlassStage) {
+    graphics.destroyBindGroup(stage.bindings)
+    graphics.destroyRenderPipeline(stage.pipeline)
+    graphics.destroyShader(copy stage.shader)
+}
+
+function glassDestroyTargets(graphics: borrow Graphics, targets: borrow GlassTargets) {
+    graphics.destroySampler(targets.sampler)
+    graphics.destroyTexture(targets.blurFinal)
+    graphics.destroyTexture(targets.blurIntermediate)
+    graphics.destroyTexture(targets.scene)
+    graphics.destroyTexture(targets.backdrop)
+}
+
+function glassCleanup(graphics: Graphics) {
+    let state = nativeRecover<GlassState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            glassDestroyStage(graphics, resources.stages.composite)
+            glassDestroyStage(graphics, resources.stages.blur.vertical)
+            glassDestroyStage(graphics, resources.stages.blur.horizontal)
+            glassDestroyStage(graphics, resources.stages.background)
+            glassDestroyTargets(graphics, resources.targets)
+            graphics.destroyBuffer(resources.vertices)
+        }
+        None -> {}
+    }
+}
+
+@Main
+function main() {
+    var app = GraphicsApplication {
+        title: "Ember Liquid Glass",
+        width: Glass.width,
+        height: Glass.height,
+        sampleCount: 1,
+        initHandler: glassInit,
+        frameHandler: glassFrame,
+        cleanupHandler: glassCleanup
+    }
+    app.run(nativeUserData(nativeState(GlassState())))
+}

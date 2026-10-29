@@ -1,0 +1,388 @@
+import Foundation
+import Heap
+
+// What a draw binds, and the descriptor set it binds it through.
+//
+// Vulkan descriptor sets are transient per draw and reclaimed by resetting the
+// descriptor pool after the frame fence completes. That is what preserves a
+// public bind group's pipeline-independent lifetime without leaking one set per
+// frame: the group is a description, and the set is minted from it each draw and
+// handed back when the frame is done.
+//
+// Uniform and storage buffers bind as `*_DYNAMIC` descriptors, so the offset a
+// ring buffer is at this frame travels as a dynamic offset rather than a new
+// descriptor.
+
+// Why a draw's bind groups could not be bound.
+public enum VulkanBindingFailure {
+    // The shader reads a binding the group does not supply.
+    Unsupplied(UNumber)
+    // The group supplies a binding whose resource has been destroyed.
+    NotLive(UNumber)
+    // The encoder's slots, merged for a one-group shader, supply a binding twice.
+    SuppliedTwice(UNumber)
+    // The shader reads a group the encoder left unset.
+    GroupUnset(UNumber)
+    // The shader reads more groups than the encoder carries.
+    TooManyGroups(UNumber)
+    // The frame's descriptor pool has no set left for this group.
+    PoolExhausted(VulkanResult)
+}
+
+function vulkanUniformEntry(
+    group: borrow BindGroupState,
+    binding: UNumber
+) -> StoredUniformBindEntry? {
+    for entry in group.uniformEntries {
+        if entry.uniformSlot == binding { return .Some(entry) }
+    }
+    return .None
+}
+
+function vulkanStorageEntry(group: borrow BindGroupState, binding: UNumber) -> StorageBindEntry? {
+    for entry in group.storageEntries {
+        if entry.storageSlot == binding { return .Some(entry) }
+    }
+    return .None
+}
+
+function vulkanTextureEntry(group: borrow BindGroupState, binding: UNumber) -> TextureBindEntry? {
+    for entry in group.textureEntries {
+        if entry.textureSlot == binding { return .Some(entry) }
+    }
+    return .None
+}
+
+function vulkanSamplerEntry(group: borrow BindGroupState, binding: UNumber) -> SamplerBindEntry? {
+    for entry in group.samplerEntries {
+        if entry.samplerSlot == binding { return .Some(entry) }
+    }
+    return .None
+}
+
+// A stored uniform's buffer id, with the values the CPU last wrote for it
+// already in it.
+//
+// The same contract as `vulkanUpdateUniform` — a uniform's Kira-side values and
+// its mapped device memory are two views of one thing, and a draw has to see
+// the latest — but taken at the draw rather than at the update, so a caller that
+// calls `setUniformValues` without a backend write of its own still binds what
+// it set. Reading the values here is what makes that hold.
+public function vulkanSnapshotUniform(
+    state: borrow mut VulkanState,
+    entry: borrow StoredUniformBindEntry
+) -> U32 {
+    let values = nativeRecover<UniformState>(entry.storage)
+    if values.values.count > 0 {
+        vulkanWriteFloats(state, entry.uniformId.raw, narrowFloats(values.values), 0)
+    }
+    return entry.uniformId.raw
+}
+
+// The buffer a uniform or storage binding reads, and its dynamic offset.
+struct VulkanBoundBuffer {
+    let id: U32
+    let offset: U32
+}
+
+function vulkanBoundBuffer(
+    state: borrow mut VulkanState,
+    group: borrow BindGroupState,
+    item: borrow VulkanReflectedBinding
+) -> Result<VulkanBoundBuffer, VulkanBindingFailure> {
+    if item.kind == .UniformBuffer {
+        match vulkanUniformEntry(group, item.binding) {
+            Some(entry) -> return .Ok(
+                VulkanBoundBuffer { id: vulkanSnapshotUniform(state, entry), offset: U32(0) }
+            )
+            None -> return .Error(.Unsupplied(item.binding))
+        }
+    }
+    match vulkanStorageEntry(group, item.binding) {
+        Some(entry) -> return .Ok(
+            VulkanBoundBuffer {
+                id: entry.bufferId.raw,
+                offset: U32(vulkanObjectOffset(state, entry.bufferId.raw))
+            }
+        )
+        None -> return .Error(.Unsupplied(item.binding))
+    }
+}
+
+function vulkanWriteSetEntry(state: borrow VulkanState, write: borrow VkWriteDescriptorSet) {
+    vkUpdateDescriptorSets(state.device, U32(1), write, U32(0), nullPointer())
+}
+
+// A uniform or storage buffer written into `set`. Answers its dynamic offset.
+function vulkanWriteBufferDescriptor(
+    state: borrow mut VulkanState,
+    set: RawPtr,
+    group: borrow BindGroupState,
+    item: borrow VulkanReflectedBinding
+) -> Result<U32, VulkanBindingFailure> {
+    let bound = match vulkanBoundBuffer(state, group, item) {
+        Ok(bound) -> bound
+        Error(failure) -> return .Error(failure)
+    }
+    let buffer = vulkanObject(state, bound.id)
+    if isNull(buffer) {
+        return .Error(.NotLive(item.binding))
+    }
+    // A ring binds one slot; a buffer with no slots binds all of it. A range
+    // of 0 is no range at all, and every read through it answers 0.
+    let stride = vulkanObjectStride(state, bound.id)
+    let range = stride > 0 ? stride : vulkanObjectSize(state, bound.id)
+    vulkanWriteSetEntry(
+        state,
+        VkWriteDescriptorSet {
+            sType: VulkanVocabulary.structureWriteDescriptorSet,
+            dstSet: set,
+            dstBinding: U32(item.binding),
+            descriptorCount: U32(1),
+            descriptorType: vulkanDescriptorCode(item.kind),
+            pBufferInfo: VkDescriptorBufferInfo { buffer: buffer, range: range }
+        }
+    )
+    return .Ok(bound.offset)
+}
+
+// What an image or sampler binding reads, as a descriptor holds it.
+function vulkanImageInfo(
+    state: borrow VulkanState,
+    group: borrow BindGroupState,
+    item: borrow VulkanReflectedBinding
+) -> Result<VkDescriptorImageInfo, VulkanBindingFailure> {
+    if item.kind == .Sampler {
+        let entry = match vulkanSamplerEntry(group, item.binding) {
+            Some(entry) -> entry
+            None -> return .Error(.Unsupplied(item.binding))
+        }
+        let sampler = vulkanObject(state, entry.sampler.id.raw)
+        if isNull(sampler) { return .Error(.NotLive(item.binding)) }
+        return .Ok(VkDescriptorImageInfo { sampler: sampler })
+    }
+    let entry = match vulkanTextureEntry(group, item.binding) {
+        Some(entry) -> entry
+        None -> return .Error(.Unsupplied(item.binding))
+    }
+    let storage = item.kind == .StorageImage
+    let view = vulkanObject(
+        state,
+        storage ? entry.texture.storageViewId.raw : entry.texture.viewId.raw
+    )
+    // A storage image created without storage usage has no storage view.
+    if isNull(view) { return .Error(.NotLive(item.binding)) }
+    let layout = storage ? vulkanLayoutCode(.General) : vulkanLayoutCode(.ShaderRead)
+    return .Ok(VkDescriptorImageInfo { imageView: view, imageLayout: layout })
+}
+
+function vulkanWriteImageDescriptor(
+    state: borrow VulkanState,
+    set: RawPtr,
+    group: borrow BindGroupState,
+    item: borrow VulkanReflectedBinding
+) -> Result<Void, VulkanBindingFailure> {
+    let info = match vulkanImageInfo(state, group, item) {
+        Ok(info) -> info
+        Error(failure) -> return .Error(failure)
+    }
+    vulkanWriteSetEntry(
+        state,
+        VkWriteDescriptorSet {
+            sType: VulkanVocabulary.structureWriteDescriptorSet,
+            dstSet: set,
+            dstBinding: U32(item.binding),
+            descriptorCount: U32(1),
+            descriptorType: vulkanDescriptorCode(item.kind),
+            pImageInfo: info
+        }
+    )
+    return .Ok
+}
+
+// Every binding of the group written into `set`. Answers the dynamic offsets,
+// in the ascending binding order Vulkan consumes them in.
+function vulkanWriteDescriptors(
+    state: borrow mut VulkanState,
+    set: RawPtr,
+    group: borrow BindGroupState,
+    bindings: borrow[VulkanReflectedBinding]
+) -> Result<[U32], VulkanBindingFailure> {
+    var offsets: [U32] = []
+    for item in bindings {
+        if item.kind == .UniformBuffer || item.kind == .StorageBuffer {
+            match vulkanWriteBufferDescriptor(state, set, group, item) {
+                Ok(offset) -> offsets.append(offset)
+                Error(failure) -> return .Error(failure)
+            }
+        } else {
+            match vulkanWriteImageDescriptor(state, set, group, item) {
+                Ok -> {}
+                Error(failure) -> return .Error(failure)
+            }
+        }
+    }
+    return .Ok(offsets)
+}
+
+function vulkanAllocateSet(
+    state: borrow VulkanState,
+    layout: RawPtr
+) -> Result<RawPtr, VulkanBindingFailure> {
+    let layouts = boxed<RawPtr>(layout)
+    let set = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkAllocateDescriptorSets(
+            state.device,
+            VkDescriptorSetAllocateInfo {
+                sType: VulkanVocabulary.structureDescriptorSetAllocateInfo,
+                descriptorPool: state.descriptorPool,
+                descriptorSetCount: U32(1),
+                pSetLayouts: layouts.pointer()
+            },
+            set.pointer()
+        )
+    )
+    if result != .Success {
+        return .Error(.PoolExhausted(result))
+    }
+    return .Ok(boxedValue<RawPtr>(set))
+}
+
+// A written descriptor set, the group it binds at, and the dynamic offsets its
+// buffers are read at.
+struct VulkanWrittenSet {
+    let groupIndex: UNumber
+    let set: RawPtr
+    let offsets: [U32]
+}
+
+function vulkanBindSet(
+    state: borrow VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    written: borrow VulkanWrittenSet
+) {
+    let groupIndex = written.groupIndex
+    let offsets = written.offsets
+    let sets = boxed<RawPtr>(written.set)
+    let offsetWords = allocateZeroed(
+        memoryLayout(max(offsets.count, 1) * sizeOf<U32>(), alignOf<U32>())
+    )
+    for index in 0..offsets.count {
+        heapStore<U32>(offsetWords, index * sizeOf<U32>(), offsets[index])
+    }
+    let bindPoint = pipeline.compute ? VulkanVocabulary.pipelineCompute : VulkanVocabulary.pipelineGraphics
+    vkCmdBindDescriptorSets(
+        state.commandBuffer,
+        bindPoint,
+        pipeline.layout,
+        U32(groupIndex),
+        U32(1),
+        sets.pointer(),
+        U32(offsets.count),
+        offsetWords
+    )
+    deallocate(offsetWords)
+}
+
+// The group's resources written into a fresh set and bound at `groupIndex`.
+public function vulkanBindDescriptorState(
+    state: borrow mut VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    groupIndex: UNumber,
+    group: borrow BindGroupState
+) -> Result<Void, VulkanBindingFailure> {
+    let bindings = vulkanGroupBindings(pipeline.reflection, groupIndex)
+    let set = match vulkanAllocateSet(state, pipeline.groupLayouts[groupIndex]) {
+        Ok(set) -> set
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanWriteDescriptors(state, set, group, bindings) {
+        Ok(offsets) -> {
+            vulkanBindSet(
+                state,
+                pipeline,
+                VulkanWrittenSet { groupIndex: groupIndex, set: set, offsets: move offsets }
+            )
+            return .Ok
+        }
+        Error(failure) -> return .Error(failure)
+    }
+}
+
+public function vulkanBindDescriptorGroup(
+    state: borrow mut VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    groupIndex: UNumber,
+    group: borrow BindGroup
+) -> Result<Void, VulkanBindingFailure> {
+    if vulkanGroupBindings(pipeline.reflection, groupIndex).count == 0 {
+        return .Ok
+    }
+    return vulkanBindDescriptorState(
+        state,
+        pipeline,
+        groupIndex,
+        nativeRecover<BindGroupState>(group.storage)
+    )
+}
+
+// `vulkanBindDescriptorGroup` for a dispatch, which reports its own failure.
+public function vulkanBoundComputeGroup(
+    state: borrow mut VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    groupIndex: UNumber,
+    group: borrow BindGroup
+) -> Bool {
+    if pipeline.groupCount == 0 {
+        return true
+    }
+    match vulkanBindDescriptorGroup(state, pipeline, groupIndex, group) {
+        Ok -> return true
+        Error(failure) -> {
+            log fault(
+                "a dispatch was dropped because its buffers could not be bound",
+                failure,
+                groupIndex: groupIndex
+            )
+            return false
+        }
+    }
+}
+
+// Every bind group the encoder carries, bound for a pipeline that knows how many
+// groups its own layout declares.
+//
+// A single-group KSL shader numbers its resources across the whole group, while
+// the encoder partitions them across slots, so the slots are merged and bound
+// at group 0. A shader of several groups reads each slot as the group of the
+// same index.
+public function vulkanApplyBindings(
+    state: borrow mut VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    groups: borrow[BindGroup?]
+) -> Result<Void, VulkanBindingFailure> {
+    if pipeline.groupCount == 1 {
+        let merged = vulkanMergeBindings(groups)
+        match vulkanSuppliedOnce(merged, pipeline.reflection) {
+            Ok -> return vulkanBindDescriptorState(state, pipeline, 0, merged)
+            Error(failure) -> return .Error(failure)
+        }
+    }
+    if pipeline.groupCount > groups.count {
+        return .Error(.TooManyGroups(pipeline.groupCount))
+    }
+    for groupIndex in 0..pipeline.groupCount {
+        let bound = match groups[groupIndex] {
+            Some(group) -> vulkanBindDescriptorGroup(state, pipeline, groupIndex, group)
+            None -> vulkanGroupBindings(pipeline.reflection, groupIndex).count == 0 ? .Ok : .Error(
+                .GroupUnset(groupIndex)
+            )
+        }
+        match bound {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+    }
+    return .Ok
+}

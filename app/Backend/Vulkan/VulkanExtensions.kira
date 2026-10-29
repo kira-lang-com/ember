@@ -1,0 +1,170 @@
+import Foundation
+import Heap
+
+// The extensions an instance and a device are created with, and whether a
+// physical device has what the backend needs from it.
+
+// `vkEnumerateDeviceExtensionProperties` with the layer left out, which C
+// spells as a null name.
+@FFI.Extern { library: vulkan, symbol: vkEnumerateDeviceExtensionProperties, abi: c }
+function vulkanDeviceExtensionProperties(
+    device: RawPtr,
+    layer: RawPtr,
+    count: RawPtr,
+    properties: RawPtr
+) -> I32
+
+namespace VulkanExtension {
+    let surface: String = "VK_KHR_surface"
+    let waylandSurface: String = "VK_KHR_wayland_surface"
+    let win32Surface: String = "VK_KHR_win32_surface"
+    let swapchain: String = "VK_KHR_swapchain"
+    let dynamicRendering: String = "VK_KHR_dynamic_rendering"
+    let externalMemoryFd: String = "VK_KHR_external_memory_fd"
+    let dmaBuf: String = "VK_EXT_external_memory_dma_buf"
+    // `VK_MAX_EXTENSION_NAME_SIZE`: the bytes a name may take, its NUL included.
+    let nameLimit: Number = 256
+}
+
+// Names laid out as C's `const char *const []`: a table of pointers followed
+// by the NUL-terminated names it points at, in one block that stays put for as
+// long as the value lives. Hold it across the call that reads it.
+struct VulkanNameTable {
+    let block: ByteBlock
+    let count: UNumber
+
+    function pointer(borrow self) -> RawPtr {
+        return block.pointer()
+    }
+}
+
+function vulkanNameTable(names: borrow [String]) -> VulkanNameTable {
+    let tableBytes = names.count * sizeOf<RawPtr>()
+    var size = tableBytes
+    for name in names { size += name.utf8().count + 1 }
+    let block = zeroedBlock(max(size, sizeOf<RawPtr>()), alignOf<RawPtr>())
+    var offset = tableBytes
+    for (index, name) in names.enumerated() {
+        blockStore<RawPtr>(block, index * sizeOf<RawPtr>(), heapOffset(block.pointer(), offset))
+        for byte in name.utf8() {
+            blockStore<U8>(block, offset, byte)
+            offset++
+        }
+        // The block is zeroed, so the byte after the name is its NUL.
+        offset++
+    }
+    return VulkanNameTable { block: move block, count: names.count }
+}
+
+// `VK_KHR_surface` and the window system's own surface extension: Wayland's
+// on a Linux kernel, Win32's on Windows.
+function vulkanInstanceExtensionNames() -> [String] {
+    if vulkanKernelDmaBuf() {
+        return [VulkanExtension.surface, VulkanExtension.waylandSurface]
+    }
+    return [VulkanExtension.surface, VulkanExtension.win32Surface]
+}
+
+// Dynamic rendering always; a swapchain to present to a window; and on a Linux
+// kernel the dma-buf export a headless device hands its pictures out through.
+// Off Linux there is no export, and the device keeps the swapchain either way.
+function vulkanDeviceExtensionNames(presentation: borrow VulkanPresentation) -> [String] {
+    var names: [String] = []
+    let windowed = match presentation {
+        Windowed -> true
+        Headless -> false
+    }
+    if windowed || !vulkanKernelDmaBuf() { names.append(VulkanExtension.swapchain) }
+    names.append(VulkanExtension.dynamicRendering)
+    if vulkanKernelDmaBuf() {
+        names.append(VulkanExtension.externalMemoryFd)
+        names.append(VulkanExtension.dmaBuf)
+    }
+    return names
+}
+
+// Whether a physical device can be created as the backend creates one: Vulkan
+// 1.2, every extension it is created with, and dynamic rendering enabled.
+function vulkanDeviceSupports(device: RawPtr, presentation: borrow VulkanPresentation) -> Bool {
+    if !vulkanDeviceVersionSupported(device) { return false }
+    let available = match vulkanDeviceExtensions(device) {
+        Some(available) -> available
+        None -> return false
+    }
+    for name in vulkanDeviceExtensionNames(presentation) {
+        if !available.contains(name) { return false }
+    }
+    return vulkanDeviceRendersDynamically(device)
+}
+
+function vulkanDeviceVersionSupported(device: RawPtr) -> Bool {
+    let properties = boxed<VkPhysicalDeviceProperties>(VkPhysicalDeviceProperties())
+    vkGetPhysicalDeviceProperties(device, properties.pointer())
+    return boxedValue<VkPhysicalDeviceProperties>(properties).apiVersion
+        >= VulkanVocabulary.apiVersion12
+}
+
+// The names of the extensions the device offers, or nothing when it will not
+// list them.
+function vulkanDeviceExtensions(device: RawPtr) -> Optional<[String]> {
+    let count = boxed<U32>(U32(0))
+    let counted = vulkanDeviceExtensionProperties(
+        device,
+        nullPointer(),
+        count.pointer(),
+        nullPointer()
+    )
+    if vulkanResultOf(counted) != .Success { return .None }
+    let stride = sizeOf<VkExtensionProperties>()
+    let block = zeroedBlock(
+        max(Number(boxedValue<U32>(count)), 1) * stride,
+        alignOf<VkExtensionProperties>()
+    )
+    let listed = vulkanDeviceExtensionProperties(
+        device,
+        nullPointer(),
+        count.pointer(),
+        block.pointer()
+    )
+    if vulkanResultOf(listed) != .Success { return .None }
+    var names: [String] = []
+    for index in 0..Number(boxedValue<U32>(count)) {
+        // A name is the first member, so it starts where its element does.
+        let name = heapOffset(block.pointer(), index * stride)
+        names.append(stringFromCBytes(name, VulkanExtension.nameLimit))
+    }
+    return .Some(names)
+}
+
+// Whether the device's dynamic rendering feature can be turned on: the
+// extension being listed is not enough.
+function vulkanDeviceRendersDynamically(device: RawPtr) -> Bool {
+    let rendering = boxed<VkPhysicalDeviceDynamicRenderingFeatures>(
+        VkPhysicalDeviceDynamicRenderingFeatures {
+            sType: VulkanVocabulary.structureDynamicRenderingFeatures,
+            pNext: nullPointer(),
+            dynamicRendering: U32(0)
+        }
+    )
+    let features = boxed<VkPhysicalDeviceFeatures2>(
+        VkPhysicalDeviceFeatures2 {
+            sType: I32(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2),
+            pNext: rendering.pointer(),
+            features: VkPhysicalDeviceFeatures {}
+        }
+    )
+    vkGetPhysicalDeviceFeatures2(device, features.pointer())
+    return boxedValue<VkPhysicalDeviceDynamicRenderingFeatures>(rendering).dynamicRendering
+        != U32(0)
+}
+
+// The feature chain a device is created with, turning dynamic rendering on.
+function vulkanDynamicRenderingFeatures() -> Boxed<VkPhysicalDeviceDynamicRenderingFeatures> {
+    return boxed<VkPhysicalDeviceDynamicRenderingFeatures>(
+        VkPhysicalDeviceDynamicRenderingFeatures {
+            sType: VulkanVocabulary.structureDynamicRenderingFeatures,
+            pNext: nullPointer(),
+            dynamicRendering: U32(1)
+        }
+    )
+}

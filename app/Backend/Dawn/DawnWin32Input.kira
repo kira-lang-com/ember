@@ -1,0 +1,325 @@
+import Foundation
+
+// The Win32 message queue, read into `AppEvent`s once for every backend that
+// opens a Win32 window.
+
+// The `WM_*` messages a window here acts on. Open: the queue carries hundreds
+// this list does not name, and those pass to `DispatchMessage` untouched.
+public @Open enum Win32Message: U32 {
+    Destroy = 2
+    Size = 5
+    SetFocus = 7
+    KillFocus = 8
+    Close = 16
+    Quit = 18
+    KeyDown = 256
+    KeyUp = 257
+    Character = 258
+    SystemKeyDown = 260
+    SystemKeyUp = 261
+    PointerMove = 512
+    LeftDown = 513
+    LeftUp = 514
+    RightDown = 516
+    RightUp = 517
+    MiddleDown = 519
+    MiddleUp = 520
+    Wheel = 522
+    EnterSizeMove = 561
+    ExitSizeMove = 562
+}
+
+// The Windows virtual keys this backend reads: the ones whose code differs from
+// the `Key` that names them, and the modifiers and buttons `GetKeyState` is
+// asked about. Letters and digits agree with `Key`, so they are not listed.
+@Open enum VirtualKey: U32 {
+    LeftButton = 1
+    RightButton = 2
+    MiddleButton = 4
+    Back = 8
+    Tab = 9
+    Return = 13
+    Shift = 16
+    Control = 17
+    Menu = 18
+    Escape = 27
+    Space = 32
+    Prior = 33
+    Next = 34
+    End = 35
+    Home = 36
+    Left = 37
+    Up = 38
+    Right = 39
+    Down = 40
+    Insert = 45
+    Delete = 46
+    F1 = 112
+    F2 = 113
+    F3 = 114
+    F4 = 115
+    F5 = 116
+    F6 = 117
+    F7 = 118
+    F8 = 119
+    F9 = 120
+    F10 = 121
+    F11 = 122
+    F12 = 123
+    LeftWindows = 91
+    RightWindows = 92
+}
+
+namespace Win32Payload {
+    // `lParam` carries a pointer position as two 16-bit halves, and `wParam`
+    // carries a wheel's notches in the same 16 bits at its top.
+    let halfBits: U64 = U64(16)
+    let halfShift: Int = 16
+    let halfMask: UNumber = 65535
+    // Win32 writes a negative coordinate as its two's complement in those 16
+    // bits rather than as a sign, so a value at or above the top bit is one
+    // full range below zero.
+    let halfSignBit: UNumber = 32768
+    let halfRange: UNumber = 65536
+    // A wheel notch is reported in units of 120, and the surface wants a
+    // distance rather than a count.
+    let wheelNotchUnits: UNumber = 120
+    // Bit 30 of a key message's `lParam` is "the key was already down", which
+    // is what a repeat is.
+    let keyRepeatShift: Int = 30
+    // The control range and the UTF-16 surrogates are not text a field should
+    // insert.
+    let firstPrintable: UNumber = 32
+    let firstSurrogate: UNumber = 55296
+    let lastSurrogate: UNumber = 57343
+}
+
+// One queued message, as `PeekMessage` filled it in.
+public struct Win32Queued {
+    let message: U32 = U32(0)
+    let wparam: U64 = U64(0)
+    let lparam: Int = 0
+}
+
+// A key as the `Key` every backend reports.
+function win32Key(virtualKey: U64) -> Key {
+    return match fromCode<VirtualKey>(U32(virtualKey)) {
+        Back -> .Backspace
+        Tab -> .Tab
+        Return -> .Enter
+        Shift -> .LeftShift
+        Control -> .LeftControl
+        Menu -> .LeftAlt
+        Escape -> .Escape
+        Space -> .Space
+        Prior -> .PageUp
+        Next -> .PageDown
+        End -> .End
+        Home -> .Home
+        Left -> .Left
+        Up -> .Up
+        Right -> .Right
+        Down -> .Down
+        Insert -> .Insert
+        Delete -> .Delete
+        F1 -> .F1
+        F2 -> .F2
+        F3 -> .F3
+        F4 -> .F4
+        F5 -> .F5
+        F6 -> .F6
+        F7 -> .F7
+        F8 -> .F8
+        F9 -> .F9
+        F10 -> .F10
+        F11 -> .F11
+        F12 -> .F12
+        // A letter or a digit, whose virtual key is already its `Key`.
+        else -> fromCode<Key>(U32(virtualKey))
+    }
+}
+
+// One signed 16-bit half of a payload.
+function win32SignedHalf(half: UNumber) -> Number {
+    return half >= Win32Payload.halfSignBit ? half - Win32Payload.halfRange : half
+}
+
+// The pointer position a message carries in `lParam`, in CLIENT pixels, as
+// points: layout and hit-testing are in points, so the backing scale divides out
+// here rather than at every caller.
+function win32Point(lparam: Int, scale: Number) -> PointerDelta {
+    let x = win32SignedHalf(lparam & Win32Payload.halfMask)
+    let y = win32SignedHalf((lparam >> Win32Payload.halfShift) & Win32Payload.halfMask)
+    return PointerDelta { x: x / scale, y: y / scale }
+}
+
+// The wheel's turn out of `wParam`'s high half, in notches.
+function win32WheelNotches(wparam: U64) -> Number {
+    let high = Number(wparam >> Win32Payload.halfBits) & Win32Payload.halfMask
+    return win32SignedHalf(high) / Win32Payload.wheelNotchUnits
+}
+
+function win32PointerMoved(
+    queued: borrow Win32Queued,
+    scale: Number,
+    input: borrow mut WindowInput
+) -> AppEvent {
+    let point = win32Point(queued.lparam, scale)
+    let delta = input.movePointer(point.x, point.y)
+    return AppEvent {
+        kind: .PointerMoved,
+        modifiers: dawnModifierState(),
+        pointerX: point.x,
+        pointerY: point.y,
+        pointerDeltaX: delta.x,
+        pointerDeltaY: delta.y
+    }
+}
+
+// A press or release of `button`, which also moves the pointer there.
+struct Win32Button {
+    let kind: AppEventKind = .PointerDown
+    let button: PointerButton = .Left
+}
+
+function win32ButtonEvent(
+    queued: borrow Win32Queued,
+    scale: Number,
+    change: borrow Win32Button,
+    input: borrow mut WindowInput
+) -> AppEvent {
+    let point = win32Point(queued.lparam, scale)
+    input.movePointer(point.x, point.y)
+    return AppEvent {
+        kind: change.kind,
+        modifiers: dawnModifierState(),
+        pointerButton: change.button,
+        pointerX: point.x,
+        pointerY: point.y
+    }
+}
+
+function win32KeyDown(queued: borrow Win32Queued) -> AppEvent {
+    return AppEvent {
+        kind: .KeyDown,
+        modifiers: dawnModifierState(),
+        key: win32Key(queued.wparam),
+        keyRepeat: ((queued.lparam >> Win32Payload.keyRepeatShift) & 1) == 1
+    }
+}
+
+function win32KeyUp(queued: borrow Win32Queued) -> AppEvent {
+    return AppEvent { kind: .KeyUp, modifiers: dawnModifierState(), key: win32Key(queued.wparam) }
+}
+
+function win32Text(queued: borrow Win32Queued) -> AppEvent? {
+    let codepoint = Number(queued.wparam)
+    let surrogate = codepoint >= Win32Payload.firstSurrogate && codepoint <= Win32Payload.lastSurrogate
+    if codepoint < Win32Payload.firstPrintable || surrogate {
+        return .None
+    }
+    return .Some(
+        AppEvent {
+            kind: .TextInput,
+            modifiers: dawnModifierState(),
+            textCodepoint: UN32(codepoint)
+        }
+    )
+}
+
+function win32Wheel(queued: borrow Win32Queued, input: borrow WindowInput) -> AppEvent {
+    // The wheel reports its position in SCREEN pixels, so the event lands where
+    // the last client-area position put the pointer.
+    return AppEvent {
+        kind: .Scroll,
+        modifiers: dawnModifierState(),
+        pointerX: input.pointerX,
+        pointerY: input.pointerY,
+        scrollY: win32WheelNotches(queued.wparam)
+    }
+}
+
+// `.Focused` or `.Unfocused`, noted where the frame statistics read it.
+function win32Focus(kind: AppEventKind, input: borrow mut WindowInput) -> AppEvent {
+    input.focused = kind == .Focused
+    return AppEvent { kind: kind }
+}
+
+// The button and transition a mouse-button message reports, or nothing for
+// any other message.
+function win32ButtonOf(message: borrow Win32Message) -> Win32Button? {
+    return match message {
+        LeftDown -> .Some(Win32Button { kind: .PointerDown, button: .Left })
+        LeftUp -> .Some(Win32Button { kind: .PointerUp, button: .Left })
+        RightDown -> .Some(Win32Button { kind: .PointerDown, button: .Right })
+        RightUp -> .Some(Win32Button { kind: .PointerUp, button: .Right })
+        MiddleDown -> .Some(Win32Button { kind: .PointerDown, button: .Middle })
+        MiddleUp -> .Some(Win32Button { kind: .PointerUp, button: .Middle })
+        else -> .None
+    }
+}
+
+// One queued message as an `AppEvent`, or nothing where the application has no
+// vocabulary for it.
+function win32Event(
+    queued: borrow Win32Queued,
+    scale: Number,
+    input: borrow mut WindowInput
+) -> AppEvent? {
+    let message = fromCode<Win32Message>(queued.message)
+    match win32ButtonOf(message) {
+        Some(button) -> return .Some(win32ButtonEvent(queued, scale, button, input))
+        None -> {}
+    }
+    return match message {
+        PointerMove -> .Some(win32PointerMoved(queued, scale, input))
+        Wheel -> .Some(win32Wheel(queued, input))
+        KeyDown -> .Some(win32KeyDown(queued))
+        SystemKeyDown -> .Some(win32KeyDown(queued))
+        KeyUp -> .Some(win32KeyUp(queued))
+        SystemKeyUp -> .Some(win32KeyUp(queued))
+        Character -> win32Text(queued)
+        SetFocus -> .Some(win32Focus(.Focused, input))
+        KillFocus -> .Some(win32Focus(.Unfocused, input))
+        // The window procedure's own messages, and every message this has no
+        // event for, reach the application only through `DispatchMessage`.
+        else -> .None
+    }
+}
+
+// How a drain of the queue ended.
+public enum Win32Drain {
+    Empty
+    QuitPosted
+}
+
+// Drains the thread's message queue, delivering what the application has words
+// for and dispatching every message to its window procedure. `scale` is the
+// window's backing scale.
+public function win32DrainMessages(
+    messages: WindowMessagePointer,
+    scale: Number,
+    input: borrow mut WindowInput,
+    onEvent: borrow (borrow AppEvent) -> Void
+) -> Win32Drain {
+    while messageWaiting(messages) {
+        let queued = Win32Queued {
+            message: messages.message,
+            wparam: messages.wparam,
+            lparam: messages.lparam
+        }
+        if fromCode<Win32Message>(queued.message) == .Quit {
+            onEvent(AppEvent { kind: .QuitRequested, modifiers: dawnModifierState() })
+            return .QuitPosted
+        }
+        match win32Event(queued, scale, input) {
+            Some(event) -> onEvent(event)
+            // Nothing the application has a word for; the window procedure
+            // still sees it below.
+            None -> {}
+        }
+        translateMessage(messages)
+        dispatchMessage(messages)
+    }
+    return .Empty
+}

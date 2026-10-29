@@ -1,0 +1,116 @@
+// The closed sets a texture, a buffer and a render pass are described with.
+//
+// The companion of `Formats.kira`, which holds the sets a *pipeline* is
+// described with. Same rule: every `match` names every variant with no `_` arm,
+// and each carries the wire code the backends already speak, so the typed
+// surface lands without a backend changing.
+
+import Foundation
+
+public enum TextureUsage {
+    // Read by a shader, written once when it is created.
+    Sampled
+    // Read by a shader and re-uploadable afterwards. Separate from `Sampled`
+    // because the difference is a permission a backend enforces: a backend may refuse
+    // `sg_update_image` against an immutable image, so a texture that will be
+    // written again has to say so up front.
+    SampledStreaming
+    RenderTarget
+    RenderTargetSampled
+    DepthStencil
+    // Written by a compute kernel through an image binding and sampled
+    // afterwards. What a blur level produced by a dispatch is: the kernel needs
+    // the image bit to store through, and every composite samples the result.
+    // No attachment bit — nothing rasterizes into one of these.
+    SampledStorage
+}
+
+public function textureUsageCode(usage: TextureUsage) -> Number {
+    match usage {
+        Sampled -> return 1
+        RenderTarget -> return 2
+        RenderTargetSampled -> return 3
+        DepthStencil -> return 4
+        SampledStreaming -> return 5
+        SampledStorage -> return 6
+    }
+}
+
+public enum BufferUsage {
+    Vertex
+    Index
+    Uniform
+    Storage
+}
+
+public enum LoadAction {
+    Clear
+    Load
+    DontCare
+}
+
+public function loadActionCode(action: LoadAction) -> Number {
+    match action {
+        Clear -> return 1
+        Load -> return 2
+        DontCare -> return 3
+    }
+}
+
+public enum StoreAction {
+    Store
+    DontCare
+}
+
+public function storeActionCode(action: StoreAction) -> Number {
+    match action {
+        Store -> return 1
+        DontCare -> return 2
+    }
+}
+
+public enum RenderTargetKind {
+    Swapchain
+    Texture
+}
+
+public function renderTargetKindCode(kind: RenderTargetKind) -> Number {
+    match kind {
+        Swapchain -> return 1
+        Texture -> return 2
+    }
+}
+
+// What an attachment costs between passes.
+//
+// `Memoryless` is the one worth knowing: a tile-based GPU never writes it back,
+// so an attachment the next pass does not read costs no bandwidth at all.
+public enum AttachmentStorage {
+    Persistent
+    Transient
+    Memoryless
+}
+
+public enum TextureFilter {
+    Nearest
+    Linear
+}
+
+public function textureFilterCode(filter: TextureFilter) -> Number {
+    match filter {
+        Nearest -> return 1
+        Linear -> return 2
+    }
+}
+
+public enum AddressMode {
+    ClampToEdge
+    Repeat
+}
+
+public function addressModeCode(mode: AddressMode) -> Number {
+    match mode {
+        ClampToEdge -> return 1
+        Repeat -> return 2
+    }
+}

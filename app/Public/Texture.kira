@@ -1,0 +1,46 @@
+// A texture, and the views a backend reaches it through.
+//
+// Metal has one object: the id is the texture, and the view fields repeat it.
+// Dawn and Vulkan split the two — an image holds the pixels, and a view is what a bind
+// group, a UI draw and a pass attachment each take — so the ids it mints travel
+// here with the image rather than in a table keyed on it. A caller passes a
+// `GraphicsTexture` and never learns which of the two shapes it has.
+public struct GraphicsTexture {
+    var id: TextureId = NoTextureId
+    // The view a shader samples through, for a texture whose usage is sampled.
+    var viewId: ViewId = NoViewId
+    // The view a pass writes color through, for a render target.
+    var colorViewId: ViewId = NoViewId
+    // The view a pass writes depth and stencil through.
+    var depthViewId: ViewId = NoViewId
+    // The view a compute kernel writes through, for a texture whose usage asks
+    // for a storage image. Distinct from `colorViewId`: an image binding and a
+    // color attachment are different view kinds even over the same pixels.
+    var storageViewId: ViewId = NoViewId
+    // The extent the pixels cover, and how many samples each holds.
+    //
+    // Carried rather than asked for: a pass sized to this target, and a managed
+    // depth buffer matched to it, both need the numbers, and the side that
+    // created the texture is the side that knows them.
+    var width: UN32 = 0
+    var height: UN32 = 0
+    var sampleCount: UN8 = 1
+}
+
+// A texture value that binds through `viewId`.
+//
+// For a caller that only ever had the view id. A `TextureView` widget carries
+// one number across a widget tree, and the view is the number every backend
+// binds through — Metal repeats its texture id into `viewId`, so the same number
+// is right on both.
+//
+// Binding is all it is for. Uploading to a texture needs the image id, and
+// attaching a pass to one needs the attachment views; neither can be recovered
+// from a sampled view.
+public function sampledTextureFromViewId(viewId: ViewId) -> GraphicsTexture {
+    return GraphicsTexture { id: TextureId(viewId.raw), viewId: viewId }
+}
+
+public function emptyGraphicsTexture() -> GraphicsTexture {
+    return GraphicsTexture { id: NoTextureId }
+}

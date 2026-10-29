@@ -1,0 +1,195 @@
+import Foundation
+import Heap
+
+// Submit one acquired frame and present its swapchain image. The fence is the
+// sole in-flight slot, so the next acquire waits for all commands that can read
+// the CPU-visible ring buffers before those buffers are reused.
+
+public function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
+    if !vulkanRequireDevice(context, "vulkanSubmitFrame") { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    vulkanSubmitFrameState(runtime.vulkan)
+    noteFrameCost(
+        runtime,
+        runtime.vulkan.stats.frameSeconds,
+        runtime.vulkan.stats.passCount,
+        runtime.vulkan.stats.drawCount
+    )
+}
+
+// The semaphore a frame that presents signals once its commands finish, for
+// the presentation to wait on.
+struct VulkanPresentSync {
+    let signal: RawPtr
+}
+
+// The recorded commands ended and submitted against the frame fence. A frame
+// that presents waits on the acquire where one is pending and signals `present`.
+public function vulkanSubmitFrameCommands(
+    state: borrow mut VulkanState,
+    present: borrow VulkanPresentSync?
+) -> Result<Void, VulkanFrameFailure> {
+    vulkanGpuTimingSubmit(state)
+    let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
+    if endResult != .Success {
+        return .Error(.CommandBufferNotEnded(endResult))
+    }
+    let fence = boxed<RawPtr>(state.inFlightFence)
+    let resetResult = vulkanResultOf(vkResetFences(state.device, U32(1), fence.pointer()))
+    if resetResult != .Success {
+        return .Error(.FenceResetFailed(resetResult))
+    }
+    let commands = boxed<RawPtr>(state.commandBuffer)
+    let waitSemaphore = boxed<RawPtr>(state.imageAvailable)
+    let waitStage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
+    let signalSemaphore = boxed<RawPtr>(nullPointer())
+    match present {
+        Some(sync) -> { setBoxedValue<RawPtr>(signalSemaphore, sync.signal) }
+        None -> {}
+    }
+    let waitCount = match present {
+        Some(_) -> state.acquireWaitPending ? U32(1) : U32(0)
+        None -> U32(0)
+    }
+    let signalCount = match present {
+        Some(_) -> U32(1)
+        None -> U32(0)
+    }
+    let info = VkSubmitInfo {
+        sType: VulkanVocabulary.structureSubmitInfo,
+        waitSemaphoreCount: waitCount,
+        pWaitSemaphores: waitSemaphore.pointer(),
+        pWaitDstStageMask: waitStage.pointer(),
+        commandBufferCount: U32(1),
+        pCommandBuffers: commands.pointer(),
+        signalSemaphoreCount: signalCount,
+        pSignalSemaphores: signalSemaphore.pointer()
+    }
+    let submitResult = vulkanResultOf(vkQueueSubmit(state.queue, U32(1), info, state.inFlightFence))
+    if submitResult != .Success {
+        return .Error(.SubmitFailed(submitResult))
+    }
+    state.acquireWaitPending = false
+    return .Ok
+}
+
+// The acquired image handed to the compositor once `signal` is signalled. An
+// out-of-date or suboptimal swapchain is recreated on the next acquire, so
+// neither is a failure here.
+function vulkanPresentImage(state: borrow mut VulkanState, signal: RawPtr) {
+    let semaphore = boxed<RawPtr>(signal)
+    let swapchain = boxed<RawPtr>(state.swapchain)
+    let imageIndex = boxed<U32>(state.currentImageIndex)
+    let presentResult = vulkanResultOf(
+        vkQueuePresentKHR(
+            state.queue,
+            VkPresentInfoKHR {
+                sType: VulkanVocabulary.structurePresentInfo,
+                waitSemaphoreCount: U32(1),
+                pWaitSemaphores: semaphore.pointer(),
+                swapchainCount: U32(1),
+                pSwapchains: swapchain.pointer(),
+                pImageIndices: imageIndex.pointer()
+            }
+        )
+    )
+    if presentResult != .Success && presentResult != .Suboptimal && presentResult != .OutOfDate {
+        log fault("could not present the frame", result: presentResult)
+    }
+    state.presentedThisFrame = true
+    if !state.announcedFramePresented {
+        state.announcedFramePresented = true
+        emberLiveFramePresented()
+        emberLiveFirstFrame()
+    }
+}
+
+function vulkanRecordPresentedStats(state: borrow mut VulkanState, encodingSeconds: Number) {
+    state.stats.frameSeconds = secondsFromNanoseconds(
+        vulkanMonotonicNanoseconds() - state.frameStartedAt
+    )
+    state.stats.cpuSeconds = encodingSeconds
+    state.stats.drawableWidth = UN32(state.swapchainWidth)
+    state.stats.drawableHeight = UN32(state.swapchainHeight)
+    state.stats.allocatedBytes = state.allocatedBytes
+    state.stats.hasAllocatedBytes = true
+    state.stats.resourceCount = state.resourceCount
+    state.stats.passCount = state.framePassCount
+    state.stats.drawCount = state.frameDrawCount
+    state.stats.triangleCount = state.frameTriangleCount
+    state.stats.framesInFlight = 1
+    state.stats.frameSerial = state.stats.frameSerial + 1
+    state.stats.windowState = state.input.focused ? .FocusedVisible : .VisibleUnfocused
+}
+
+function vulkanTraceFrameSubmit(state: borrow VulkanState) {
+    if !state.tracing.frame {
+        return
+    }
+    log debug(
+        "Ember submitting a frame",
+        area: "frame",
+        serial: state.stats.frameSerial,
+        active: state.frameActive,
+        passes: state.framePassCount,
+        draws: state.frameDrawCount,
+        triangles: state.frameTriangleCount
+    )
+}
+
+public function vulkanSubmitFrameState(state: borrow mut VulkanState) {
+    state.presentedThisFrame = false
+    vulkanTraceFrameSubmit(state)
+    if !state.frameActive { return }
+    if state.passActive {
+        vulkanEndPassAndCommitState(state)
+    }
+    if !state.acquired {
+        vulkanSubmitUnpresentedFrame(state)
+        return
+    }
+    if state.headless {
+        return vulkanSubmitHeadlessImageFrame(state)
+    }
+    vulkanTransitionSwapchainImage(state, state.currentImageIndex, .Present)
+    let encodingSeconds = secondsFromNanoseconds(
+        vulkanMonotonicNanoseconds() - state.frameStartedAt
+    )
+    // Reacquiring this image proves its preceding presentation has consumed
+    // the semaphore. A frame fence alone cannot prove that for a shared one.
+    let signal = state.swapchainPresentSemaphores[Number(state.currentImageIndex)]
+    state.frameActive = false
+    state.acquired = false
+    match vulkanSubmitFrameCommands(state, .Some(VulkanPresentSync { signal: signal })) {
+        Ok -> vulkanPresentImage(state, signal)
+        Error(failure) -> {
+            log fault("could not submit the frame; quitting", failure)
+            state.quitRequested = true
+            return
+        }
+    }
+    vulkanRecordPresentedStats(state, encodingSeconds)
+}
+
+// A frame that drew nothing to the window still ends its command buffer and
+// signals the frame fence, so its offscreen work runs and the next frame's wait
+// holds; nothing is presented.
+public function vulkanSubmitUnpresentedFrame(state: borrow mut VulkanState) {
+    state.frameActive = false
+    match vulkanSubmitFrameCommands(state, .None) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not submit an unpresented frame; quitting", failure)
+            state.quitRequested = true
+            return
+        }
+    }
+    log debug(
+        "nothing was drawn to the window this frame, so nothing was presented",
+        frameSerial: state.stats.frameSerial,
+        framePassCount: state.framePassCount
+    )
+    state.stats.passCount = state.framePassCount
+    state.stats.drawCount = state.frameDrawCount
+    state.stats.frameSerial = state.stats.frameSerial + 1
+}

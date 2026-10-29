@@ -1,0 +1,305 @@
+import Foundation
+import Heap
+// Shader modules on WebGPU, which means WGSL.
+//
+// `kira-wgsl-backend` emits one module per stage with its own entry name, and
+// `kira shader build` writes them beside the KSL as `{asset}.vert.wgsl` and
+// `{asset}.frag.wgsl`; an inline `ksl!` artifact carries the same two strings in
+// `vertexWgsl` / `fragmentWgsl`. Both routes land here.
+//
+// # Why shaders have a table of their own
+//
+// A `GraphicsShader` is one `U32`, and a WebGPU graphics shader is two modules
+// and two entry names — a pipeline names the vertex stage and the fragment stage
+// separately, and a module carries neither name nor stage. So the id indexes a
+// record here rather than the flat object table, which holds one handle per
+// slot. A compute shader is one module and one entry, in the same record.
+
+public struct DawnShaderRecord {
+    var vertexModule: RawPtr
+    var fragmentModule: RawPtr
+    var computeModule: RawPtr
+    var vertexEntry: String = ""
+    var fragmentEntry: String = ""
+    var computeEntry: String = ""
+    var live: Bool = false
+    // Which `@group(n) @binding(m)` some stage of this shader reads, off its KSL
+    // reflection, and whether it came with a reflection at all. A pipeline built
+    // from it carries these forward so a draw can assemble the groups WebGPU
+    // binds; see `DawnBindLayout.kira`. Absent for raw WGSL a caller compiled
+    // itself, which keeps the slot-per-group reading instead.
+    var bindings: [DawnShaderBinding] = []
+    var hasReflection: Bool = false
+}
+
+public function dawnEmptyShaderRecord() -> DawnShaderRecord {
+    return DawnShaderRecord {
+        vertexModule: nullPointer(),
+        fragmentModule: nullPointer(),
+        computeModule: nullPointer()
+    }
+}
+
+// Compiles one WGSL module. Dawn answers with a module object even for source it
+// rejects — the refusal arrives on the uncaptured-error callback — so an empty
+// source is caught here, where the label is still in hand.
+public function dawnCompileWgsl(
+    state: borrow GraphicsRuntimeState,
+    label: borrow String,
+    source: borrow String
+) -> RawPtr {
+    if source.count == 0 {
+        log fault("a shader has no WGSL for this stage", label: label)
+        return nullPointer()
+    }
+    if !state.dawn.strictMath {
+        return wgpuDeviceCreateShaderModule(
+            state.dawn.device,
+            WGPUShaderModuleDescriptor {
+                nextInChain: WGPUShaderSourceWGSL {
+                    chain: WGPUChainedStruct { sType: DawnVocabulary.structureWgsl },
+                    code: dawnText(source)
+                },
+                label: dawnText(label)
+            }
+        )
+    }
+    let options = WGPUShaderModuleCompilationOptions {
+        chain: WGPUChainedStruct { sType: DawnVocabulary.structureCompilationOptions },
+        strictMath: U32(1)
+    }
+    return wgpuDeviceCreateShaderModule(
+        state.dawn.device,
+        WGPUShaderModuleDescriptor {
+            nextInChain: WGPUShaderSourceWGSL {
+                chain: WGPUChainedStruct { next: options, sType: DawnVocabulary.structureWgsl },
+                code: dawnText(source)
+            },
+            label: dawnText(label)
+        }
+    )
+}
+
+// Records a compiled shader and answers the `GraphicsShader` that names it.
+public function dawnRecordShader(
+    state: borrow mut GraphicsRuntimeState,
+    record: DawnShaderRecord
+) -> GraphicsShader {
+    for slot in 0..state.dawn.shaders.count {
+        if !state.dawn.shaders[slot].live {
+            state.dawn.shaders[slot] = record
+            return GraphicsShader { id: ShaderId(U32(slot + 1)) }
+        }
+    }
+    state.dawn.shaders.append(record)
+    return GraphicsShader { id: ShaderId(U32(state.dawn.shaders.count)) }
+}
+
+public function dawnShaderRecord(state: borrow GraphicsRuntimeState, id: U32) -> DawnShaderRecord {
+    let slot = Number(id) - 1
+    if slot < 0 || slot >= state.dawn.shaders.count {
+        return dawnEmptyShaderRecord()
+    }
+    return state.dawn.shaders[slot]
+}
+
+// A graphics shader from two WGSL sources and the entry names the backend that
+// emitted them chose.
+//
+// `reflection` is the KSL `resourceReflection` digest, empty for WGSL that did
+// not come from a KSL compile. It decides how a draw reads the encoder's four
+// bind-group slots; see `DawnBindLayout.kira`.
+public struct DawnGraphicsSource {
+    var label: String = ""
+    var vertex: String = ""
+    var fragment: String = ""
+    var vertexEntry: String = KslEntry.vertex
+    var fragmentEntry: String = KslEntry.fragment
+    var reflection: String = ""
+}
+
+public function dawnCreateGraphicsShader(
+    context: RawPtr,
+    source: borrow DawnGraphicsSource
+) -> ShaderResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let vertexModule = dawnCompileWgsl(state, source.label + " vertex", source.vertex)
+    if isNull(vertexModule) {
+        return .Error(.ShaderRejected)
+    }
+    let fragmentModule = dawnCompileWgsl(state, source.label + " fragment", source.fragment)
+    if isNull(fragmentModule) {
+        wgpuShaderModuleRelease(vertexModule)
+        return .Error(.ShaderRejected)
+    }
+    return .Ok(
+        dawnRecordShader(
+            state,
+            DawnShaderRecord {
+                vertexModule: vertexModule,
+                fragmentModule: fragmentModule,
+                computeModule: nullPointer(),
+                vertexEntry: source.vertexEntry,
+                fragmentEntry: source.fragmentEntry,
+                computeEntry: "",
+                live: true,
+                bindings: dawnUsedBindings(source.reflection),
+                hasReflection: source.reflection.count > 0
+            }
+        )
+    )
+}
+
+// A compute shader, whose one module is its kernel.
+public function dawnCreateComputeShader(
+    context: RawPtr,
+    label: borrow String,
+    computeWgsl: borrow String,
+    computeEntry: borrow String
+) -> ShaderResult {
+    if !dawnHasDevice(context) {
+        return .Error(.DeviceRefused)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let module = dawnCompileWgsl(state, label + " compute", computeWgsl)
+    if isNull(module) {
+        return .Error(.ShaderRejected)
+    }
+    return .Ok(
+        dawnRecordShader(
+            state,
+            DawnShaderRecord {
+                vertexModule: nullPointer(),
+                fragmentModule: nullPointer(),
+                computeModule: module,
+                vertexEntry: "",
+                fragmentEntry: "",
+                computeEntry: computeEntry,
+                live: true
+            }
+        )
+    )
+}
+
+// `Graphics.createShaderFromKslArtifact`. A shader with a compute entry is a
+// kernel and nothing else — that is what an empty `computeEntry` already says
+// about a graphics shader — so the two are separated here rather than by the
+// caller.
+public function dawnCreateShaderFromArtifact(
+    context: RawPtr,
+    label: borrow String,
+    artifact: borrow KslArtifact
+) -> ShaderResult {
+    if artifact.computeEntry.count > 0 {
+        return dawnCreateComputeShader(context, label, artifact.computeWgsl, artifact.computeEntry)
+    }
+    return dawnCreateGraphicsShader(
+        context,
+        DawnGraphicsSource {
+            label: label,
+            vertex: artifact.vertexWgsl,
+            fragment: artifact.fragmentWgsl,
+            vertexEntry: artifact.vertexEntry,
+            fragmentEntry: artifact.fragmentEntry,
+            reflection: artifact.resourceReflection
+        }
+    )
+}
+
+// `Graphics.createShaderFromKsl`, reading the files `kira shader build` wrote.
+//
+// The entry names are the ones the WGSL backend emits — `vertex_main` and
+// `fragment_main` — rather than names a caller supplies: a name that does not
+// match leaves the pipeline with no entry point and Dawn refuses it, and there
+// is no reason to make a caller repeat what the emitter already decided.
+//
+// `{asset}.resources` is read beside them: `kira shader build` writes the same
+// digest an inline `ksl!` artifact carries, and a shader read off disk needs it
+// for the same reason an inline one does.
+public function dawnCreateShaderFromKsl(
+    context: RawPtr,
+    descriptor: borrow KslShaderDescriptor
+) -> ShaderResult {
+    let base = descriptor.directory + "/" + descriptor.asset
+    let vertex = try readShaderAsset(
+        base + ".vert.wgsl",
+        "run `kira shader build`"
+    ) otherwise return .Error(.AssetUnreadable)
+    let fragment = try readShaderAsset(
+        base + ".frag.wgsl",
+        "run `kira shader build`"
+    ) otherwise return .Error(.AssetUnreadable)
+    return dawnCreateGraphicsShader(
+        context,
+        DawnGraphicsSource {
+            label: descriptor.label,
+            vertex: vertex,
+            fragment: fragment,
+            reflection: readShaderResourceDigest(base + ".resources")
+        }
+    )
+}
+
+// `Graphics.createShader`, from sources or paths the caller names itself.
+//
+// The sources are WGSL, because that is what this device compiles. A caller
+// holding GLSL or MSL has a shader for another backend, and saying so here is
+// the only honest answer — the alternative is handing Dawn text it will reject
+// with a message about a token rather than about a language.
+public function dawnCreateShaderFromSources(
+    context: RawPtr,
+    descriptor: borrow ShaderDescriptor
+) -> ShaderResult {
+    var vertexSource = descriptor.vertexSource
+    var fragmentSource = descriptor.fragmentSource
+    if vertexSource.count == 0 && descriptor.vertexPath.count > 0 {
+        let contents = try readShaderAsset(
+            descriptor.vertexPath,
+            "point vertexPath at a WGSL file"
+        ) otherwise return .Error(.AssetUnreadable)
+        vertexSource = contents
+    }
+    if fragmentSource.count == 0 && descriptor.fragmentPath.count > 0 {
+        let contents = try readShaderAsset(
+            descriptor.fragmentPath,
+            "point fragmentPath at a WGSL file"
+        ) otherwise return .Error(.AssetUnreadable)
+        fragmentSource = contents
+    }
+    return dawnCreateGraphicsShader(
+        context,
+        DawnGraphicsSource {
+            label: descriptor.label,
+            vertex: vertexSource,
+            fragment: fragmentSource
+        }
+    )
+}
+
+public function dawnDestroyShader(context: RawPtr, shader: borrow GraphicsShader) {
+    if !dawnHasDevice(context) || shader.id == 0 {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let slot = Number(shader.id.raw) - 1
+    if slot < 0 || slot >= state.dawn.shaders.count {
+        return
+    }
+    let record = state.dawn.shaders[slot]
+    if !record.live {
+        return
+    }
+    if !isNull(record.vertexModule) {
+        wgpuShaderModuleRelease(record.vertexModule)
+    }
+    if !isNull(record.fragmentModule) {
+        wgpuShaderModuleRelease(record.fragmentModule)
+    }
+    if !isNull(record.computeModule) {
+        wgpuShaderModuleRelease(record.computeModule)
+    }
+    state.dawn.shaders[slot] = dawnEmptyShaderRecord()
+}

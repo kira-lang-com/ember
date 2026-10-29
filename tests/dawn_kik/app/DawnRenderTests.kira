@@ -1,0 +1,187 @@
+import Foundation
+import Ember
+
+// The target every test draws into, the clear under each draw, and the
+// colour `Shaders/Flat.ksl` writes.
+namespace DawnTarget {
+    let side: UN32 = 8
+    let vertexCount: UN32 = 3
+    let clear: RGBAColor = RGBAColor { r: 0.05, g: 0.05, b: 0.1, a: 1.0 }
+}
+
+// What the flat colour minus the clear reads back as, channel by channel:
+// 255 - 13, 102 - 13, 26 - 26 and 255 - 255.
+namespace SubtractedPixel {
+    let red: UN8 = 242
+    let green: UN8 = 89
+    let blue: UN8 = 0
+    let alpha: UN8 = 0
+}
+
+// The cleared target alone: 0.05 and 0.1 of 255.
+namespace ClearedPixel {
+    let red: UN8 = 13
+    let green: UN8 = 13
+    let blue: UN8 = 26
+    let alpha: UN8 = 255
+}
+
+// Why a test drew nothing it could measure.
+enum DawnTestFailure {
+    Device(HeadlessFailure)
+    Resource(ResourceFailure)
+    Readback(CaptureFailure)
+}
+
+function dawnTarget(graphics: borrow Graphics) -> Result<GraphicsTexture, DawnTestFailure> {
+    return match graphics.createTexture(
+        TextureDescriptor {
+            label: "dawn-test-target",
+            width: DawnTarget.side,
+            height: DawnTarget.side,
+            usage: .RenderTarget
+        }
+    ) {
+        Ok(texture) -> .Ok(texture)
+        Error(failure) -> .Error(.Resource(failure))
+    }
+}
+
+// The flat-colour pipeline drawing through `blend`.
+function dawnFlatPipeline(
+    graphics: borrow Graphics,
+    blend: borrow BlendState
+) -> Result<RenderPipeline, DawnTestFailure> {
+    let shader = match graphics.createShaderFromKslArtifact(
+        "dawn-test-flat",
+        ksl!("Shaders/Flat.ksl")
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(.Resource(failure))
+    }
+    return match graphics.createRenderPipeline(
+        RenderPipelineDescriptor {
+            label: "dawn-test-flat",
+            shader: shader,
+            colorTargets: [ColorTargetDescriptor { format: .Rgba8Unorm, blend: copy blend }],
+            depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+        }
+    ) {
+        Ok(pipeline) -> .Ok(pipeline)
+        Error(failure) -> .Error(.Resource(failure))
+    }
+}
+
+// Clears the target, draws the flat triangle through `pipeline` when there is
+// one, and reads the middle row back.
+function dawnDrawAndRead(
+    device: borrow mut GraphicsHeadless,
+    target: borrow GraphicsTexture,
+    pipeline: RenderPipeline?
+) -> Result<[UN8], DawnTestFailure> {
+    var frame = match device.frame() {
+        Ok(frame) -> frame
+        Error(failure) -> return .Error(.Device(failure))
+    }
+    let encoder = frame.beginRenderPass(clearTextureRenderPass(target, DawnTarget.clear))
+    match pipeline {
+        Some(drawn) -> {
+            encoder.setPipeline(drawn)
+            encoder.draw(DawnTarget.vertexCount)
+        }
+        // The clear alone is what the readback test measures.
+        None -> {}
+    }
+    frame.endPass()
+    device.submit()
+    let middle = UNumber(DawnTarget.side) / 2
+    return match readTextureRows(device.graphics(), target, middle, 1) {
+        Ok(bytes) -> .Ok(bytes)
+        Error(failure) -> .Error(.Readback(failure))
+    }
+}
+
+// The middle row on a fresh device, drawn through `blend` or only cleared.
+function dawnMiddleRow(blend: BlendState?) -> Result<[UN8], DawnTestFailure> {
+    var device = match openHeadlessGraphicsWithBackend(.Dawn) {
+        Ok(device) -> device
+        Error(failure) -> return .Error(.Device(failure))
+    }
+    let target = match dawnTarget(device.graphics()) {
+        Ok(target) -> target
+        Error(failure) -> {
+            device.close()
+            return .Error(failure)
+        }
+    }
+    var pipeline: RenderPipeline? = .None
+    match blend {
+        Some(state) -> {
+            pipeline = match dawnFlatPipeline(device.graphics(), state) {
+                Ok(made) -> .Some(made)
+                Error(failure) -> {
+                    device.close()
+                    return .Error(failure)
+                }
+            }
+        }
+        // Nothing to draw: the row is the clear.
+        None -> {}
+    }
+    let row = dawnDrawAndRead(device, target, move pipeline)
+    device.graphics().destroyTexture(target)
+    device.close()
+    return row
+}
+
+function pixelIs(bytes: borrow [UN8], red: UN8, green: UN8, blue: UN8, alpha: UN8) -> Bool {
+    if bytes.count < 4 { return false }
+    return bytes[0] == red && bytes[1] == green && bytes[2] == blue && bytes[3] == alpha
+}
+
+// A test's verdict: the measured row against `expected`, or the failure
+// logged where the test reports it.
+function rowMatches(
+    row: borrow Result<[UN8], DawnTestFailure>,
+    expected: borrow (UN8, UN8, UN8, UN8)
+) -> Bool {
+    let (red, green, blue, alpha) = expected
+    return match row {
+        Ok(bytes) -> pixelIs(bytes, red, green, blue, alpha)
+        Error(failure) -> {
+            log fault("dawn test drew nothing to measure", failure)
+            false
+        }
+    }
+}
+
+public function dawnClearReadsBack() -> Bool {
+    let expected = (ClearedPixel.red, ClearedPixel.green, ClearedPixel.blue, ClearedPixel.alpha)
+    return rowMatches(dawnMiddleRow(.None), expected)
+}
+
+public function dawnCustomBlendSubtracts() -> Bool {
+    let subtract = BlendComponent { operation: .Subtract, source: .One, destination: .One }
+    let blend = BlendState { enabled: true, custom: .Some(uniformBlend(subtract)) }
+    let expected = (
+        SubtractedPixel.red,
+        SubtractedPixel.green,
+        SubtractedPixel.blue,
+        SubtractedPixel.alpha
+    )
+    return rowMatches(dawnMiddleRow(.Some(move blend)), expected)
+}
+
+function dawnExpectation() -> Result<Any, TestFailure> {
+    return .Ok(true)
+}
+
+construct ClearReadsBack() extends Test {
+    test { return dawnClearReadsBack() }
+    expect { return dawnExpectation() }
+}
+
+construct CustomBlendSubtracts() extends Test {
+    test { return dawnCustomBlendSubtracts() }
+    expect { return dawnExpectation() }
+}

@@ -1,0 +1,179 @@
+import Foundation
+import Heap
+
+// GPU time per pass, while a caller asks for it (`RenderFrame.measureGpu`):
+// a timestamp as the frame's commands begin, one either side of each render
+// pass and one as they end. They are read once the frame's fence has been
+// waited out, so reading them never waits, and land in the next
+// `statistics()`: the frame's GPU seconds and each pass's share.
+
+namespace VulkanGpuTimingLimits {
+    // The frame's two and two for each of up to 63 passes.
+    let queries: Number = 128
+}
+
+public struct VulkanGpuTiming {
+    var on: Bool = false
+    var pool: RawPtr = nullPointer()
+    var nanosPerTick: Number = 1
+    // Queries written into the commands being recorded, and the passes they
+    // bracket; then the same for the commands last submitted.
+    var written: Number = 0
+    var labels: [String] = []
+    // Draws each pass recorded, and the frame's count as the open one began.
+    var draws: [Number] = []
+    var drawsBefore: Number = 0
+    var submitted: Number = 0
+    var submittedLabels: [String] = []
+    var submittedDraws: [Number] = []
+}
+
+public function vulkanMeasureGpu(context: RawPtr, on: Bool) {
+    if !vulkanHasDevice(context) { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    runtime.vulkan.gpuTiming.on = on
+    if !on {
+        runtime.vulkan.stats.gpuPasses = []
+        runtime.vulkan.stats.hasGpuSeconds = false
+    }
+}
+
+function vulkanGpuTimingPool(state: borrow mut VulkanState) -> Bool {
+    if !isNull(state.gpuTiming.pool) { return true }
+    let properties = boxed<VkPhysicalDeviceProperties>(VkPhysicalDeviceProperties())
+    vkGetPhysicalDeviceProperties(state.physicalDevice, properties.pointer())
+    let period = Number(boxedValue<VkPhysicalDeviceProperties>(properties).limits.timestampPeriod)
+    if period <= 0 {
+        log warn("the device has no timestamp period; passes are not timed")
+        state.gpuTiming.on = false
+        return false
+    }
+    let pool = boxed<RawPtr>(nullPointer())
+    let created = vulkanResultOf(
+        vkCreateQueryPool(
+            state.device,
+            VkQueryPoolCreateInfo {
+                sType: I32(VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO),
+                queryType: I32(VK_QUERY_TYPE_TIMESTAMP),
+                queryCount: U32(VulkanGpuTimingLimits.queries)
+            },
+            nullPointer(),
+            pool.pointer()
+        )
+    )
+    if created != .Success {
+        log fault("could not make the GPU timing queries", result: created)
+        state.gpuTiming.on = false
+        return false
+    }
+    state.gpuTiming.pool = boxedValue<RawPtr>(pool)
+    state.gpuTiming.nanosPerTick = period
+    return true
+}
+
+function vulkanGpuTimestamp(state: borrow mut VulkanState, stage: Number) {
+    vkCmdWriteTimestamp(
+        state.commandBuffer,
+        I32(stage),
+        state.gpuTiming.pool,
+        U32(state.gpuTiming.written)
+    )
+    state.gpuTiming.written += 1
+}
+
+// As a frame's commands begin recording.
+function vulkanGpuTimingBegin(state: borrow mut VulkanState) {
+    state.gpuTiming.written = 0
+    state.gpuTiming.labels = []
+    state.gpuTiming.draws = []
+    if !state.gpuTiming.on || !vulkanGpuTimingPool(state) { return }
+    vkCmdResetQueryPool(
+        state.commandBuffer,
+        state.gpuTiming.pool,
+        U32(0),
+        U32(VulkanGpuTimingLimits.queries)
+    )
+    vulkanGpuTimestamp(state, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT)
+}
+
+// Before a pass begins rendering.
+function vulkanGpuTimingPassBegin(state: borrow mut VulkanState, label: borrow String) {
+    if state.gpuTiming.written == 0 || state.gpuTiming.written + 3 > VulkanGpuTimingLimits.queries {
+        return
+    }
+    vulkanGpuTimestamp(state, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT)
+    state.gpuTiming.labels.append(label.isEmpty() ? "pass" : copy label)
+    state.gpuTiming.drawsBefore = Number(state.frameDrawCount)
+}
+
+// After a pass ends rendering, when its beginning was stamped.
+function vulkanGpuTimingPassEnd(state: borrow mut VulkanState) {
+    if state.gpuTiming.written == 0 || state.gpuTiming.written != state.gpuTiming.labels.count * 2 {
+        return
+    }
+    vulkanGpuTimestamp(state, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)
+    state.gpuTiming.draws.append(Number(state.frameDrawCount) - state.gpuTiming.drawsBefore)
+}
+
+// As the frame's commands end, before they are submitted.
+function vulkanGpuTimingSubmit(state: borrow mut VulkanState) {
+    if state.gpuTiming.written == 0 { return }
+    if state.gpuTiming.written % 2 == 0 { vulkanGpuTimingPassEnd(state) }
+    vulkanGpuTimestamp(state, VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT)
+    state.gpuTiming.submitted = state.gpuTiming.written
+    state.gpuTiming.submittedLabels = move state.gpuTiming.labels
+    state.gpuTiming.labels = []
+    state.gpuTiming.submittedDraws = move state.gpuTiming.draws
+    state.gpuTiming.draws = []
+    state.gpuTiming.written = 0
+}
+
+// Once the submitted frame's fence has been waited out.
+function vulkanGpuTimingRetire(state: borrow mut VulkanState) {
+    let count = state.gpuTiming.submitted
+    if count == 0 { return }
+    state.gpuTiming.submitted = 0
+    let ticks = zeroedBlock(count * 8, 8)
+    let read = vulkanResultOf(
+        vkGetQueryPoolResults(
+            state.device,
+            state.gpuTiming.pool,
+            U32(0),
+            U32(count),
+            U64(count * 8),
+            ticks.pointer(),
+            U64(8),
+            U32(VK_QUERY_RESULT_64_BIT | VK_QUERY_RESULT_WAIT_BIT)
+        )
+    )
+    if read != .Success {
+        log warn("the frame's GPU timestamps could not be read; passes are not timed", result: read)
+        state.gpuTiming.on = false
+        return
+    }
+    let tick = state.gpuTiming.nanosPerTick
+    let first = Number(heapLoad<U64>(ticks.pointer(), 0))
+    let last = Number(heapLoad<U64>(ticks.pointer(), (count - 1) * 8))
+    var passes: [GpuPassTime] = []
+    for (index, label) in state.gpuTiming.submittedLabels.enumerated() {
+        let began = Number(heapLoad<U64>(ticks.pointer(), (index * 2 + 1) * 8))
+        let ended = Number(heapLoad<U64>(ticks.pointer(), (index * 2 + 2) * 8))
+        let draws = index < state.gpuTiming.submittedDraws.count ? state.gpuTiming.submittedDraws[index] : 0
+        passes.append(
+            GpuPassTime {
+                label: copy label,
+                nanos: max(trunc((ended - began) * tick), 0),
+                draws: draws
+            }
+        )
+    }
+    state.stats.gpuSeconds = UNumber(secondsFromNanoseconds(max(trunc((last - first) * tick), 0)))
+    state.stats.hasGpuSeconds = true
+    state.stats.gpuPasses = passes
+}
+
+function vulkanDestroyGpuTiming(state: borrow mut VulkanState) {
+    if isNull(state.gpuTiming.pool) { return }
+    vkDestroyQueryPool(state.device, state.gpuTiming.pool, nullPointer())
+    state.gpuTiming.pool = nullPointer()
+}

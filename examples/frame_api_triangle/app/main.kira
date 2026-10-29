@@ -1,0 +1,124 @@
+import Ember
+import Foundation
+
+// What the frame draws with, made once at init and destroyed at cleanup.
+struct FrameTriangleResources {
+    var shader: GraphicsShader
+    var pipeline: RenderPipeline
+    var vertices: GraphicsBuffer
+}
+
+// None until init has made the resources, and None for good when it could not.
+struct FrameTriangleState {
+    var resources: FrameTriangleResources? = .None
+}
+
+namespace FrameTriangle {
+    let vertexCount: UN32 = 3
+    // Two floats a vertex.
+    let stride: UN32 = 8
+}
+
+function frameTriangleVertexSource() -> String {
+    return "#version 330 core\nlayout(location = 0) in vec2 kira_attr_position;\nout vec4 color;\nvoid main() {\n    gl_Position = vec4(kira_attr_position, 0.0, 1.0);\n    color = vec4(0.28, 0.78, 1.0, 1.0);\n}\n"
+}
+
+function frameTriangleFragmentSource() -> String {
+    return "#version 330 core\nin vec4 color;\nout vec4 frag_color;\nvoid main() {\n    frag_color = color;\n}\n"
+}
+
+function frameTriangleVertices() -> [Number] {
+    return [0.0, 0.55, 0.55, -0.55, -0.55, -0.55]
+}
+
+function frameTrianglePipeline(shader: borrow GraphicsShader) -> RenderPipelineDescriptor {
+    return RenderPipelineDescriptor {
+        label: "frame-api-triangle-pipeline",
+        shader: copy shader,
+        vertexLayout: VertexLayout {
+            stride: FrameTriangle.stride,
+            attributes: [VertexAttribute { name: "position", format: .Float2 }]
+        },
+        colorTargets: [ColorTargetDescriptor { blend: BlendState { preset: .Replace } }],
+        depthStencil: DepthStencilDescriptor { depthCompare: .Always }
+    }
+}
+
+function frameTriangleResources(
+    graphics: borrow Graphics
+) -> Result<FrameTriangleResources, ResourceFailure> {
+    let shader = match graphics.createShader(
+        ShaderDescriptor {
+            label: "frame-api-triangle-shader",
+            vertexSource: frameTriangleVertexSource(),
+            fragmentSource: frameTriangleFragmentSource()
+        }
+    ) {
+        Ok(shader) -> shader
+        Error(failure) -> return .Error(failure)
+    }
+    let vertices = match graphics.createBuffer(
+        BufferDescriptor { label: "frame-api-triangle-vertices", data: frameTriangleVertices() }
+    ) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    return match graphics.createRenderPipeline(frameTrianglePipeline(shader)) {
+        Ok(pipeline) -> .Ok(
+            FrameTriangleResources { shader: shader, pipeline: pipeline, vertices: vertices }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}
+
+function frameTriangleInit(graphics: Graphics) {
+    var state = nativeRecover<FrameTriangleState>(graphics.userData)
+    match frameTriangleResources(graphics) {
+        Ok(resources) -> state.resources = .Some(move resources)
+        Error(failure) -> reportMissingResource("the triangle", move failure)
+    }
+}
+
+// One frame, then quit: the run exists to prove the frame API draws.
+function frameTriangleFrame(frame: borrow mut RenderFrame) {
+    let state = nativeRecover<FrameTriangleState>(frame.userData)
+    let encoder = frame.beginRenderPass(
+        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.07, b: 0.10 })
+    )
+    match state.resources {
+        Some(resources) -> {
+            encoder.setPipeline(resources.pipeline)
+            encoder.setVertexBuffer(resources.vertices)
+            encoder.draw(FrameTriangle.vertexCount)
+        }
+        None -> {}
+    }
+    frame.endPass()
+    frame.requestQuit()
+}
+
+function frameTriangleCleanup(graphics: Graphics) {
+    let state = nativeRecover<FrameTriangleState>(graphics.userData)
+    match state.resources {
+        Some(resources) -> {
+            graphics.destroyBuffer(resources.vertices)
+            graphics.destroyRenderPipeline(resources.pipeline)
+            graphics.destroyShader(copy resources.shader)
+        }
+        None -> {}
+    }
+}
+
+@Main
+function main() {
+    var app = GraphicsApplication {
+        title: "Ember Frame API Triangle",
+        width: 640,
+        height: 480,
+        sampleCount: 1,
+        initHandler: frameTriangleInit,
+        frameHandler: frameTriangleFrame,
+        cleanupHandler: frameTriangleCleanup
+    }
+    app.run(nativeUserData(nativeState(FrameTriangleState())))
+}

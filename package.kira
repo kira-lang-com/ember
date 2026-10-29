@@ -1,0 +1,319 @@
+construct Ember extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .Library
+    let dependencies: [Dependency] = [
+        Dependency { name: "ArgumentParser", path: "../argument-parser" },
+        Dependency { name: "LibTessera", path: "../../tessera-packages/libtessera" },
+        Dependency { name: "DeviceKit", path: "../../tessera-packages/devicekit" }
+    ]
+    let nativeLibraries: [NativeLibrary] = [
+        NativeLibrary {
+            name: "kira_uikit",
+            availability: Availability.Optional,
+            nativeTargets: [
+                NativeTarget { triple: "aarch64-ios-none", frameworks: ["UIKit"] },
+                NativeTarget { triple: "aarch64-ios-sim", frameworks: ["UIKit"] }
+            ]
+        },
+        NativeLibrary {
+            // The xdg-shell and decoration protocols, as `wayland-scanner`
+            // emits them from the canonical XML.
+            //
+            // Core Wayland hands out a `wl_surface`, which cannot be shown by
+            // itself -- a window is xdg-shell. The small typed C seam calls the
+            // protocol's generated inline functions; autobind owns the Kira
+            // declarations, including listener callback layouts.
+            //
+            // Optional, so a target with no row links nothing and the Kira
+            // declarations trap by name instead of leaving wl_* undefined at link,
+            // the same mechanism kira_metal uses off Apple. Both Linux desktop
+            // targets use this protocol seam; their systems provide the client
+            // library.
+            name: "waylandprotocols",
+            linkMode: LinkMode.Static,
+            availability: Availability.Optional,
+            headers: Headers {
+                entrypoint: "NativeLibs/Wayland/kira_wayland.h",
+                includeDirs: ["NativeLibs/Wayland"]
+            },
+            sources: [
+                "NativeLibs/Wayland/kira_wayland.c",
+                "NativeLibs/Wayland/xdg-shell-protocol.c",
+                "NativeLibs/Wayland/xdg-decoration-protocol.c",
+                "NativeLibs/Wayland/cursor-shape-v1-protocol.c",
+                "NativeLibs/Wayland/tablet-unstable-v2-protocol.c",
+                "NativeLibs/Wayland/viewporter-protocol.c"
+            ],
+            autobind: Autobind {
+                module: "wayland",
+                headers: ["NativeLibs/Wayland/kira_wayland.h"],
+                mode: AutobindMode.AllPublic
+            },
+            nativeTargets: [
+                NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["wayland-client"] },
+                NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["wayland-client"] }
+            ]
+        },
+        NativeLibrary {
+            // Dawn, consumed as the binaries kira-lang-com/dawn publishes
+            // rather than built here: it is a C++ tree with its own dependency
+            // fetch, and building it per Kira build would put half an hour on
+            // every one. NativeLibs/Dawn/<triple> holds a release payload
+            // unpacked exactly as it ships.
+            //
+            // Dynamic rather than static: the desktop slices are a monolithic
+            // webgpu_dawn shared library, and the static ones exist only where
+            // a shared library cannot go. Dawn also loads dxcompiler.dll by
+            // name at run time, so a consumer deploys bin/ beside the
+            // executable instead of linking it.
+            name: "dawn",
+            linkMode: LinkMode.Dynamic,
+            // Dawn is not an Apple-mobile dependency. iOS uses the native Metal
+            // backend, and there is no iOS Dawn artifact in this package. Keep
+            // Dawn present on targets with a declared slice and exclude its FFI
+            // bindings on targets such as iOS that intentionally have none.
+            availability: Availability.Optional,
+            //
+            // `WGPU_SKIP_PROCS` leaves out the function-pointer typedefs a
+            // dynamic loader would use, which nothing here does — and with them
+            // `emscripten_webgpu_get_device`, the one declaration in the header
+            // that no desktop build of Dawn exports. Binding it would put an
+            // unresolved symbol on every Windows link line.
+            headers: Headers {
+                entrypoint: "NativeLibs/Dawn/x86_64-linux-gnu/include/webgpu/webgpu.h",
+                includeDirs: ["NativeLibs/Dawn/x86_64-linux-gnu/include"],
+                defines: ["WGPU_SKIP_PROCS"]
+            },
+            autobind: Autobind {
+                module: "webgpu",
+                headers: ["NativeLibs/Dawn/x86_64-linux-gnu/include/dawn/webgpu.h"],
+                mode: AutobindMode.AllPublic
+            },
+            nativeTargets: [
+                // The Windows release slice is one static `webgpu_dawn.lib`,
+                // linked into the program, so nothing goes beside it. Static,
+                // it names the Direct3D and DXGI libraries it calls into, and
+                // `dxguid` for the interface ids they declare.
+                NativeTarget {
+                    triple: "x86_64-windows-msvc",
+                    dynamicLib: "NativeLibs/Dawn/x86_64-windows-msvc/lib/webgpu_dawn.lib",
+                    systemLibs: ["dxguid", "d3d11", "d3d12", "dxgi", "d3dcompiler"]
+                },
+                // The Linux slice is one shared object and no loader-name
+                // sidecars: Dawn reaches the GPU through the Vulkan loader,
+                // which the system provides.
+                NativeTarget {
+                    triple: "x86_64-linux-gnu",
+                    dynamicLib: "NativeLibs/Dawn/x86_64-linux-gnu/lib/libwebgpu_dawn.so",
+                    runtimeFiles: ["NativeLibs/Dawn/x86_64-linux-gnu/lib"]
+                },
+                // The same slice for 64-bit Arm Linux, from the same Dawn release.
+                NativeTarget {
+                    triple: "aarch64-linux-gnu",
+                    dynamicLib: "NativeLibs/Dawn/aarch64-linux-gnu/lib/libwebgpu_dawn.so",
+                    runtimeFiles: ["NativeLibs/Dawn/aarch64-linux-gnu/lib"]
+                },
+                // Apple publishes Dawn only as a static archive — no dylib in
+                // either the desktop tarball or the xcframework — so the macOS
+                // slice hands the linker `libwebgpu_dawn.a` directly (ld links
+                // an explicit archive statically, and there is nothing to open
+                // at run time). Dawn's Metal backend pulls in the graphics and
+                // surface frameworks below; the C++ runtime it is built against
+                // comes in through `c++`.
+                NativeTarget {
+                    triple: "aarch64-macos-none",
+                    dynamicLib: "NativeLibs/Dawn/aarch64-macos-none/lib/libwebgpu_dawn.a",
+                    frameworks: [
+                        "Metal",
+                        "QuartzCore",
+                        "Foundation",
+                        "IOKit",
+                        "IOSurface",
+                        "CoreFoundation",
+                        "CoreGraphics"
+                    ],
+                    systemLibs: ["c++", "objc"]
+                },
+                // The Web, through emscripten's own Dawn port rather than a
+                // shipped binary: `--use-port=emdawnwebgpu` builds WebGPU into
+                // the module against the browser's implementation, so there is
+                // no library to name. This is the backend the browser sandbox
+                // resolves to, and the only one wasm32 has.
+                NativeTarget {
+                    triple: "wasm32-emscripten-unknown",
+                    dynamicLib: "",
+                    compilerFlags: ["--use-port=emdawnwebgpu"],
+                    linkerFlags: ["--use-port=emdawnwebgpu"]
+                }
+            ]
+        },
+        NativeLibrary {
+            // The Vulkan loader, for the from-scratch Vulkan backend that owns
+            // the desktop targets Dawn reaches Vulkan through anyway -- Linux
+            // and Windows -- without the WebGPU layer in between. Nothing is
+            // built here: the core API is a vendored copy of the Apache-2.0
+            // Vulkan-Headers (NativeLibs/Vulkan/include, unpacked as it ships),
+            // and the symbols resolve against the system's own loader, which is
+            // the one component a Vulkan program never carries itself.
+            //
+            // Dynamic, because the loader is a shared object the platform
+            // provides -- `libvulkan.so.1` on Linux, `vulkan-1.dll` on Windows --
+            // and every core entry point is a trampoline it exports, so a
+            // binding calls them directly rather than threading
+            // `vkGetInstanceProcAddr` by hand.
+            //
+            // Optional, and that is what keeps a macOS or Web build of this
+            // package working: there is no row for those targets, the binding is
+            // excluded, and `validateRenderBackend` refuses the Vulkan backend
+            // there before anything calls into it -- the same mechanism
+            // `kira_metal` uses off Apple. Apple is deliberately absent: Metal
+            // owns it here, and native Vulkan on Apple would mean shipping
+            // MoltenVK, which buys nothing the Metal backend does not already.
+            //
+            // Bound straight from the vendored `vulkan_core.h`, which carries
+            // the whole core API inline -- the autobinder emits the
+            // declarations a listed header holds itself, not the ones it pulls
+            // in, so this points at the real header the way `dawn` points at
+            // `webgpu.h` rather than at a wrapper whose body is one `#include`.
+            //
+            // `vulkan_core.h` is the platform-neutral core only. The
+            // platform-native surface-creation calls live behind
+            // `VK_USE_PLATFORM_*` in headers that drag in a window toolkit
+            // (`wayland-client.h`, `windows.h`), so the backend's per-platform
+            // window code owns that seam instead of the cross-platform binding.
+            name: "vulkan",
+            linkMode: LinkMode.Dynamic,
+            availability: Availability.Optional,
+            headers: Headers {
+                entrypoint: "NativeLibs/Vulkan/include/vulkan/vulkan_core.h",
+                includeDirs: ["NativeLibs/Vulkan/include"]
+            },
+            // The scalar pointer types webgpu.kira already declares (`float_ptr`,
+            // `uint32_t_ptr`, `uint64_t_ptr`) are used here unwritten, so the
+            // package declares each once. Vulkan's other scalar pointers
+            // (`int_ptr`, `int32_t_ptr`, ...) are generated here as before.
+            autobind: Autobind {
+                module: "vulkan",
+                headers: ["NativeLibs/Vulkan/include/vulkan/vulkan_core.h"],
+                mode: AutobindMode.AllPublic,
+                sharedPointerAliases: ["float_ptr", "uint32_t_ptr", "uint64_t_ptr"]
+            },
+            // Tessera's loader is the one C library a Tessera program links. Its
+            // SDK carries no C, so the link finds it in the build's sysroot.
+            nativeTargets: [
+                NativeTarget { triple: "x86_64-linux-gnu", systemLibs: ["vulkan"] },
+                NativeTarget { triple: "aarch64-linux-gnu", systemLibs: ["vulkan"] },
+                NativeTarget { triple: "x86_64-unknown-tessera", systemLibs: ["vulkan"] },
+                NativeTarget { triple: "aarch64-unknown-tessera", systemLibs: ["vulkan"] },
+                // Windows has no Vulkan SDK to assume, so the loader's import
+                // library is kept here, made from its export list
+                // (`vulkan-1.def`) with `lld-link /lib`; `vulkan-1.dll` itself
+                // comes with every GPU driver.
+                NativeTarget {
+                    triple: "x86_64-windows-msvc",
+                    dynamicLib: "NativeLibs/Vulkan/lib/x86_64-windows-msvc/vulkan-1.lib"
+                }
+            ]
+        },
+        NativeLibrary {
+            // The window the Dawn backend draws into. Dawn renders and does not
+            // own a window, and WebGPU takes a surface — on Windows an `HWND` —
+            // so the backend opens one itself against the libraries every
+            // Windows process already links. No archive of its own: these are
+            // the system's, named so the link line carries them.
+            //
+            // One declaration per module, because a declaration is what an
+            // engine resolves a symbol *in*: a link line takes every import
+            // library at once and does not care which one answers, while a VM
+            // looks the symbol up in the module its declaration names.
+            //
+            // Optional, and that is what keeps a macOS or Linux build of this
+            // package working: there is no row for those targets, the binding is
+            // excluded, and `validateRenderBackend` refuses the Dawn backend
+            // there before anything calls into it.
+            name: "user32",
+            linkMode: LinkMode.Dynamic,
+            availability: Availability.Optional,
+            nativeTargets: [NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["user32"] }]
+        },
+        NativeLibrary {
+            name: "kernel32",
+            linkMode: LinkMode.Dynamic,
+            availability: Availability.Optional,
+            nativeTargets: [
+                NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["kernel32"] }
+            ]
+        },
+        NativeLibrary {
+            // The desktop compositor. A window asks it for the backdrop it keeps
+            // behind the window — the blurred, tinted view of everything under
+            // it that a platform sidebar is made of, and the one thing an
+            // application cannot draw for itself.
+            name: "dwmapi",
+            linkMode: LinkMode.Dynamic,
+            availability: Availability.Optional,
+            nativeTargets: [NativeTarget { triple: "x86_64-windows-msvc", systemLibs: ["dwmapi"] }]
+        },
+        NativeLibrary {
+            // Kira's own runtime archive, already on every native link line.
+            // The raw-memory primitives a backend lays its C-shaped context out
+            // with live there — and so, now, do shared-library loading and the
+            // run-time call builder the Direct3D 12 backend dispatches COM
+            // through. A method reached by vtable slot has no symbol to bind, so
+            // it cannot be an `@FFI.Extern`; it is assembled and invoked instead.
+            //
+            // Required rather than optional, and that distinction carries
+            // weight: on Windows an *optional* runtime-linked library with no
+            // artifact is treated as absent, because PE cannot leave a symbol
+            // undefined for load time to bind. This one is never absent.
+            name: "kira_runtime",
+            linkMode: LinkMode.Runtime,
+            nativeTargets: [
+                NativeTarget { triple: "aarch64-macos-none", dynamicLib: "" },
+                NativeTarget { triple: "aarch64-ios-none", dynamicLib: "" },
+                NativeTarget { triple: "aarch64-ios-sim", dynamicLib: "" },
+                NativeTarget { triple: "x86_64-linux-gnu", dynamicLib: "" },
+                NativeTarget { triple: "aarch64-linux-gnu", dynamicLib: "" },
+                NativeTarget { triple: "x86_64-unknown-tessera", dynamicLib: "" },
+                NativeTarget { triple: "aarch64-unknown-tessera", dynamicLib: "" },
+                NativeTarget { triple: "x86_64-windows-msvc", dynamicLib: "" },
+                NativeTarget { triple: "wasm32-emscripten-unknown", dynamicLib: "" }
+            ]
+        },
+        NativeLibrary {
+            // Apple's own frameworks, so a target row exists only where they do.
+            // Optional for exactly that reason: on Windows or Linux there is no
+            // row, the binding is excluded, and its calls trap by name instead
+            // of leaving `objc_msgSend` and `MTLCreateSystemDefaultDevice`
+            // undefined at link — which is what a build there hit, because the
+            // Metal backend is compiled in everywhere even though only an Apple
+            // target ever selects it. Nothing changes on a platform that has a
+            // row: exclusion needs both the marker and a missing row.
+            name: "kira_metal",
+            linkMode: LinkMode.Dynamic,
+            availability: Availability.Optional,
+            nativeTargets: [
+                NativeTarget {
+                    triple: "aarch64-macos-none",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "AppKit", "IOSurface", "CoreVideo"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "aarch64-ios-none",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit", "IOSurface"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "aarch64-ios-sim",
+                    frameworks: ["Foundation", "QuartzCore", "Metal", "UIKit", "IOSurface"],
+                    systemLibs: ["objc"]
+                },
+                NativeTarget {
+                    triple: "wasm32-emscripten-unknown",
+                    dynamicLib: "",
+                    linkerFlags: ["-sERROR_ON_UNDEFINED_SYMBOLS=0"]
+                }
+            ]
+        }
+    ]
+}

@@ -1,0 +1,388 @@
+import Foundation
+
+// Vulkan keeps its wire vocabulary in C enums and bit flags. These helpers keep
+// that representation at the FFI edge; the public API remains the typed Kira
+// enums from `Formats` and `PassVocabulary`.
+
+public @FFI.Array { element: U32, count: 4 }
+struct VulkanWordArray4 {}
+
+public @FFI.Array { element: VkPipelineShaderStageCreateInfo, count: 2 }
+struct VulkanShaderStageArray2 {}
+
+public @FFI.Array { element: VkVertexInputAttributeDescription, count: 16 }
+struct VulkanVertexAttributeArray16 {}
+
+public @FFI.Array { element: VkVertexInputBindingDescription, count: 1 }
+struct VulkanVertexBindingArray1 {}
+
+public @FFI.Array { element: VkPipelineColorBlendAttachmentState, count: 1 }
+struct VulkanBlendAttachmentArray1 {}
+
+public @FFI.Array { element: VkDescriptorSetLayoutBinding, count: 32 }
+struct VulkanDescriptorBindingArray32 {}
+
+public @FFI.Array { element: VkDescriptorPoolSize, count: 5 }
+struct VulkanDescriptorPoolSizeArray5 {}
+
+// The `VkDynamicState` list every render pipeline sets: viewport and scissor
+// are given per pass rather than baked in.
+public @FFI.Struct { layout: c }
+struct VulkanDynamicStates {
+    var viewport: I32 = I32(VK_DYNAMIC_STATE_VIEWPORT)
+    var scissor: I32 = I32(VK_DYNAMIC_STATE_SCISSOR)
+}
+
+public @FFI.Struct { layout: c }
+struct VkClearColorValue {
+    var words: VulkanWordArray4
+}
+
+public @FFI.Struct { layout: c }
+struct VkClearValue {
+    var color: VkClearColorValue
+}
+
+public @FFI.Struct { layout: c }
+struct VkRenderingAttachmentInfo {
+    var sType: I32
+    var pNext: RawPtr
+    var imageView: VkImageView_T_ptr
+    var imageLayout: I32
+    var resolveMode: I32
+    var resolveImageView: VkImageView_T_ptr
+    var resolveImageLayout: I32
+    var loadOp: I32
+    var storeOp: I32
+    var clearValue: VkClearValue
+}
+
+// The `VkSampleCountFlagBits` for `samples` per pixel, where Vulkan has one.
+public function vulkanSampleCount(samples: Number) -> I32? {
+    return match samples {
+        1 -> .Some(I32(1))
+        2 -> .Some(I32(2))
+        4 -> .Some(I32(4))
+        8 -> .Some(I32(8))
+        16 -> .Some(I32(16))
+        32 -> .Some(I32(32))
+        64 -> .Some(I32(64))
+        else -> .None
+    }
+}
+
+// What a descriptor holds.
+//
+// A closed set: these six are every `VkDescriptorType` the surface binds, so a
+// code that is not one of them is not a descriptor type and says so rather than
+// falling through to whichever arm happens to be last. The integer is still what
+// crosses to Vulkan — `vulkanDescriptorCode` is the only place it is spelled.
+public enum VulkanDescriptorType {
+    Sampler
+    CombinedImageSampler
+    SampledImage
+    StorageImage
+    UniformBuffer
+    StorageBuffer
+}
+
+// The `VkDescriptorType` a case binds as.
+public function vulkanDescriptorCode(kind: VulkanDescriptorType) -> I32 {
+    return match kind {
+        Sampler -> return I32(0)
+        CombinedImageSampler -> return I32(1)
+        SampledImage -> return I32(2)
+        StorageImage -> return I32(3)
+        UniformBuffer -> return I32(8)
+        StorageBuffer -> return I32(9)
+    }
+}
+
+// The kind a descriptor code names, or nothing where it names none. A code
+// outside the six is a descriptor type this surface does not bind, and the
+// caller is told rather than given a plausible neighbour.
+public function vulkanDescriptorTypeOf(code: I32) -> VulkanDescriptorType? {
+    if code == I32(0) { return .Some(.Sampler) }
+    if code == I32(1) { return .Some(.CombinedImageSampler) }
+    if code == I32(2) { return .Some(.SampledImage) }
+    if code == I32(3) { return .Some(.StorageImage) }
+    if code == I32(8) { return .Some(.UniformBuffer) }
+    if code == I32(9) { return .Some(.StorageBuffer) }
+    return .None
+}
+
+public function vulkanTextureFormat(format: borrow TextureFormat) -> I32 {
+    match format {
+        Rgba8Unorm -> return VulkanVocabulary.formatRgba8
+        Rgba16Float -> return VulkanVocabulary.formatRgba16Float
+        Depth24Stencil8 -> return VulkanVocabulary.formatDepth24Stencil8
+        R32Uint -> return VulkanVocabulary.formatR32Uint
+        Swapchain -> return VulkanVocabulary.formatBgra8
+        None -> return I32(0)
+    }
+}
+
+public function vulkanVertexFormat(format: borrow VertexFormat) -> I32 {
+    match format {
+        Float -> return I32(100)
+        Float2 -> return I32(103)
+        Float3 -> return I32(106)
+        Float4 -> return I32(109)
+    }
+}
+
+public function vulkanVertexFormatBytes(format: borrow VertexFormat) -> Number {
+    match format {
+        Float -> return 4
+        Float2 -> return 8
+        Float3 -> return 12
+        Float4 -> return 16
+    }
+}
+
+public function vulkanBufferUsage(usage: borrow BufferUsage) -> U32 {
+    let common = VulkanVocabulary.bufferUsageTransferDestination | VulkanVocabulary.bufferUsageTransferSource
+    match usage {
+        Vertex -> return common | VulkanVocabulary.bufferUsageVertex
+        Index -> return common | VulkanVocabulary.bufferUsageIndex
+        Uniform -> return common | VulkanVocabulary.bufferUsageUniform
+        Storage -> return common | VulkanVocabulary.bufferUsageStorage
+    }
+}
+
+public function vulkanImageUsage(usage: borrow TextureUsage) -> U32 {
+    match usage {
+        Sampled -> return VulkanVocabulary.imageUsageTransferDestination | VulkanVocabulary.imageUsageSampled
+        SampledStreaming -> return VulkanVocabulary.imageUsageTransferDestination | VulkanVocabulary.imageUsageSampled
+        // A render target is also a transfer source, so a headless device can
+        // read back what was drawn into it (`vulkanCaptureTexture`).
+        RenderTarget -> return VulkanVocabulary.imageUsageColorAttachment | VulkanVocabulary.imageUsageTransferDestination | VulkanVocabulary.imageUsageSampled | VulkanVocabulary.imageUsageTransferSource
+        RenderTargetSampled -> return VulkanVocabulary.imageUsageColorAttachment | VulkanVocabulary.imageUsageSampled | VulkanVocabulary.imageUsageTransferDestination | VulkanVocabulary.imageUsageTransferSource
+        DepthStencil -> return VulkanVocabulary.imageUsageDepthAttachment | VulkanVocabulary.imageUsageSampled
+        SampledStorage -> return VulkanVocabulary.imageUsageSampled | VulkanVocabulary.imageUsageStorage | VulkanVocabulary.imageUsageTransferDestination
+    }
+}
+
+public function vulkanImageAspectFor(usage: borrow TextureUsage) -> U32 {
+    if usage == .DepthStencil {
+        return VulkanVocabulary.aspectDepth | VulkanVocabulary.aspectStencil
+    }
+    return VulkanVocabulary.aspectColor
+}
+
+public function vulkanCompareFunction(compare: borrow CompareFunction) -> I32 {
+    match compare {
+        Never -> return VulkanVocabulary.compareNever
+        Less -> return VulkanVocabulary.compareLess
+        LessEqual -> return VulkanVocabulary.compareLessEqual
+        Equal -> return VulkanVocabulary.compareEqual
+        GreaterEqual -> return VulkanVocabulary.compareGreaterEqual
+        Greater -> return VulkanVocabulary.compareGreater
+        Always -> return VulkanVocabulary.compareAlways
+    }
+}
+
+public function vulkanCullMode(mode: borrow CullMode) -> U32 {
+    match mode {
+        None -> return VulkanVocabulary.cullNone
+        Front -> return VulkanVocabulary.cullFront
+        Back -> return VulkanVocabulary.cullBack
+    }
+}
+
+public function vulkanFrontFace(face: borrow FrontFace) -> I32 {
+    match face {
+        CounterClockwise -> return VulkanVocabulary.frontCounterClockwise
+        Clockwise -> return VulkanVocabulary.frontClockwise
+    }
+}
+
+public function vulkanTopology(topology: borrow PrimitiveTopology) -> I32 {
+    match topology {
+        TriangleList -> return VulkanVocabulary.topologyTriangleList
+        TriangleStrip -> return VulkanVocabulary.topologyTriangleStrip
+        LineList -> return VulkanVocabulary.topologyLineList
+    }
+}
+
+public function vulkanLoadOp(action: borrow LoadAction) -> I32 {
+    match action {
+        Clear -> return VulkanVocabulary.loadClear
+        Load -> return VulkanVocabulary.loadLoad
+        DontCare -> return VulkanVocabulary.loadDontCare
+    }
+}
+
+public function vulkanStoreOp(action: borrow StoreAction) -> I32 {
+    match action {
+        Store -> return VulkanVocabulary.storeStore
+        DontCare -> return VulkanVocabulary.storeDontCare
+    }
+}
+
+public function vulkanSamplerFilter(filter: borrow TextureFilter) -> I32 {
+    match filter {
+        Nearest -> return VulkanVocabulary.filterNearest
+        Linear -> return VulkanVocabulary.filterLinear
+    }
+}
+
+public function vulkanAddressMode(mode: borrow AddressMode) -> I32 {
+    match mode {
+        ClampToEdge -> return VulkanVocabulary.samplerAddressClamp
+        Repeat -> return VulkanVocabulary.samplerAddressRepeat
+    }
+}
+
+public namespace VulkanVocabulary {
+    // A fence or acquire timeout, in nanoseconds, long enough to mean "until it
+    // is signalled": the largest value the 64-bit timeout parameter holds as a
+    // signed count, which every driver treats as no timeout.
+    let waitForever: U64 = U64(9223372036854775807)
+    // `VK_WHOLE_SIZE`: a range that runs to the end of the memory or buffer.
+    let wholeSize: U64 = 0xffffffffffffffff
+    let structureApplicationInfo: I32 = I32(0)
+    let structureInstanceCreateInfo: I32 = I32(1)
+    let structureDeviceQueueCreateInfo: I32 = I32(2)
+    let structureDeviceCreateInfo: I32 = I32(3)
+    let structureSubmitInfo: I32 = I32(4)
+    let structureMemoryAllocateInfo: I32 = I32(5)
+    let structureMappedMemoryRange: I32 = I32(6)
+    let structureImageMemoryBarrier: I32 = I32(45)
+    // `VK_QUEUE_FAMILY_IGNORED`: a barrier that moves no ownership between
+    // queue families.
+    let queueFamilyIgnored: U32 = U32(4294967295)
+    // `VK_QUEUE_FAMILY_EXTERNAL`: ownership held outside this Vulkan instance,
+    // such as by the process that exported a dma-buf. A producer releases to it
+    // and a consumer acquires from it.
+    let queueFamilyExternal: U32 = U32(4294967294)
+    let structureFenceCreateInfo: I32 = I32(8)
+    let structureSemaphoreCreateInfo: I32 = I32(9)
+    let structureBufferCreateInfo: I32 = I32(12)
+    let structureImageCreateInfo: I32 = I32(14)
+    let structureImageViewCreateInfo: I32 = I32(15)
+    let structureShaderModuleCreateInfo: I32 = I32(16)
+    let structurePipelineShaderStageCreateInfo: I32 = I32(18)
+    let structurePipelineVertexInputStateCreateInfo: I32 = I32(19)
+    let structurePipelineInputAssemblyStateCreateInfo: I32 = I32(20)
+    let structurePipelineViewportStateCreateInfo: I32 = I32(22)
+    let structurePipelineRasterizationStateCreateInfo: I32 = I32(23)
+    let structurePipelineMultisampleStateCreateInfo: I32 = I32(24)
+    let structurePipelineDepthStencilStateCreateInfo: I32 = I32(25)
+    let structurePipelineColorBlendStateCreateInfo: I32 = I32(26)
+    let structurePipelineDynamicStateCreateInfo: I32 = I32(27)
+    let structureGraphicsPipelineCreateInfo: I32 = I32(28)
+    let structureComputePipelineCreateInfo: I32 = I32(29)
+    let structurePipelineLayoutCreateInfo: I32 = I32(30)
+    let structureSamplerCreateInfo: I32 = I32(31)
+    let structureDescriptorSetLayoutCreateInfo: I32 = I32(32)
+    let structureDescriptorPoolCreateInfo: I32 = I32(33)
+    let structureDescriptorSetAllocateInfo: I32 = I32(34)
+    let structureWriteDescriptorSet: I32 = I32(35)
+    let structureCommandPoolCreateInfo: I32 = I32(39)
+    let structureCommandBufferAllocateInfo: I32 = I32(40)
+    let structureCommandBufferBeginInfo: I32 = I32(42)
+    let structureRenderPassBeginInfo: I32 = I32(43)
+    let structureFramebufferCreateInfo: I32 = I32(37)
+    let structureSwapchainCreateInfo: I32 = I32(1000001000)
+    let structurePresentInfo: I32 = I32(1000001001)
+    let structurePipelineRenderingCreateInfo: I32 = I32(1000044002)
+    let structureDynamicRenderingFeatures: I32 = I32(1000044003)
+    let structureRenderingInfo: I32 = I32(1000044000)
+    let structureRenderingAttachmentInfo: I32 = I32(1000044001)
+    let structureWaylandSurfaceCreateInfo: I32 = I32(1000006000)
+    let structureWin32SurfaceCreateInfo: I32 = I32(1000009000)
+    let apiVersion12: U32 = U32(4202496)
+    let queueGraphics: U32 = U32(1)
+    let queueCompute: U32 = U32(2)
+    let imageType2d: I32 = I32(1)
+    let imageViewType2d: I32 = I32(1)
+    let sharingExclusive: I32 = I32(0)
+    let commandBufferPrimary: I32 = I32(0)
+    let commandBufferOneTime: U32 = U32(1)
+    let commandPoolResettable: U32 = U32(2)
+    let fenceSignaled: U32 = U32(1)
+    let sampleCount1: I32 = I32(1)
+    let polygonFill: I32 = I32(0)
+    let cullNone: U32 = U32(0)
+    let cullFront: U32 = U32(1)
+    let cullBack: U32 = U32(2)
+    let frontCounterClockwise: I32 = I32(0)
+    let frontClockwise: I32 = I32(1)
+    let topologyTriangleList: I32 = I32(3)
+    let topologyTriangleStrip: I32 = I32(4)
+    let topologyLineList: I32 = I32(1)
+    let inputRateVertex: I32 = I32(0)
+    let indexUint16: I32 = I32(0)
+    let indexUint32: I32 = I32(1)
+    let compareNever: I32 = I32(0)
+    let compareLess: I32 = I32(1)
+    let compareLessEqual: I32 = I32(3)
+    let compareEqual: I32 = I32(2)
+    let compareGreaterEqual: I32 = I32(6)
+    let compareGreater: I32 = I32(4)
+    let compareAlways: I32 = I32(7)
+    let pipelineGraphics: I32 = I32(0)
+    let pipelineCompute: I32 = I32(1)
+    let filterNearest: I32 = I32(0)
+    let filterLinear: I32 = I32(1)
+    let samplerAddressRepeat: I32 = I32(0)
+    let samplerAddressClamp: I32 = I32(2)
+    let mipmapNearest: I32 = I32(0)
+    let mipmapLinear: I32 = I32(1)
+    let loadLoad: I32 = I32(0)
+    let loadClear: I32 = I32(1)
+    let loadDontCare: I32 = I32(2)
+    let storeStore: I32 = I32(0)
+    let storeDontCare: I32 = I32(1)
+    let resolveNone: I32 = I32(0)
+    let resolveAverage: I32 = I32(2)
+    let subpassInline: I32 = I32(0)
+    let formatRgba8: I32 = I32(37)
+    let formatBgra8: I32 = I32(44)
+    let formatRgba16Float: I32 = I32(97)
+    let formatR32Uint: I32 = I32(98)
+    let formatDepth24Stencil8: I32 = I32(129)
+    let imageUsageTransferSource: U32 = U32(1)
+    let imageUsageTransferDestination: U32 = U32(2)
+    let imageUsageSampled: U32 = U32(4)
+    let imageUsageStorage: U32 = U32(8)
+    let imageUsageColorAttachment: U32 = U32(16)
+    let imageUsageDepthAttachment: U32 = U32(32)
+    let bufferUsageTransferSource: U32 = U32(1)
+    let bufferUsageTransferDestination: U32 = U32(2)
+    let bufferUsageUniform: U32 = U32(16)
+    let bufferUsageStorage: U32 = U32(32)
+    let bufferUsageIndex: U32 = U32(64)
+    let bufferUsageVertex: U32 = U32(128)
+    let bufferUsageIndirect: U32 = U32(256)
+    let memoryHostVisible: U32 = U32(2)
+    let memoryHostCoherent: U32 = U32(4)
+    let memoryDeviceLocal: U32 = U32(1)
+    let imageLayoutUndefined: I32 = I32(0)
+    let imageLayoutGeneral: I32 = I32(1)
+    let imageLayoutColorAttachment: I32 = I32(2)
+    let imageLayoutDepthAttachment: I32 = I32(3)
+    let imageLayoutShaderRead: I32 = I32(5)
+    let imageLayoutTransferSource: I32 = I32(6)
+    let imageLayoutTransferDestination: I32 = I32(7)
+    let imageLayoutPreinitialized: I32 = I32(8)
+    let imageLayoutPresent: I32 = I32(1000001002)
+    let aspectColor: U32 = U32(1)
+    let aspectDepth: U32 = U32(2)
+    let aspectStencil: U32 = U32(4)
+    let stageTopOfPipe: U32 = U32(1)
+    let stageTransfer: U32 = U32(4096)
+    let stageFragmentShader: U32 = U32(128)
+    let stageComputeShader: U32 = U32(2048)
+    let stageColorAttachmentOutput: U32 = U32(1024)
+    let stageEarlyFragmentTests: U32 = U32(256)
+    let stageBottomOfPipe: U32 = U32(8192)
+    let accessNone: U32 = U32(0)
+    let accessTransferRead: U32 = U32(2048)
+    let accessTransferWrite: U32 = U32(4096)
+    let accessShaderRead: U32 = U32(32)
+    let accessShaderWrite: U32 = U32(64)
+    let accessColorAttachmentWrite: U32 = U32(256)
+    let accessDepthStencilWrite: U32 = U32(1024)
+}

@@ -1,0 +1,169 @@
+import Ember
+import Foundation
+
+// A blitted surface, as the UI compositor describes one: a rectangle in logical
+// points, a corner radius, a colour and three effect weights. Every one is a
+// measure the caller chose, not a value the device reads back.
+struct FakeUiSurface {
+    var x: Number = 0
+    var y: Number = 0
+    var width: Number = 0
+    var height: Number = 0
+    var radius: Number = 0
+    var r: Number = 0
+    var g: Number = 0
+    var b: Number = 0
+    var a: Number = 0
+    var blur: Number = 0
+    var refraction: Number = 0
+    var glow: Number = 0
+}
+
+struct FakeUiEffectsState {
+    var shader: FakeShader = FakeShader {}
+    var pipeline: FakeRenderPipeline = FakeRenderPipeline {}
+    var vertices: FakeGraphicsBuffer = FakeGraphicsBuffer {}
+    var sceneTarget: FakeGraphicsTexture = FakeGraphicsTexture {}
+    var blurTarget: FakeGraphicsTexture = FakeGraphicsTexture {}
+    var sampler: FakeGraphicsSampler = FakeGraphicsSampler {}
+    var bindGroup: FakeBindGroup = FakeBindGroup {}
+    var surfaceCount: Number = 0
+}
+
+function fakeUiSurfaces() -> [FakeUiSurface] {
+    return[FakeUiSurface {
+        x: 64.0 y: 48.0 width: 1152.0 height: 624.0 radius: 38.0 r: 0.09 g: 0.12 b: 0.18 a: 0.58 blur: 22.0 refraction: 0.018 glow: 0.8
+    }, FakeUiSurface {
+        x: 96.0 y: 82.0 width: 286.0 height: 556.0 radius: 30.0 r: 0.06 g: 0.08 b: 0.13 a: 0.72 blur: 16.0 refraction: 0.012 glow: 0.55
+    }]
+}
+
+function fakeUiVertexData() -> [Number] {
+    return[0.0, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 0.0, 1.0]
+}
+
+namespace FakeUi {
+    let width: Number = 1280
+    let height: Number = 720
+    // Two floats a vertex.
+    let stride: Number = 8
+    // A surface is one quad, two triangles.
+    let verticesPerSurface: Number = 6
+}
+
+// A half-float target a pass renders into and a later pass samples.
+function fakeUiTarget(
+    label: String,
+    storageMode: FakeAttachmentStorageMode
+) -> FakeTextureDescriptor {
+    return FakeTextureDescriptor {
+        label: label,
+        width: FakeUi.width,
+        height: FakeUi.height,
+        format: FakeTextureFormat.rgba16Float,
+        usage: FakeTextureUsage.renderTargetSampled,
+        storageMode: storageMode
+    }
+}
+
+function fakeUiPipeline(shader: FakeShader) -> FakePipelineDescriptor {
+    return FakePipelineDescriptor {
+        label: "ui-effects-pipeline",
+        shader: shader,
+        vertexLayout: FakeVertexLayout {
+            stride: FakeUi.stride,
+            attributes: [FakeVertexAttribute { name: "position", format: FakeVertexFormat.float2 }]
+        },
+        colorTargets: [FakeColorTargetDescriptor {
+            format: FakeTextureFormat.rgba8Unorm,
+            blend: FakeBlendState { enabled: true, preset: FakeBlendPreset.premultipliedAlpha }
+        }]
+    }
+}
+
+function fakeUiBindings(
+    graphics: borrow FakeGraphics,
+    scene: borrow FakeGraphicsTexture,
+    sampler: borrow FakeGraphicsSampler
+) -> FakeBindGroup {
+    return graphics.createBindGroup(
+        FakeBindGroupDescriptor {
+            label: "ui-effects-bindings",
+            entries: [FakeBindEntry {
+                name: "scene",
+                kind: FakeBindEntryKind.texture,
+                texture: copy scene
+            }, FakeBindEntry {
+                name: "sampler",
+                kind: FakeBindEntryKind.sampler,
+                sampler: copy sampler
+            }]
+        }
+    )
+}
+
+function fakeSetupUi(graphics: FakeGraphics) -> FakeUiEffectsState {
+    let shader = graphics.createShaderFromKsl(
+        FakeKslShaderDescriptor { label: "ui-effects", asset: "UiEffects" }
+    )
+    let sceneTarget = graphics.createTexture(
+        fakeUiTarget("scene-target", FakeAttachmentStorageMode.persistent)
+    )
+    let sampler = graphics.createSampler(FakeSamplerDescriptor { label: "ui-sampler" })
+    return FakeUiEffectsState {
+        shader: shader,
+        pipeline: graphics.createRenderPipeline(fakeUiPipeline(copy shader)),
+        vertices: graphics.createBuffer(
+            FakeBufferDescriptor {
+                label: "ui-quad",
+                floatData: fakeUiVertexData(),
+                stride: FakeUi.stride
+            }
+        ),
+        sceneTarget: sceneTarget,
+        blurTarget: graphics.createTexture(
+            fakeUiTarget("blur-target", FakeAttachmentStorageMode.transient)
+        ),
+        sampler: sampler,
+        bindGroup: fakeUiBindings(graphics, sceneTarget, sampler),
+        surfaceCount: fakeUiSurfaces().count
+    }
+}
+
+function fakeEncodeUiPass(encoder: borrow mut FakeRenderEncoder, state: borrow FakeUiEffectsState) {
+    encoder.setPipeline(state.pipeline)
+    encoder.setVertexBuffer(state.vertices)
+    encoder.setBindGroup(0, state.bindGroup)
+    encoder.draw(state.surfaceCount * FakeUi.verticesPerSurface)
+}
+
+function fakeDrawUi(frame: borrow mut FakeRenderFrame, state: FakeUiEffectsState) {
+    let scenePass = FakeRenderPassDescriptor {
+        label: "offscreen-pass" colorAttachments: [FakeColorAttachment {
+            target: FakeRenderTarget {
+                kind: FakeRenderTargetKind.texture texture: state.sceneTarget mipLevel: 0 arrayLayer: 0
+            } loadAction: FakeLoadAction.clear storeAction: FakeStoreAction.store clearColor: RGBAColor {
+                r: 0.0 g: 0.0 b: 0.0 a: 0.0
+            }
+        }]
+    }
+    let presentPass = FakeRenderPassDescriptor {
+        label: "ui-present-pass" colorAttachments: [FakeColorAttachment {
+            target: FakeRenderTarget {
+                kind: FakeRenderTargetKind.swapchain
+            } loadAction: FakeLoadAction.load storeAction: FakeStoreAction.store clearColor: RGBAColor {
+                r: 0.04 g: 0.05 b: 0.08 a: 1.0
+            } resolveTarget: FakeRenderTarget {
+                kind: FakeRenderTargetKind.texture texture: state.blurTarget mipLevel: 0 arrayLayer: 0
+            } hasResolveTarget: true
+        }]
+    }
+
+    var sceneEncoder = frame.beginRenderPass(scenePass)
+    fakeEncodeUiPass(sceneEncoder, state)
+    frame.endPass()
+
+    var presentEncoder = frame.beginRenderPass(presentPass)
+    fakeEncodeUiPass(presentEncoder, state)
+    frame.endPass()
+}

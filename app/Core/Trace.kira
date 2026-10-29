@@ -1,0 +1,112 @@
+// How much of what a run did to itself it says out loud.
+//
+// A renderer has no `print` and should not grow one: everything worth knowing
+// about a frame is an event, and an event is a `log`. The problem a renderer
+// actually has is that most of what it knows is only interesting when something
+// has already gone wrong, and a run that prints all of it is a run nobody can
+// read the failures out of.
+//
+// So each area is written once, in full, with its data as fields — and whether
+// that area prints is decided per run by an environment variable. A normal run
+// is silent and keeps every line; a debugging run turns on the one area it is
+// looking at.
+//
+// `EMBER_LOG_<AREA>=1` prints that area at `debug`, `=2` at `trace` and finer.
+// The areas are listed in `TraceArea`. Nothing is compiled out, so there is no
+// difference between a build that can report a thing and one that cannot.
+//
+// The gates are resolved once, into the runtime state, rather than read at every
+// trace: an area is checked on paths as hot as a draw, and an environment
+// lookup is a scan.
+
+public enum TraceArea {
+    // Adapter, device and feature negotiation, and what had to be given up.
+    Device
+    // The shape of a frame: passes, draws, triangles, what was presented.
+    Frame
+    // What a pass encodes and what state it was given.
+    Pass
+    // One draw: pipeline, buffers, the counts it issued.
+    Draw
+    // Bind groups, descriptors and layouts.
+    Bind
+    // Allocation, memory types and the sizes behind a resource.
+    Memory
+    // A capture: the path, the size, what it wrote.
+    Capture
+    // Events as they are delivered, and the scripts that drive them.
+    Input
+}
+
+// Whether each area prints. One field per area rather than a set, so a trace
+// site reads as `state.tracing.device` and cannot name an area that is not there.
+public struct TraceGates {
+    var device: Bool = false
+    var frame: Bool = false
+    var pass: Bool = false
+    var draw: Bool = false
+    var bind: Bool = false
+    var memory: Bool = false
+    var capture: Bool = false
+    var input: Bool = false
+}
+
+// The environment variable that turns an area on.
+public function traceAreaVariable(area: borrow TraceArea) -> String {
+    return match area {
+        Device -> return "EMBER_LOG_DEVICE"
+        Frame -> return "EMBER_LOG_FRAME"
+        Pass -> return "EMBER_LOG_PASS"
+        Draw -> return "EMBER_LOG_DRAW"
+        Bind -> return "EMBER_LOG_BIND"
+        Memory -> return "EMBER_LOG_MEMORY"
+        Capture -> return "EMBER_LOG_CAPTURE"
+        Input -> return "EMBER_LOG_INPUT"
+    }
+}
+
+// Whether one area prints at all. Zero, unset, and anything that does not parse
+// as a number all mean off: a debugging variable that is wrong must not turn a
+// normal run noisy, and must not trap either.
+public function traceAreaEnabled(area: borrow TraceArea) -> Bool {
+    return environmentNumber(traceAreaVariable(area), 0) > 0
+}
+
+// Every gate, resolved once at the start of a run.
+public function traceGatesFromEnvironment() -> TraceGates {
+    return TraceGates {
+        device: traceAreaEnabled(.Device),
+        frame: traceAreaEnabled(.Frame),
+        pass: traceAreaEnabled(.Pass),
+        draw: traceAreaEnabled(.Draw),
+        bind: traceAreaEnabled(.Bind),
+        memory: traceAreaEnabled(.Memory),
+        capture: traceAreaEnabled(.Capture),
+        input: traceAreaEnabled(.Input)
+    }
+}
+
+// Which areas a run turned on, as text, so that the answer is in the log rather
+// than in whatever the person remembers setting.
+public function traceGatesSummary(gates: borrow TraceGates) -> String {
+    var on: [String] = []
+    if gates.device { on.append("device") }
+    if gates.frame { on.append("frame") }
+    if gates.pass { on.append("pass") }
+    if gates.draw { on.append("draw") }
+    if gates.bind { on.append("bind") }
+    if gates.memory { on.append("memory") }
+    if gates.capture { on.append("capture") }
+    if gates.input { on.append("input") }
+    if on.count == 0 {
+        return "none"
+    }
+    var text = ""
+    for (index, area) in on.enumerated() {
+        if index > 0 {
+            text = text + ","
+        }
+        text = text + area
+    }
+    return text
+}

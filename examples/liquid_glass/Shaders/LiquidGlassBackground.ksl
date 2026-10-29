@@ -1,0 +1,60 @@
+type VertexIn {
+    let position: Float2
+}
+
+type VertexOut {
+    @builtin(position)
+    let clip_position: Float4
+
+    let uv: Float2
+}
+
+type FragmentOut {
+    let color: Float4
+}
+
+shader LiquidGlassBackground {
+    group Material {
+        texture tex0: Texture2d
+        sampler smp0: Sampler
+    }
+
+    vertex {
+        input VertexIn
+        output VertexOut
+
+        function entry(input: VertexIn) -> VertexOut {
+            let result: VertexOut
+            result.clip_position = Float4(input.position, 0.0, 1.0)
+            // Clip space runs upwards and an image's rows run downwards, so the
+            // vertical coordinate is turned over here. The backdrop is the one
+            // texture in this example that comes from a file rather than from a
+            // pass this program rendered, and a decoder hands back its first row
+            // first; every other sample in the chain reads a render target and
+            // keeps the untouched mapping.
+            let uv = input.position * 0.5 + Float2(0.5, 0.5)
+            uv.y = 1.0 - uv.y
+            result.uv = uv
+            return result
+        }
+    }
+
+    fragment {
+        input VertexOut
+        output FragmentOut
+
+        function entry(input: VertexOut) -> FragmentOut {
+            let result: FragmentOut
+            let imageAspect = 2600.0 / 2061.0
+            let screenAspect = 1600.0 / 900.0
+            let uv = input.uv
+            if imageAspect > screenAspect {
+                uv.x = (uv.x - 0.5) * (screenAspect / imageAspect) + 0.5
+            } else {
+                uv.y = (uv.y - 0.5) * (imageAspect / screenAspect) + 0.5
+            }
+            result.color = sample(tex0, smp0, uv)
+            return result
+        }
+    }
+}

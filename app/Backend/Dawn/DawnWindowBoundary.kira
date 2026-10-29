@@ -1,0 +1,326 @@
+import Foundation
+import Heap
+// The Win32 boundary the Dawn window opens against, and the vocabulary that
+// names it.
+//
+// Every C layout, every imported symbol and every named Win32 constant lives
+// here, so the file that actually opens and drives a window is left holding
+// only what it does. A window is a `WNDCLASSEXA`, a `CreateWindowExA`, a
+// message pump and a procedure — and the reason a reader has to be able to see
+// all four at once is that none of them is separable from the others.
+//
+// `MSG` is filled in place by `PeekMessageA`, so it is a block addressed through
+// a hand-declared `@FFI.Pointer`, which is how the members C wrote are read
+// back. `RECT`, `MONITORINFO` and `MARGINS` are read and written whole through a
+// `Boxed` value, whose address is what the call takes.
+//
+// The message and style constants carry their Win32 numbers because that is
+// what the queue carries: there is no translation between a `WM_*` and what
+// the application sees, and inventing one would only mean a table to keep.
+
+public @FFI.Callback { abi: c, params: [RawPtr, U32, U64, Int], result: Int }
+struct WindowProcedure {}
+
+// The DPI Windows reports for a display it considers unscaled, and therefore the
+// denominator every backing scale here is a fraction of: 96 is what
+// `GetDpiForWindow` answers on a 100% monitor, so `dpi / 96` is the factor
+// between a point and a physical pixel.
+//
+// Named once because the two scales below are the same arithmetic written twice,
+// and a change to what counts as unscaled has to reach both.
+public namespace BaseDpi {
+    let value: UNumber = 96
+}
+
+// `WNDCLASSEXA`. The trailing `smallIcon` matters as much as the rest: the size
+// in `byteSize` is checked by `RegisterClassExA`, and a struct one field short
+// is refused with no diagnostic beyond a zero atom.
+public @FFI.Struct { layout: c }
+struct WindowClass {
+    var byteSize: U32 = 0
+    var style: U32 = 0
+    var procedure: WindowProcedure
+    var classExtraBytes: I32 = 0
+    var windowExtraBytes: I32 = 0
+    var instance: RawPtr
+    var icon: RawPtr
+    var cursor: RawPtr
+    var background: RawPtr
+    var menuName: CString
+    var className: CString
+    var smallIcon: RawPtr
+}
+
+public @FFI.Pointer { target: WindowClass, ownership: borrowed }
+struct WindowClassPointer {}
+
+public @FFI.Struct { layout: c }
+struct WindowPoint {
+    var x: I32 = 0
+    var y: I32 = 0
+}
+
+public @FFI.Struct { layout: c }
+struct WindowMessage {
+    var window: RawPtr
+    var message: U32 = 0
+    var wparam: U64 = 0
+    var lparam: Int = 0
+    var time: U32 = 0
+    var point: WindowPoint
+}
+
+public @FFI.Pointer { target: WindowMessage, ownership: borrowed }
+struct WindowMessagePointer {}
+
+public @FFI.Struct { layout: c }
+struct WindowRect {
+    var left: I32 = 0
+    var top: I32 = 0
+    var right: I32 = 0
+    var bottom: I32 = 0
+}
+
+// `MONITORINFO`: its own size, the monitor's rectangle, its work area, and a
+// flag saying whether it is the primary display.
+public @FFI.Struct { layout: c }
+struct MonitorInfo {
+    var byteSize: U32 = 0
+    var monitor: WindowRect
+    var work: WindowRect
+    var flags: U32 = 0
+}
+
+// `MARGINS`: how far the frame reaches into each side of the client area. -1
+// on every side is "the whole client area".
+public @FFI.Struct { layout: c }
+struct WindowMargins {
+    var left: I32 = 0 - 1
+    var right: I32 = 0 - 1
+    var top: I32 = 0 - 1
+    var bottom: I32 = 0 - 1
+}
+
+public @FFI.Extern { library: kernel32, symbol: GetModuleHandleA, abi: c }
+function moduleHandle(name: CString) -> RawPtr
+
+// `LoadCursorA(NULL, IDC_ARROW)`. The second parameter is `LPCSTR`, and a stock
+// cursor is named by an integer cast to one — `MAKEINTRESOURCE`. There is no
+// integer-to-pointer cast in Kira, and none is needed: the parameter is a
+// pointer-sized word either way, so it is declared as the integer it carries.
+public @FFI.Extern { library: user32, symbol: LoadCursorA, abi: c }
+function loadCursor(instance: RawPtr, name: U64) -> RawPtr
+
+public @FFI.Extern { library: user32, symbol: RegisterClassExA, abi: c }
+function registerWindowClass(windowClass: WindowClassPointer) -> U16
+
+// Whether the class is registered: `RegisterClassExA` answers a zero atom when
+// it refused.
+public function windowClassRegistered(windowClass: WindowClass) -> Bool {
+    return registerWindowClass(windowClass) != U16(0)
+}
+
+public @FFI.Extern { library: user32, symbol: CreateWindowExA, abi: c }
+function createWindowHandle(
+    exStyle: U32,
+    className: CString,
+    title: CString,
+    style: U32,
+    x: I32,
+    y: I32,
+    width: I32,
+    height: I32,
+    parent: RawPtr,
+    menu: RawPtr,
+    instance: RawPtr,
+    param: RawPtr
+) -> RawPtr
+
+public @FFI.Extern { library: user32, symbol: DestroyWindow, abi: c }
+function destroyWindowHandle(window: RawPtr) -> I32
+
+// A layered window's composition: `key` is the color the desktop shows
+// through, `alpha` is how opaque the whole window is composited, and `flags`
+// says which of the two the call is setting.
+public @FFI.Extern { library: user32, symbol: SetLayeredWindowAttributes, abi: c }
+function setLayeredWindowAttributes(window: RawPtr, key: U32, alpha: U8, flags: U32) -> I32
+
+// The desktop's own backdrop for a window: what the compositor draws BEHIND it,
+// which is the blurred, tinted view of everything underneath. It is the
+// material a platform sidebar is made of, and it is the compositor's to draw —
+// an application cannot see what is under its own window.
+//
+// Asked for by attribute rather than through the undocumented composition call
+// every sample on the internet reaches for: that symbol is not in the import
+// library at all, so a program that names it does not link.
+public @FFI.Extern { library: dwmapi, symbol: DwmSetWindowAttribute, abi: c }
+function setWindowAttribute(window: RawPtr, attribute: U32, value: RawPtr, size: U32) -> I32
+
+// Extends the window frame — the part the compositor draws — over the client
+// area, which is what puts the backdrop behind everything the application
+// draws rather than behind a title bar it does not have.
+public @FFI.Extern { library: dwmapi, symbol: DwmExtendFrameIntoClientArea, abi: c }
+function extendFrameIntoClientArea(window: RawPtr, margins: RawPtr) -> I32
+
+public @FFI.Extern { library: user32, symbol: ShowWindow, abi: c }
+function showWindow(window: RawPtr, command: I32) -> I32
+
+public @FFI.Extern { library: user32, symbol: SetForegroundWindow, abi: c }
+function setForegroundWindow(window: RawPtr) -> I32
+
+public @FFI.Extern { library: user32, symbol: PeekMessageA, abi: c }
+function peekMessage(
+    message: WindowMessagePointer,
+    window: RawPtr,
+    first: U32,
+    last: U32,
+    remove: U32
+) -> I32
+
+// `PM_REMOVE`: a peeked message is taken off the queue.
+namespace PeekMessageFlag {
+    let remove: U32 = U32(1)
+}
+
+// Whether a message was waiting, taken off the queue into `messages`.
+public function messageWaiting(messages: WindowMessagePointer) -> Bool {
+    return peekMessage(messages, nullPointer(), U32(0), U32(0), PeekMessageFlag.remove) != 0
+}
+
+public @FFI.Extern { library: user32, symbol: TranslateMessage, abi: c }
+function translateMessage(message: WindowMessagePointer) -> I32
+
+public @FFI.Extern { library: user32, symbol: DispatchMessageA, abi: c }
+function dispatchMessage(message: WindowMessagePointer) -> Int
+
+public @FFI.Extern { library: user32, symbol: DefWindowProcA, abi: c }
+function defaultWindowProcedure(window: RawPtr, message: U32, wparam: U64, lparam: Int) -> Int
+
+public @FFI.Extern { library: user32, symbol: PostQuitMessage, abi: c }
+function postQuitMessage(code: I32) -> Void
+
+public @FFI.Extern { library: user32, symbol: GetClientRect, abi: c }
+function windowClientRect(window: RawPtr, rect: RawPtr) -> I32
+
+public @FFI.Extern { library: user32, symbol: AdjustWindowRect, abi: c }
+function adjustWindowRect(rect: RawPtr, style: U32, hasMenu: I32) -> I32
+
+public @FFI.Extern { library: user32, symbol: SetProcessDPIAware, abi: c }
+function markProcessDpiAware() -> I32
+
+public @FFI.Extern { library: user32, symbol: GetDpiForWindow, abi: c }
+function windowDpi(window: RawPtr) -> U32
+
+public @FFI.Extern { library: user32, symbol: GetDpiForSystem, abi: c }
+function systemDpi() -> U32
+
+public @FFI.Extern { library: user32, symbol: GetWindowLongPtrA, abi: c }
+function windowLong(window: RawPtr, index: I32) -> Int
+
+public @FFI.Extern { library: user32, symbol: SetWindowLongPtrA, abi: c }
+function setWindowLong(window: RawPtr, index: I32, value: Int) -> Int
+
+// The same two calls, typed for the one word a window carries for its creator.
+// A pointer rather than an integer because that is what the word holds here, and
+// spelling it so needs no conversion in either direction.
+public @FFI.Extern { library: user32, symbol: GetWindowLongPtrA, abi: c }
+function windowLong(window: RawPtr, index: I32) -> RawPtr
+
+public @FFI.Extern { library: user32, symbol: SetWindowLongPtrA, abi: c }
+function setWindowLong(window: RawPtr, index: I32, value: RawPtr) -> RawPtr
+
+public @FFI.Extern { library: user32, symbol: SetWindowPos, abi: c }
+function setWindowPosition(
+    window: RawPtr,
+    after: RawPtr,
+    x: I32,
+    y: I32,
+    width: I32,
+    height: I32,
+    flags: U32
+) -> I32
+
+public @FFI.Extern { library: user32, symbol: MonitorFromWindow, abi: c }
+function monitorForWindow(window: RawPtr, fallback: U32) -> RawPtr
+
+public @FFI.Extern { library: user32, symbol: GetMonitorInfoA, abi: c }
+function readMonitorInfo(monitor: RawPtr, info: RawPtr) -> I32
+
+public @FFI.Extern { library: user32, symbol: GetKeyState, abi: c }
+function keyState(virtualKey: I32) -> I16
+
+public @FFI.Extern { library: user32, symbol: ShowCursor, abi: c }
+function showCursor(show: Bool) -> I32
+
+// The window styles the three window modes are made of.
+public namespace WindowStyle {
+    // `WS_OVERLAPPEDWINDOW`: a title bar, a sizing border and the three buttons.
+    let overlapped: U32 = U32(13565952)
+    // `WS_POPUP`: no frame at all.
+    let popup: U32 = U32(2147483648)
+    // `WS_CLIPCHILDREN`
+    let clipChildren: U32 = U32(33554432)
+    // `WS_VISIBLE`
+    let visible: U32 = U32(268435456)
+    // `WS_CAPTION`, which is what separates the windowed mode from the two
+    // undecorated ones.
+    let caption: Int = 12582912
+    // `WS_EX_LAYERED`. A layered window is composited by the desktop rather
+    // than blitted, which is what lets some of its pixels be missing.
+    let layered: U32 = U32(524288)
+    let plain: U32 = U32(0)
+}
+
+// `LWA_COLORKEY` and `LWA_ALPHA` — the desktop shows through the key color, and
+// the whole window is composited at the alpha.
+public namespace LayeredFlag {
+    let colorKey: U32 = U32(1)
+    let alpha: U32 = U32(2)
+}
+
+// `CS_HREDRAW | CS_VREDRAW`: redraw the whole client area when either dimension
+// changes, so a resize repaints rather than smearing.
+public namespace WindowClassStyle {
+    let redrawOnResize: U32 = U32(3)
+}
+
+// `IDC_ARROW`, the stock cursor named by `MAKEINTRESOURCE`.
+public namespace StockCursor {
+    let arrow: U64 = U64(32512)
+}
+
+// `SetWindowPos` flags.
+public namespace WindowPositionFlag {
+    let noMove: U32 = U32(2)
+    let noZOrder: U32 = U32(4)
+    let frameChanged: U32 = U32(32)
+}
+
+// Where a new window's outer corner goes, in pixels from the top left.
+public namespace WindowPlacement {
+    let initialOffset: I32 = I32(120)
+    // `SW_SHOW`
+    let show: I32 = I32(5)
+    // `MONITOR_DEFAULTTONEAREST`
+    let nearestMonitor: U32 = U32(2)
+}
+
+// `DwmSetWindowAttribute`'s `DWMWA_SYSTEMBACKDROP_TYPE`, and
+// `DWMSBT_TRANSIENTWINDOW` — the acrylic backdrop, which is the material a
+// floating panel and a sidebar are made of. (The other system backdrop, Mica,
+// samples the WALLPAPER rather than the windows under it, which is not what
+// shows through a sidebar.)
+public namespace WindowBackdrop {
+    let attribute: U32 = U32(38)
+    let acrylic: U32 = U32(3)
+}
+
+// The `GetWindowLongPtrA` index each call reads, named so the call sites say
+// which word of the window they are asking for.
+public namespace WindowLongIndex {
+    // `GWL_STYLE`: the window's own style bits, which is how a decorated window
+    // is told from an undecorated one.
+    let style: I32 = 0 - 16
+    // `GWLP_USERDATA`: the one word a window carries for whoever created it.
+    let userData: I32 = 0 - 21
+}

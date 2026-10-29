@@ -1,0 +1,240 @@
+import Foundation
+import Heap
+
+// Recording one draw: bind what the pipeline reads, then issue it.
+//
+// The bindings come from `VulkanDrawBindings.kira`, which is where a public bind
+// group becomes the descriptor set this pass binds.
+
+namespace VulkanDraw {
+    // `VkDrawIndirectCommand`: four 32-bit words.
+    let indirectStride: U32 = U32(16)
+    let verticesPerTriangle: UNumber = 3
+}
+
+// Why a draw was dropped.
+enum VulkanDrawFailure {
+    OutsidePass
+    PipelineNotLive(UNumber)
+    SampleCountDiffers(UNumber)
+    VertexBufferNotLive(U32)
+    IndexBufferNotLive(U32)
+    ArgumentsNotLive(UNumber)
+    Bindings(VulkanBindingFailure)
+}
+
+// The encoder's pipeline, checked against the open pass and bound.
+function vulkanBindDrawPipeline(
+    state: borrow VulkanState,
+    encoder: borrow RenderEncoderState
+) -> Result<VulkanPipelineRecord, VulkanDrawFailure> {
+    if !state.passActive {
+        return .Error(.OutsidePass)
+    }
+    let id = match encoder.pipeline {
+        Some(pipeline) -> Number(pipeline.id.raw)
+        None -> 0
+    }
+    let record = vulkanPipelineRecord(state, id)
+    if !record.live || isNull(record.pipeline) {
+        return .Error(.PipelineNotLive(id))
+    }
+    if record.sampleCount != state.passSampleCount {
+        return .Error(.SampleCountDiffers(record.sampleCount))
+    }
+    vkCmdBindPipeline(state.commandBuffer, VulkanVocabulary.pipelineGraphics, record.pipeline)
+    return .Ok(record)
+}
+
+// The viewport over the whole pass, flipped so +y is up as in the other
+// backends, and the scissor the encoder set. Answers false where the scissor
+// misses the pass, so nothing is drawn.
+function vulkanSetDrawArea(state: borrow VulkanState, scissor: borrow ScissorRect?) -> Bool {
+    vkCmdSetViewport(
+        state.commandBuffer,
+        U32(0),
+        U32(1),
+        VkViewport {
+            y: F32(state.passHeight),
+            width: F32(state.passWidth),
+            height: F32(-state.passHeight),
+            maxDepth: F32(1)
+        }
+    )
+    let area = match scissorWithinPass(scissor, state.passWidth, state.passHeight) {
+        Some(area) -> area
+        None -> return false
+    }
+    vkCmdSetScissor(
+        state.commandBuffer,
+        U32(0),
+        U32(1),
+        VkRect2D {
+            offset: VkOffset2D { x: I32(area.x), y: I32(area.y) },
+            extent: VkExtent2D { width: U32(area.width), height: U32(area.height) }
+        }
+    )
+    return true
+}
+
+function vulkanBindVertexBuffer(
+    state: borrow VulkanState,
+    buffer: borrow BufferId?
+) -> Result<Void, VulkanDrawFailure> {
+    let id = match buffer {
+        Some(buffer) -> buffer.raw
+        None -> return .Ok
+    }
+    let handle = vulkanObject(state, id)
+    if isNull(handle) {
+        return .Error(.VertexBufferNotLive(id))
+    }
+    let handles = boxed<RawPtr>(handle)
+    // `VkDeviceSize`, the offset of the first vertex in the buffer.
+    let offsets = boxed<U64>(U64(vulkanObjectOffset(state, id)))
+    vkCmdBindVertexBuffers(
+        state.commandBuffer,
+        U32(0),
+        U32(1),
+        handles.pointer(),
+        offsets.pointer()
+    )
+    return .Ok
+}
+
+function vulkanBindIndexBuffer(
+    state: borrow VulkanState,
+    index: borrow IndexBinding?
+) -> Result<Void, VulkanDrawFailure> {
+    let binding = match index {
+        Some(binding) -> binding
+        None -> return .Ok
+    }
+    let handle = vulkanObject(state, binding.buffer.raw)
+    if isNull(handle) {
+        return .Error(.IndexBufferNotLive(binding.buffer.raw))
+    }
+    let format = binding.format == .Uint16 ? VulkanVocabulary.indexUint16 : VulkanVocabulary.indexUint32
+    vkCmdBindIndexBuffer(
+        state.commandBuffer,
+        handle,
+        vulkanObjectOffset(state, binding.buffer.raw),
+        format
+    )
+    return .Ok
+}
+
+// Everything a draw reads, bound. Answers false where the scissor leaves
+// nothing to draw.
+function vulkanPrepareDraw(
+    state: borrow mut VulkanState,
+    encoder: borrow RenderEncoderState
+) -> Result<Bool, VulkanDrawFailure> {
+    let pipeline = match vulkanBindDrawPipeline(state, encoder) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> return .Error(failure)
+    }
+    if !vulkanSetDrawArea(state, encoder.scissor) {
+        return .Ok(false)
+    }
+    match vulkanBindVertexBuffer(state, encoder.vertexBuffer) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanBindIndexBuffer(state, encoder.indexBuffer) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanApplyBindings(state, pipeline, encoder.bindGroups) {
+        Ok -> return .Ok(true)
+        Error(failure) -> return .Error(.Bindings(failure))
+    }
+}
+
+function vulkanNoteDraw(state: borrow mut VulkanState, elements: UNumber, instances: UNumber) {
+    state.frameDrawCount = state.frameDrawCount + 1
+    state.frameTriangleCount = state.frameTriangleCount + floor(
+        elements * instances / VulkanDraw.verticesPerTriangle
+    )
+    if state.tracing.draw {
+        log debug("Ember issued a draw", area: "draw", elements: elements, instances: instances)
+    }
+}
+
+function vulkanRecordDraw(
+    state: borrow mut VulkanState,
+    encoder: borrow RenderEncoderState,
+    counts: borrow DrawCounts
+) {
+    let instances = max(counts.instanceCount, 1)
+    if counts.indexCount > 0 {
+        if encoder.indexBuffer == .None {
+            log warn(
+                "an indexed draw has no index buffer; nothing was drawn",
+                indexCount: counts.indexCount
+            )
+            return
+        }
+        vkCmdDrawIndexed(
+            state.commandBuffer,
+            U32(counts.indexCount),
+            U32(instances),
+            U32(counts.firstIndex),
+            I32(0),
+            U32(0)
+        )
+        vulkanNoteDraw(state, counts.indexCount, instances)
+        return
+    }
+    if counts.vertexCount == 0 {
+        log warn("a draw of zero vertices; nothing was drawn")
+        return
+    }
+    vkCmdDraw(state.commandBuffer, U32(counts.vertexCount), U32(instances), U32(0), U32(0))
+    vulkanNoteDraw(state, counts.vertexCount, instances)
+}
+
+public function vulkanDrawWithBindings(
+    runtime: RawPtr,
+    encoder: borrow RenderEncoderState,
+    counts: borrow DrawCounts
+) {
+    if !vulkanRequireDevice(runtime, "vulkanDrawWithBindings") { return }
+    var state = nativeRecover<GraphicsRuntimeState>(runtime)
+    match vulkanPrepareDraw(state.vulkan, encoder) {
+        Ok(drawable) -> if drawable {
+            vulkanRecordDraw(state.vulkan, encoder, counts)
+        }
+        Error(failure) -> log fault("a draw was dropped", failure)
+    }
+}
+
+public function vulkanEncoderDrawIndirect(
+    runtime: RawPtr,
+    encoder: borrow RenderEncoderState,
+    indirectBufferId: UNumber
+) {
+    if !vulkanRequireDevice(runtime, "vulkanEncoderDrawIndirect") { return }
+    var state = nativeRecover<GraphicsRuntimeState>(runtime)
+    let arguments = vulkanObject(state.vulkan, U32(indirectBufferId))
+    if isNull(arguments) {
+        log fault(
+            "an indirect draw was dropped",
+            VulkanDrawFailure.ArgumentsNotLive(indirectBufferId)
+        )
+        return
+    }
+    match vulkanPrepareDraw(state.vulkan, encoder) {
+        Ok(drawable) -> if drawable {
+            vkCmdDrawIndirect(
+                state.vulkan.commandBuffer,
+                arguments,
+                U64(0),
+                U32(1),
+                VulkanDraw.indirectStride
+            )
+            state.vulkan.frameDrawCount = state.vulkan.frameDrawCount + 1
+        }
+        Error(failure) -> log fault("an indirect draw was dropped", failure)
+    }
+}

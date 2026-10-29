@@ -1,0 +1,39 @@
+import Foundation
+
+// Integer texel bounds, independent of a backend's threadgroup rounding.
+public struct TextureComputeRegion {
+    var x: UN32 = 0
+    var y: UN32 = 0
+    var width: UN32 = 0
+    var height: UN32 = 0
+}
+
+public function textureComputeRegions(pair: borrow TextureComputePair) -> [TextureComputeRegion] {
+    if pair.regions.count > 0 { return copy pair.regions }
+    return [TextureComputeRegion { width: pair.width, height: pair.height }]
+}
+
+public function textureComputeRegion(
+    pair: borrow TextureComputePair,
+    region: borrow TextureComputeRegion,
+    horizontal: Bool
+) -> TextureComputeRegion {
+    let x = min(Number(region.x), Number(pair.width))
+    let endX = min(Number(region.x) + Number(region.width), Number(pair.width))
+    let halo = horizontal ? Number(pair.verticalHalo) : 0
+    let y = max(min(Number(region.y), Number(pair.height)) - halo, 0)
+    let endY = min(Number(region.y) + Number(region.height) + halo, Number(pair.height))
+    return TextureComputeRegion {
+        x: UN32(x), y: UN32(y),
+        width: UN32(max(endX - x, 0)), height: UN32(max(endY - y, 0))
+    }
+}
+
+// Shared uniform layout: full texture size, blend, padding, then dispatch rect.
+public function textureComputeExtent(
+    pair: borrow TextureComputePair,
+    region: borrow TextureComputeRegion
+) -> [Number] {
+    return [pair.width, pair.height, pair.blend, 0,
+        region.x, region.y, region.width, region.height]
+}

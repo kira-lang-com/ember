@@ -1,0 +1,42 @@
+// Every event Dawn delivers, in order, when `EMBER_LOG_INPUT` is set.
+//
+// The whole point is that this is one place rather than a log at each of the
+// twenty-odd places an event is handed on: the run loops bind the application's
+// handler once and every delivery goes through it, so tracing the handler traces
+// the input.
+//
+// The handler is built by a named function rather than a lambda at the binding,
+// because a lambda may not capture a `borrow mut` and the run loops hold the
+// runtime state that way.
+public function dawnTracedEvent(state: borrow GraphicsRuntimeState) -> (borrow AppEvent) -> Void {
+    let deliver: (borrow AppEvent) -> Void = state.app.eventHandler
+    return { event in
+        dawnDeliveredEvent(state, event)
+        deliver(event)
+        return
+    }
+}
+
+// One delivered event, as the backend saw it.
+//
+// The coordinates are the ones the event carries rather than any the backend
+// derived, because "the event said so" and "we adjusted it" are different bugs
+// and this is where the difference shows.
+public function dawnDeliveredEvent(state: borrow GraphicsRuntimeState, event: borrow AppEvent) {
+    if state.tracing.input {
+        log debug(
+            "Ember delivered an event",
+            area: "input",
+            kind: traceText(event.kind),
+            button: traceText(event.pointerButton),
+            x: event.pointerX,
+            y: event.pointerY,
+            dx: event.pointerDeltaX,
+            dy: event.pointerDeltaY,
+            scrollX: event.scrollX,
+            scrollY: event.scrollY,
+            repeat: event.keyRepeat,
+            frame: event.frameCount
+        )
+    }
+}

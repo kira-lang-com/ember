@@ -1,0 +1,33 @@
+// A camera as a caller states it: where it stands, what it looks at, and the
+// frustum it sees through. Every field is a measure in the caller's own units,
+// so the surface is `Number` — a 1.3333333 aspect and a 0.7853982 field of view
+// are numbers a program computed, not values it wants rounded to a float.
+public struct PerspectiveCamera {
+    var position: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 5.0 }
+    var target: Vec3 = Vec3 { x: 0.0, y: 0.0, z: 0.0 }
+    var up: Vec3 = Vec3 { x: 0.0, y: 1.0, z: 0.0 }
+    var fovYRadians: Number = 0.7853982
+    var aspect: Number = 1.3333333
+    var nearPlane: UNumber = 0.1
+    var farPlane: UNumber = 100
+}
+
+public function cameraViewMatrix(camera: borrow PerspectiveCamera) -> Mat4 {
+    return mat4LookAt(camera.position, camera.target, camera.up)
+}
+
+public function cameraProjectionMatrix(camera: borrow PerspectiveCamera) -> Mat4 {
+    // The frustum narrows to a float here and nowhere else: `mat4Perspective`
+    // builds Foundation's `Mat4`, whose fields are floats because a vertex
+    // shader multiplies by them in a GPU register.
+    return mat4Perspective(
+        Float(camera.fovYRadians),
+        Float(camera.aspect),
+        Float(camera.nearPlane),
+        Float(camera.farPlane)
+    )
+}
+
+public function cameraViewProjectionMatrix(camera: borrow PerspectiveCamera) -> Mat4 {
+    return cameraProjectionMatrix(camera).multiply(cameraViewMatrix(camera))
+}

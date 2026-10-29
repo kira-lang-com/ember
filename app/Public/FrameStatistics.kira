@@ -1,0 +1,56 @@
+import Heap
+
+// What one presented frame cost, as any backend can report it.
+//
+// The counters an application's HUD is built from. They used to be Metal's
+// alone — a caller asked `!isNull(frame.metalContext)` and, if that came
+// back false, showed zero for every row — so on any other backend the panel
+// said `CPU 0.0 ms  GPU 0.0 ms  Resources 0  0 passes 0 draws 0 tris`, which is
+// not a measurement of anything. This is the shape both backends answer in.
+//
+// Seconds and bytes, not milliseconds and MiB: a unit a reader picks for a
+// display belongs to the display.
+//
+// Two `has*` flags rather than a zero. A counter a backend cannot measure is
+// not a counter that measured zero, and a HUD that cannot tell the two apart
+// reports a fast frame where there is no timer at all.
+
+// How much of the window a frame reached. A backend that cannot tell reports
+// `.Untracked`, which is why this is an enum rather than a number: 0, 1 and 2
+// are all "a number that happens to mean something", and a HUD that switches on
+// one silently draws a wrong row for a backend that never set it.
+public enum WindowState {
+    Untracked
+    FocusedVisible
+    VisibleUnfocused
+    Hidden
+}
+
+public struct FrameStatistics {
+    var frameSeconds: UNumber = 0
+    var cpuSeconds: UNumber = 0
+    var gpuSeconds: UNumber = 0
+    var hasGpuSeconds: Bool = false
+    var drawableWidth: UN32 = 0
+    var drawableHeight: UN32 = 0
+    // The device storage this run holds, which grows and shrinks and is never
+    // negative: `UNumber` says so where the counters below do not.
+    var allocatedBytes: UNumber = 0
+    var hasAllocatedBytes: Bool = false
+    var resourceCount: UNumber = 0
+    var passCount: UNumber = 0
+    var drawCount: UNumber = 0
+    var triangleCount: UNumber = 0
+    var framesInFlight: UNumber = 1
+    var frameSerial: UNumber = 0
+    var windowState: WindowState = .Untracked
+    // Each render pass's GPU time, in the order the frame encoded them, while
+    // the frame was asked to measure them (`RenderFrame.measureGpu`).
+    var gpuPasses: [GpuPassTime] = []
+}
+
+public struct GpuPassTime {
+    var label: String = ""
+    var nanos: Number = 0
+    var draws: Number = 0
+}

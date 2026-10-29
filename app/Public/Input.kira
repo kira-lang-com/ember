@@ -1,0 +1,209 @@
+import Heap
+
+public enum AppEventKind {
+    None
+    KeyDown
+    KeyUp
+    TextInput
+    PointerDown
+    PointerUp
+    PointerMoved
+    PointerEntered
+    PointerExited
+    Scroll
+    TouchesBegan
+    TouchesMoved
+    TouchesEnded
+    TouchesCancelled
+    Resized
+    Iconified
+    Restored
+    Focused
+    Unfocused
+    Suspended
+    Resumed
+    QuitRequested
+    ClipboardPasted
+    FilesDropped
+}
+
+// A key, in the numbering every backend reports — GLFW's, which sokol's was:
+// a printable key is its ASCII uppercase, and the rest are numbered from 256.
+// Open, because a keyboard has keys this list does not name, and a code none of
+// these names survives `fromCode` and `code` unchanged.
+public @Open enum Key: UN32 {
+    None = 0
+    Space = 32
+    Digit0 = 48
+    Digit1 = 49
+    Digit2 = 50
+    Digit3 = 51
+    Digit4 = 52
+    Digit5 = 53
+    Digit6 = 54
+    Digit7 = 55
+    Digit8 = 56
+    Digit9 = 57
+    A = 65
+    B = 66
+    C = 67
+    D = 68
+    E = 69
+    F = 70
+    G = 71
+    H = 72
+    I = 73
+    J = 74
+    K = 75
+    L = 76
+    M = 77
+    N = 78
+    O = 79
+    P = 80
+    Q = 81
+    R = 82
+    S = 83
+    T = 84
+    U = 85
+    V = 86
+    W = 87
+    X = 88
+    Y = 89
+    Z = 90
+    Escape = 256
+    Enter = 257
+    Tab = 258
+    Backspace = 259
+    Insert = 260
+    Delete = 261
+    Right = 262
+    Left = 263
+    Down = 264
+    Up = 265
+    PageUp = 266
+    PageDown = 267
+    Home = 268
+    End = 269
+    F1 = 290
+    F2 = 291
+    F3 = 292
+    F4 = 293
+    F5 = 294
+    F6 = 295
+    F7 = 296
+    F8 = 297
+    F9 = 298
+    F10 = 299
+    F11 = 300
+    F12 = 301
+    LeftShift = 340
+    LeftControl = 341
+    LeftAlt = 342
+}
+
+public enum PointerButton {
+    None
+    Left
+    Right
+    Middle
+    Other
+}
+
+// Where a scroll is in the gesture that made it. A trackpad's two fingers
+// report `Began`, then `Changed` while they move, then `Ended` when they lift
+// (or `Cancelled`); the glide the system adds after they lift arrives as a
+// second run of phases in `scrollMomentum`. A wheel reports `None` for both.
+public enum ScrollPhase {
+    None
+    MayBegin
+    Began
+    Changed
+    Ended
+    Cancelled
+}
+
+public struct ModifierState {
+    let shift: Bool = false
+    let control: Bool = false
+    let alt: Bool = false
+    let superKey: Bool = false
+    let leftPointerButton: Bool = false
+    let rightPointerButton: Bool = false
+    let middlePointerButton: Bool = false
+}
+
+public struct AppEvent {
+    let kind: AppEventKind = .None
+    let frameCount: UNumber = 0
+    let key: Key = .None
+    let textCodepoint: UN32 = 0
+    let keyRepeat: Bool = false
+    let modifiers: ModifierState = ModifierState {}
+    let pointerButton: PointerButton = .None
+    let pointerX: Number = 0
+    let pointerY: Number = 0
+    let pointerDeltaX: Number = 0
+    let pointerDeltaY: Number = 0
+    let scrollX: Number = 0
+    let scrollY: Number = 0
+    let scrollPhase: ScrollPhase = .None
+    let scrollMomentum: ScrollPhase = .None
+    // Whether the deltas are points from a trackpad or tablet rather than a
+    // wheel's lines, and whether they follow the fingers ("natural" scrolling)
+    // rather than run against them.
+    let scrollPrecise: Bool = false
+    let scrollInverted: Bool = false
+    // When the event happened, in seconds on the clock a frame's
+    // `monotonicNanoseconds` counts on; negative where the platform does not
+    // say. A velocity is distance over THIS time, not over the frames the
+    // events happened to be delivered in.
+    let timestamp: Number = -1
+    let touchCount: UNumber = 0
+    let windowWidth: UNumber = 0
+    let windowHeight: UNumber = 0
+    let framebufferWidth: UN32 = 0
+    let framebufferHeight: UN32 = 0
+}
+
+// The cursor and the soft keyboard, routed to the backend that owns the
+// window. These were sokol's `sapp_*` when sokol owned input, with a Metal
+// supplement bolted beside them; the backend answers for its own window now,
+// so there is one path rather than two half-paths gated on the platform.
+//
+// The backend is built with a null context because what these reach — the
+// cursor, the pointer lock — is the window server's and not a per-run object.
+// `graphicsDefaultBackend` is what a run without an explicit choice selects,
+// which is the same backend its window was opened by.
+function graphicsInputBackend() -> Any RenderBackend {
+    return renderBackendFor(graphicsDefaultBackend(), nullPointer())
+}
+
+public function graphicsShowKeyboard(show: Bool) {
+    graphicsInputBackend().showKeyboard(show)
+}
+
+public function graphicsKeyboardShown() -> Bool {
+    return graphicsInputBackend().keyboardShown()
+}
+
+public function graphicsShowMouse(show: Bool) {
+    graphicsInputBackend().showMouse(show)
+}
+
+// Lock the pointer for a look/pan drag: it stops moving on screen and stops
+// leaving the window, while movement still arrives as deltas.
+//
+// Separate from `graphicsShowMouse` because they are separate things — a hidden
+// cursor that still roams is what makes a camera drag run off the window and
+// jam at the screen edge — and paired the same way: one lock per one unlock.
+public function graphicsLockMouse(lock: Bool) {
+    graphicsInputBackend().lockMouse(lock)
+}
+
+public function graphicsMouseLocked() -> Bool {
+    return graphicsInputBackend().mouseLocked()
+}
+
+public function graphicsMouseShown() -> Bool {
+    return graphicsInputBackend().mouseShown()
+}

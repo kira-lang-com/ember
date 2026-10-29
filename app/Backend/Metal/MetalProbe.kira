@@ -1,0 +1,58 @@
+// The probe channel: how an offscreen run reports numbers to a shell harness.
+//
+// A headless run has nobody to read a log, and the thing that checks it is a
+// script. So these reports print, and they print a fixed shape: a sentinel line
+// naming what follows, then one line per value, in order. A harness greps for
+// the sentinel and reads the lines after it — which is why the sentinel comes
+// first, and why the values are integers: a line is a line, and a float spelled
+// differently is a line that does not match.
+//
+// This is the ONE place in the library that prints, and it is a wire protocol
+// rather than a diagnostic. Everything a person reads goes through `log` and the
+// trace gates in `Trace.kira`; nothing here is a debugging leftover, and nothing
+// here should be converted to a `log` without also changing every harness that
+// reads it.
+//
+// Each report is opt-in behind its own environment variable, so a normal run
+// prints nothing at all from this file.
+
+public namespace ProbeSentinel {
+    // The centre pixel the GPU produced for the frame, proving real Kira-owned
+    // rendering rather than a marker. One value, little-endian BGRA.
+    let centerPixel: Number = 717171
+
+    // Two probe pixels at the left-quarter and right-quarter columns, for output
+    // that varies across the frame — a visibility buffer resolving distinct
+    // per-primitive ids to distinct materials. Two values, same order as the
+    // pixels named.
+    let probePixels: Number = 727272
+
+    // A deterministic digest of the whole framebuffer, for pixel-exact stability
+    // of the entire image rather than of one pixel. One value.
+    let imageDigest: Number = 313131
+
+    // Aggregate benchmark: nanoseconds per frame over every frame measured. One
+    // value, integer, so a harness derives ms and FPS without float formatting.
+    let benchMean: Number = 424242
+
+    // The same for the on-screen percentile bench. One value.
+    let benchPercentile: Number = 515151
+
+    // Per-frame benchmark trace: the frame and its three durations, which is what
+    // exposes a queue burst that averaging hides. Four values.
+    let benchFrame: Number = 434343
+
+    // The worst frame the percentile bench saw. Three values.
+    let benchWorst: Number = 444444
+}
+
+// A sentinel, then its values, one per line.
+//
+// Every probe goes through here so the shape is stated once and a harness can
+// rely on it.
+public function metalProbe(sentinel: Number, values: borrow[Number]) {
+    print(sentinel)
+    for value in values {
+        print(value)
+    }
+}

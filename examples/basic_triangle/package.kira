@@ -1,0 +1,6 @@
+construct triangle extends Package {
+    let version: String = "0.1.0"
+    let kind: PackageKind = .App
+    let assets: [String] = ["generated/Shaders"]
+    let dependencies: [Dependency] = [Dependency { name: "Ember", path: "../.." }]
+}

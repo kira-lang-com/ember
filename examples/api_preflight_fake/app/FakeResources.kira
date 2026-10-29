@@ -1,0 +1,27 @@
+struct FakeShader {
+    var id: UNumber = 0
+}
+
+struct FakeRenderPipeline {
+    var id: UNumber = 0
+}
+
+struct FakeGraphicsBuffer {
+    var id: UNumber = 0
+}
+
+struct FakeGraphicsTexture {
+    var id: UNumber = 0
+}
+
+struct FakeGraphicsSampler {
+    var id: UNumber = 0
+}
+
+struct FakeBindGroup {
+    var id: UNumber = 0
+}
+
+struct FakeUniform {
+    var id: UNumber = 0
+}

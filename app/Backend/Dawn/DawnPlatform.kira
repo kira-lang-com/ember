@@ -1,0 +1,90 @@
+// The platforms the Dawn backend opens a window on.
+//
+// Dawn draws into a surface it is given; the window system hands that surface
+// out, so the platform split is this enum and the windows it names. `match`
+// over it has no wildcard arm, so a platform listed here cannot be left without
+// a window. Foundation's `TargetPlatform` also names platforms with no Dawn
+// window, and narrowing to these keeps every arm a real implementation.
+
+public enum DawnPlatform {
+    Windows
+    Linux
+}
+
+// Why a window did not open.
+public enum WindowFailure {
+    // Win32
+    ClassNotRegistered
+    NotCreated
+    // Wayland
+    NoDisplay
+    NoRegistry
+    // The compositor offers no `wl_compositor` or no `xdg_wm_base`, and a
+    // window needs both.
+    MissingGlobals
+    NoSurface
+    NoSurfaceRole
+    NoToplevel
+}
+
+// The window a Dawn build opens, whatever platform it is opened on.
+//
+// The members are the whole of what the rest of the backend asks a window for.
+// A message pump is not among them on purpose: pumping is where a platform is
+// least alike, and what the application layer actually consumes is `AppEvent`,
+// which is already platform-neutral. So a window translates its own events and
+// the layer above never learns which one it was talking to.
+construct DawnWindow {
+    requires {
+        // The native handle a surface is made from, for the window `app` asks
+        // for.
+        function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure>
+        // The size the surface is configured at, in pixels, and the factor
+        // between those pixels and layout points.
+        function clientWidth(window: RawPtr) -> Number
+        function clientHeight(window: RawPtr) -> Number
+        function scale(window: RawPtr) -> Number
+        function resize(window: RawPtr, width: Number, height: Number)
+        function close(window: RawPtr) -> Void
+        // The WebGPU surface for this window.
+        //
+        // Dawn draws; it does not own a window, and what it takes is whatever
+        // the platform's window system hands out -- an `HWND` here, a
+        // `wl_display` and `wl_surface` there. Only the window knows which, so
+        // only the window can say it, and every other line of this backend is
+        // spared the question.
+        function createSurface(instance: RawPtr, window: RawPtr) -> RawPtr
+    // Draining the platform's event queue is NOT here yet. It belongs here
+    // -- it is where two window systems are least alike -- but the Windows
+    // pump reads and writes `GraphicsRuntimeState` directly rather than
+    // answering with the `AppEvent` the application layer actually consumes.
+    // Until that is turned around, putting `pump` in this family would only
+    // move the entanglement behind a member. It is the next thing to port,
+    // and the first thing a second platform will need.
+    }
+}
+
+// Total over `DawnPlatform`. This is the compile-time check: a new variant
+// breaks here, and there is no arm to hide it in.
+function dawnWindowFor(platform: borrow DawnPlatform) -> Any DawnWindow {
+    match platform {
+        Windows -> return DawnWindowWin32()
+        Linux -> return DawnWindowWayland()
+    }
+}
+
+// The host, narrowed to the platforms a Dawn window exists for.
+//
+// The narrowing is the one partial step, and it is partial only in principle:
+// `validateDawnBackend` refuses every platform this cannot name before a
+// backend is chosen, so a host that reaches here is one of these two. A host
+// that somehow did not would try to open a Win32 window and fail saying so,
+// which is the same answer by a longer road.
+public function dawnPlatformForHost() -> DawnPlatform {
+    // Tessera opens no window, so this is never asked there; it answers as
+    // the Linux kernel's, the code its build already links.
+    if targetPlatform!() == .Linux || targetPlatform!() == .Tessera {
+        return .Linux
+    }
+    return .Windows
+}

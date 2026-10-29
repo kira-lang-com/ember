@@ -1,0 +1,355 @@
+import Foundation
+import Heap
+
+// NSEvents read off the application's queue and turned into AppEvents.
+//
+// Split from MetalWindowInput.kira, which keeps the key map, the cursor test and
+// the title-bar gesture this leans on.
+
+// AppKit's NSEventType values (stable ABI) for the events a window reports.
+@Open enum NSEventType: U64 {
+    LeftDown = 1
+    LeftUp = 2
+    RightDown = 3
+    RightUp = 4
+    Moved = 5
+    LeftDragged = 6
+    RightDragged = 7
+    KeyDown = 10
+    KeyUp = 11
+    Scroll = 22
+    OtherDown = 25
+    OtherUp = 26
+    OtherDragged = 27
+}
+
+function metalEventType(event: RawPtr) -> NSEventType {
+    return fromCode<NSEventType>(metalMsgSendCount(event, metalSel("type")))
+}
+
+function metalEventModifiers(event: RawPtr) -> ModifierState {
+    return metalModifiersFromFlags(metalMsgSendCount(event, metalSel("modifierFlags")))
+}
+
+// What a pointer event does, and with which button.
+struct MetalPointerAction {
+    let kind: AppEventKind = .None
+    let button: PointerButton = .None
+    // Hover and scroll belong to whoever is on top at the cursor. A drag is not
+    // hover: the press captured the pointer, so it may travel over anything
+    // while held.
+    let hover: Bool = false
+}
+
+function metalPointerAction(eventType: borrow NSEventType) -> MetalPointerAction? {
+    return match eventType {
+        LeftDown -> .Some(MetalPointerAction { kind: .PointerDown, button: .Left })
+        LeftUp -> .Some(MetalPointerAction { kind: .PointerUp, button: .Left })
+        RightDown -> .Some(MetalPointerAction { kind: .PointerDown, button: .Right })
+        RightUp -> .Some(MetalPointerAction { kind: .PointerUp, button: .Right })
+        OtherDown -> .Some(MetalPointerAction { kind: .PointerDown, button: .Middle })
+        OtherUp -> .Some(MetalPointerAction { kind: .PointerUp, button: .Middle })
+        Moved -> .Some(MetalPointerAction { kind: .PointerMoved, hover: true })
+        LeftDragged -> .Some(MetalPointerAction { kind: .PointerMoved, button: .Left })
+        RightDragged -> .Some(MetalPointerAction { kind: .PointerMoved, button: .Right })
+        OtherDragged -> .Some(MetalPointerAction { kind: .PointerMoved, button: .Middle })
+        Scroll -> .Some(MetalPointerAction { kind: .Scroll, hover: true })
+        else -> .None
+    }
+}
+
+// A point in window space: bottom-left origin, in points.
+struct MetalWindowPoint {
+    let x: Number = 0
+    let y: Number = 0
+}
+
+// What a scroll event carries beyond its position.
+struct MetalScroll {
+    let x: Number = 0
+    let y: Number = 0
+    let phase: ScrollPhase = .None
+    let momentum: ScrollPhase = .None
+    let precise: Bool = false
+    let inverted: Bool = false
+}
+
+function metalScrollOf(event: RawPtr) -> MetalScroll {
+    let precise: Bool = metalMsgSend(event, metalSel("hasPreciseScrollingDeltas"))
+    let inverted: Bool = metalMsgSend(event, metalSel("isDirectionInvertedFromDevice"))
+    return MetalScroll {
+        x: metalKvcNumber(event, "scrollingDeltaX"),
+        y: metalKvcNumber(event, "scrollingDeltaY"),
+        phase: metalScrollPhase(Int(metalMsgSendCount(event, metalSel("phase")))),
+        momentum: metalScrollPhase(Int(metalMsgSendCount(event, metalSel("momentumPhase")))),
+        precise: precise,
+        inverted: inverted
+    }
+}
+
+// Where the pointer is, in window space.
+//
+// A locked pointer does not move, so `locationInWindow` stops changing and
+// every consumer that works in positions — which is all of them, since a drag
+// reports its distance from the press point — sees a motionless mouse. The
+// movement is still there, in the event's own deltas, so while the cursor is
+// hidden the position handed onward is a *virtual* one walked by those deltas:
+// it leaves the window freely, because nothing draws it, while the real cursor
+// stays put.
+//
+// Seeded from the first hidden event's true location, so the virtual pointer
+// starts where the visible one stopped and a drag's first frame reports no jump.
+function metalPointerPosition(
+    event: RawPtr,
+    ctx: RawPtr,
+    location: borrow MetalWindowPoint
+) -> MetalWindowPoint {
+    if metalPlatformCursorIsVisible!() {
+        metalMemWriteU64(ctx, MetalContext.offsetLockSeeded, 0)
+        return copy location
+    }
+    let deltaX = metalKvcNumber(event, "deltaX")
+    let deltaY = metalKvcNumber(event, "deltaY")
+    if metalMemReadU64(ctx, MetalContext.offsetLockSeeded) == 0 {
+        metalMemWriteU64(ctx, MetalContext.offsetLockSeeded, 1)
+        metalMemWriteU64(ctx, MetalContext.offsetLockedX, metalLockCoordStore(location.x))
+        metalMemWriteU64(ctx, MetalContext.offsetLockedY, metalLockCoordStore(location.y))
+    }
+    // `deltaY` counts downward and `locationInWindow` counts upward, so the
+    // virtual y walks against it and the top-left flip stays the one every
+    // other event uses.
+    let x = metalLockCoordLoad(metalMemReadU64(ctx, MetalContext.offsetLockedX)) + deltaX
+    let y = metalLockCoordLoad(metalMemReadU64(ctx, MetalContext.offsetLockedY)) - deltaY
+    metalMemWriteU64(ctx, MetalContext.offsetLockedX, metalLockCoordStore(x))
+    metalMemWriteU64(ctx, MetalContext.offsetLockedY, metalLockCoordStore(y))
+    return MetalWindowPoint { x: x, y: y }
+}
+
+function metalLocationInWindow(event: RawPtr) -> MetalWindowPoint {
+    return match metalKvcRect(event, "locationInWindow") {
+        Some(rect) -> MetalWindowPoint { x: Number(rect.x), y: Number(rect.y) }
+        None -> MetalWindowPoint()
+    }
+}
+
+// The height window space is flipped by; a view with no bounds yet flips by
+// nothing.
+function metalBoundsHeight(view: RawPtr) -> Number {
+    return match metalKvcRect(view, "bounds") {
+        Some(rect) -> Number(rect.height)
+        None -> 0
+    }
+}
+
+// A pointer event in view-local, top-left points: window space flipped by the
+// content view's bounds height.
+function metalPointerEvent(
+    event: RawPtr,
+    view: RawPtr,
+    ctx: RawPtr,
+    action: borrow MetalPointerAction
+) -> AppEvent {
+    let modifiers = metalEventModifiers(event)
+    // When something else is on top at the cursor, the pointer has left as far
+    // as this app is concerned, however in-bounds the coordinates look.
+    let eventWindow: RawPtr = metalMsgSend(event, metalSel("window"))
+    if action.hover && !metalWindowIsUnderCursor(metalSharedApp(), eventWindow) {
+        return AppEvent { kind: .PointerExited, modifiers: modifiers }
+    }
+    let location = metalLocationInWindow(event)
+    let boundsHeight = metalBoundsHeight(view)
+    // `timestamp` counts seconds on mach_absolute_time, the clock a frame's
+    // monotonicNanoseconds reads.
+    let stamp = metalKvcNumber(event, "timestamp")
+    let scroll = action.kind == .Scroll ? metalScrollOf(event) : MetalScroll()
+    let position = metalPointerPosition(event, ctx, location)
+    return AppEvent {
+        kind: action.kind,
+        pointerButton: action.button,
+        pointerX: position.x,
+        pointerY: boundsHeight - position.y,
+        scrollX: scroll.x,
+        scrollY: scroll.y,
+        scrollPhase: scroll.phase,
+        scrollMomentum: scroll.momentum,
+        scrollPrecise: scroll.precise,
+        scrollInverted: scroll.inverted,
+        timestamp: stamp,
+        modifiers: modifiers
+    }
+}
+
+// Translate one queued NSEvent into an AppEvent (kind None when the event
+// carries nothing for the app).
+public function metalTranslateEvent(event: RawPtr, view: RawPtr, ctx: RawPtr) -> AppEvent {
+    let eventType = metalEventType(event)
+    match metalPointerAction(eventType) {
+        Some(action) -> return metalPointerEvent(event, view, ctx, action)
+        None -> {}
+    }
+    // Cmd+A is the key A with the command modifier held; a field reads
+    // select-all off the two together, the way it does on every backend.
+    // Only a key event answers `keyCode`: AppKit throws for any other.
+    return match eventType {
+        KeyDown -> AppEvent {
+            kind: .KeyDown,
+            key: metalEventKey(event),
+            keyRepeat: metalMsgSend(event, metalSel("isARepeat")),
+            modifiers: metalEventModifiers(event)
+        }
+        KeyUp -> AppEvent {
+            kind: .KeyUp,
+            key: metalEventKey(event),
+            modifiers: metalEventModifiers(event)
+        }
+        else -> AppEvent { kind: .None }
+    }
+}
+
+function metalEventKey(event: RawPtr) -> Key {
+    return metalKey(Number(metalMsgSendCount(event, metalSel("keyCode"))))
+}
+
+// The character a key-down typed, as a TextInput. Return, Delete and the like
+// carry non-printable characters and give nothing: they drive submit and
+// backspace through the KeyDown path.
+function metalTypedText(event: RawPtr) -> AppEvent? {
+    let characters: RawPtr = metalMsgSend(event, metalSel("characters"))
+    if isNull(characters) || metalMsgSendCount(characters, metalSel("length")) == U64(0) {
+        return .None
+    }
+    let utf8: RawPtr = metalMsgSend(characters, metalSel("UTF8String"))
+    if isNull(utf8) {
+        return .None
+    }
+    let first = metalMemReadU64(utf8, 0) % 256
+    if first >= 32 && first < 127 {
+        return .Some(AppEvent { kind: .TextInput, textCodepoint: UN32(first) })
+    }
+    return .None
+}
+
+// Whose keyboard is this? A native child the embedder attached to the content
+// view — a web view, chiefly — becomes first responder when the pointer enters
+// it, and from then on the keystrokes are ITS page's: search boxes, forms,
+// find-in-page. When the content view itself is first responder the keys are
+// the interface's.
+function metalNativeChildHasKey(app: RawPtr, view: RawPtr) -> Bool {
+    let keyWindow: RawPtr = metalMsgSend(app, metalSel("keyWindow"))
+    if isNull(keyWindow) {
+        return false
+    }
+    let responder: RawPtr = metalMsgSend(keyWindow, metalSel("firstResponder"))
+    return !isNull(responder) && metalPointersDiffer(responder, view)
+}
+
+// The window the queue's events go to, and the context its pointer state lives
+// on.
+struct MetalEventTarget {
+    let app: RawPtr
+    let view: RawPtr
+    let ctx: RawPtr
+}
+
+// One dequeued event: handed to the window, and translated into what the app
+// receives.
+function metalDispatchEvent(
+    target: borrow MetalEventTarget,
+    event: RawPtr,
+    dragRegion: borrow (Number, Number) -> Bool,
+    out: borrow mut [AppEvent]
+) {
+    let eventType = metalEventType(event)
+    // A click decides which surface owns the keyboard from here on: the page,
+    // or the interface. See `metalClickOwnsSurface`.
+    metalClickOwnsSurface(target.app, target.view, event)
+    let childHasKey = metalNativeChildHasKey(target.app, target.view)
+    let translated = metalTranslateEvent(event, target.view, target.ctx)
+    // A press on the part of the window the app draws as its title bar moves
+    // the window, as the title bar it replaced did; a double press zooms it. The
+    // window owns the gesture from here, so the app never sees the press.
+    if eventType == .LeftDown && metalPressInDragRegion(translated, dragRegion) {
+        metalWindowBeginTitlebarGesture(target.view, event)
+        return
+    }
+    // While a native child holds the keyboard, forwarding keys through
+    // sendEvent: is the whole of what the responder chain needs, and the
+    // translated keys are SUPPRESSED: a page submit on Enter would otherwise
+    // ALSO land in the interface's own focused field.
+    let keyOwnedByPage = childHasKey && (translated.kind == .KeyDown || translated.kind == .KeyUp)
+    if translated.kind != .None && !keyOwnedByPage {
+        out.append(move translated)
+    }
+    // Key-downs are kept from the window so the unhandled-key beep never fires.
+    if eventType != .KeyDown || childHasKey {
+        metalMsgSend(target.app, metalSel("sendEvent:"), event)
+    }
+    // A key-down that produces a character also emits a TextInput (after the
+    // KeyDown), so focused fields receive typed text — except a command
+    // shortcut, and except while a native child holds the keyboard: the page
+    // already received the characters, and echoing them would type every
+    // keystroke twice.
+    if eventType == .KeyDown && !childHasKey && !metalEventModifiers(event).superKey {
+        metalAppendTypedText(event, out)
+    }
+}
+
+function metalPressInDragRegion(
+    translated: borrow AppEvent,
+    dragRegion: borrow (Number, Number) -> Bool
+) -> Bool {
+    return translated.kind == .PointerDown && dragRegion(translated.pointerX, translated.pointerY)
+}
+
+function metalAppendTypedText(event: RawPtr, out: borrow mut [AppEvent]) {
+    match metalTypedText(event) {
+        Some(text) -> out.append(text)
+        // A key with no character to type, such as an arrow, types nothing.
+        None -> {}
+    }
+}
+
+// Dispatch every pending NSEvent. Running the bare NSRunLoop only services
+// run-loop SOURCES; it does not dequeue NSApplication's event queue or call
+// -sendEvent:, so without this the window never receives mouse/keyboard/resize
+// events — it never becomes the active key window (its traffic lights stay
+// grayed) and the resize control does nothing.
+//
+// Each event is ALSO translated into an AppEvent and RETURNED to the caller: the
+// caller owns the app's event handler closure, which must be bound exactly once
+// — moving it into this function per frame would free its captured environment
+// after the first pump and later events would dispatch through a dangling
+// capture (observed as an abort inside nativeRecover).
+public function metalPumpEvents(
+    app: RawPtr,
+    view: RawPtr,
+    ctx: RawPtr,
+    dragRegion: borrow (Number, Number) -> Bool
+) -> [AppEvent] {
+    if metalUsesUIKit!() {
+        return metalUIKitTakeEvents()
+    }
+    var out: [AppEvent] = []
+    let target = MetalEventTarget { app: app, view: view, ctx: ctx }
+    let distantPast: RawPtr = metalMsgSend(metalObjcGetClass("NSDate"), metalSel("distantPast"))
+    let mode: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSString"),
+        metalSel("stringWithUTF8String:"),
+        "kCFRunLoopDefaultMode"
+    )
+    while true {
+        let event: RawPtr = metalMsgSend(
+            app,
+            metalSel("nextEventMatchingMask:untilDate:inMode:dequeue:"),
+            MetalWindowInput.eventMaskAny,
+            distantPast,
+            mode,
+            true
+        )
+        if isNull(event) {
+            break
+        }
+        metalDispatchEvent(target, event, dragRegion, out)
+    }
+    return move out
+}

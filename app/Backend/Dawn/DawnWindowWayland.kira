@@ -1,0 +1,293 @@
+import Heap
+
+// The Linux window, opened on Wayland.
+//
+// The shape of a Wayland window is not the shape of a Win32 one, and this is
+// where that shows. On Windows a window exists the moment `CreateWindowExA`
+// returns. Here a client connects, asks the compositor what it offers, waits for
+// the answer, binds the two globals a window needs out of it, makes a surface,
+// gives that surface a role, and only then has something that can be shown --
+// and the compositor decides when that is, by sending a configure the client
+// acknowledges.
+//
+// The protocol entry points are generated C inline functions, exposed through
+// the package's autobound Wayland seam so this file stays protocol-shaped Kira.
+//
+// The handlers write into a block the caller owns, passed as the `data` pointer
+// `wl_proxy_add_listener` carries. That is not a workaround: Kira has no
+// globals, and an event handler that must remember something has to be given
+// somewhere to put it.
+
+// The compositor pings; a client that never pongs is one it may call
+// unresponsive and stop drawing.
+public function waylandOnPing(data: RawPtr, shell: RawPtr, serial: U32) {
+    kira_wayland_shell_pong(shell, serial)
+}
+
+// A surface is not shown until the serial its configure carried is acknowledged.
+public function waylandOnConfigure(data: RawPtr, xdgSurface: RawPtr, serial: U32) {
+    kira_wayland_surface_ack_configure(xdgSurface, serial)
+}
+
+// One global the compositor offers, reported by hanging what was bound on the
+// registry that asked for it.
+//
+// There are two globals a window needs and one user-data word per proxy, so the
+// window opens two registries and gives each its own handler. A client may open
+// as many as it likes and every one replays the whole list, so this costs one
+// extra replay at startup and buys a handler that stores without writing.
+public function waylandOnCompositorGlobal(
+    data: RawPtr,
+    registry: RawPtr,
+    name: U32,
+    interface: RawPtr,
+    version: U32
+) {
+    if waylandNamed(interface, "wl_compositor") {
+        kira_wayland_proxy_set_user_data(
+            registry,
+            kira_wayland_registry_bind_compositor(registry, name, U32(4))
+        )
+    }
+}
+
+public function waylandOnShellGlobal(
+    data: RawPtr,
+    registry: RawPtr,
+    name: U32,
+    interface: RawPtr,
+    version: U32
+) {
+    if waylandNamed(interface, "xdg_wm_base") {
+        kira_wayland_proxy_set_user_data(
+            registry,
+            kira_wayland_registry_bind_shell(registry, name, U32(1))
+        )
+    }
+}
+
+// The decoration manager, on a registry of its own for the same reason the other
+// two have theirs: one user-data word per proxy, and a handler that reports by
+// setting it.
+public function waylandOnDecorationGlobal(
+    data: RawPtr,
+    registry: RawPtr,
+    name: U32,
+    interface: RawPtr,
+    version: U32
+) {
+    if waylandNamed(interface, "zxdg_decoration_manager_v1") {
+        kira_wayland_proxy_set_user_data(
+            registry,
+            kira_wayland_registry_bind_decoration_manager(registry, name, U32(1)),
+        )
+    }
+}
+
+// A global going away matters to a client holding one. This window binds only
+// the compositor and the shell, and neither leaves while a window is open.
+public function waylandOnGlobalRemove(data: RawPtr, registry: RawPtr, name: U32) {}
+
+// The two globals a window needs, each bound on a registry of its own.
+struct WaylandGlobals {
+    let compositor: RawPtr
+    let shell: RawPtr
+}
+
+namespace WaylandIdentity {
+    // A window with no app id is a window a shell has nothing to match on -- no
+    // icon, no grouping, and nothing for an extension that styles windows by
+    // who they belong to.
+    let appId: String = "dev.kira.HarmonyBrowser"
+}
+
+// A registry on `display` whose global handler reports through the registry's
+// own user-data word.
+function waylandCompositorRegistry(display: RawPtr) -> Result<RawPtr, WindowFailure> {
+    let registry = kira_wayland_display_get_registry(display)
+    if isNull(registry) {
+        return .Error(.NoRegistry)
+    }
+    var listener = kira_wayland_registry_listener {
+        global: waylandOnCompositorGlobal,
+        global_remove: waylandOnGlobalRemove
+    }
+    if kira_wayland_registry_add_listener(registry, move listener, nullPointer()) != I32(0) {
+        return .Error(.NoRegistry)
+    }
+    return .Ok(registry)
+}
+
+function waylandShellRegistry(display: RawPtr) -> Result<RawPtr, WindowFailure> {
+    let registry = kira_wayland_display_get_registry(display)
+    if isNull(registry) {
+        return .Error(.NoRegistry)
+    }
+    var listener = kira_wayland_registry_listener {
+        global: waylandOnShellGlobal,
+        global_remove: waylandOnGlobalRemove
+    }
+    if kira_wayland_registry_add_listener(registry, move listener, nullPointer()) != I32(0) {
+        return .Error(.NoRegistry)
+    }
+    return .Ok(registry)
+}
+
+// The compositor and the shell, bound off `display`. Everything the compositor
+// offers arrives as events, so nothing is bound until a roundtrip has delivered
+// them all.
+function waylandBindGlobals(display: RawPtr) -> Result<WaylandGlobals, WindowFailure> {
+    let registry = match waylandCompositorRegistry(display) {
+        Ok(registry) -> registry
+        Error(failure) -> return .Error(failure)
+    }
+    let shellRegistry = match waylandShellRegistry(display) {
+        Ok(registry) -> registry
+        Error(failure) -> return .Error(failure)
+    }
+    if kira_wayland_display_roundtrip(display) < I32(0) {
+        return .Error(.NoDisplay)
+    }
+    let compositor = kira_wayland_proxy_get_user_data(registry)
+    let shell = kira_wayland_proxy_get_user_data(shellRegistry)
+    if isNull(compositor) || isNull(shell) {
+        kira_wayland_proxy_destroy(registry)
+        return .Error(.MissingGlobals)
+    }
+    var shellListener = kira_wayland_shell_listener { ping: waylandOnPing }
+    if kira_wayland_shell_add_listener(shell, move shellListener, nullPointer()) != I32(0) {
+        return .Error(.MissingGlobals)
+    }
+    return .Ok(WaylandGlobals { compositor: compositor, shell: shell })
+}
+
+// A surface given the toplevel role. A surface with no role is not a window:
+// xdg-shell gives it one in two steps, a surface becoming an xdg_surface and an
+// xdg_surface becoming a toplevel.
+function waylandToplevelSurface(globals: borrow WaylandGlobals) -> Result<RawPtr, WindowFailure> {
+    let surface = kira_wayland_compositor_create_surface(globals.compositor)
+    if isNull(surface) {
+        return .Error(.NoSurface)
+    }
+    let xdgSurface = kira_wayland_shell_get_surface(globals.shell, surface)
+    if isNull(xdgSurface) {
+        return .Error(.NoSurfaceRole)
+    }
+    var configureListener = kira_wayland_surface_listener { configure: waylandOnConfigure }
+    if kira_wayland_surface_add_listener(xdgSurface, move configureListener, nullPointer()) != I32(
+        0
+    ) {
+        return .Error(.NoSurfaceRole)
+    }
+    let toplevel = kira_wayland_surface_get_toplevel(xdgSurface)
+    if isNull(toplevel) {
+        return .Error(.NoToplevel)
+    }
+    // The runtime state does not exist at open time. Keep the role on the
+    // wl_surface until input attachment can install the configure listener
+    // with that state as its callback data.
+    kira_wayland_proxy_set_user_data(surface, toplevel)
+    return .Ok(surface)
+}
+
+// The window `app` asks for, on the display's compositor.
+function waylandOpenWindow(
+    display: RawPtr,
+    app: borrow WindowRequest
+) -> Result<RawPtr, WindowFailure> {
+    let globals = match waylandBindGlobals(display) {
+        Ok(globals) -> globals
+        Error(failure) -> return .Error(failure)
+    }
+    let surface = match waylandToplevelSurface(globals) {
+        Ok(surface) -> surface
+        Error(failure) -> return .Error(failure)
+    }
+    let toplevel = kira_wayland_proxy_get_user_data(surface)
+    kira_wayland_toplevel_set_app_id(toplevel, WaylandIdentity.appId)
+    kira_wayland_toplevel_set_title(toplevel, app.title)
+    // The size the compositor was asked for, remembered so the client area can
+    // be reported before any configure has been read. Without it the window
+    // answers zero, `dawnResizeIfNeeded` returns early on every frame, and
+    // Foundation is never told a viewport -- which renders correctly, because
+    // that path takes the swapchain's size, and hit-tests nothing, because that
+    // path takes this one.
+    kira_wayland_surface_note_size(surface, I32(app.width), I32(app.height))
+    // The initial empty commit is deferred to dawnWaylandAttachInput. That is
+    // the first point carrying the runtime state the toplevel configure
+    // listener needs, and installing it after this commit would miss the size
+    // chosen by the compositor.
+    return .Ok(surface)
+}
+
+construct DawnWindowWayland() extends DawnWindow {
+    function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure> {
+        let display = kira_wayland_display_connect()
+        if isNull(display) {
+            return .Error(.NoDisplay)
+        }
+        match waylandOpenWindow(display, window) {
+            Ok(surface) -> return .Ok(surface)
+            Error(failure) -> {
+                kira_wayland_display_disconnect(display)
+                return .Error(failure)
+            }
+        }
+    }
+
+    // A Wayland surface is told its size by the compositor rather than asked,
+    // and the size it was told arrives in a configure. Until the pump is ported
+    // and those events are read, the size the caller asked for is the size it
+    // gets -- which is what the compositor was asked for too, and what `open`
+    // noted beside the surface. In pixels: those points at the surface's scale.
+    function clientWidth(window: RawPtr) -> Number {
+        return Int(kira_wayland_surface_width(window)) * self.scale(window)
+    }
+    function clientHeight(window: RawPtr) -> Number {
+        return Int(kira_wayland_surface_height(window)) * self.scale(window)
+    }
+
+    // The scale the run set on the surface, or 1 where it set none.
+    function scale(window: RawPtr) -> Number { return Int(kira_wayland_surface_scale(window)) }
+
+    // A client does not resize its own surface: it acknowledges a configure and
+    // draws at the size that carried. This becomes that acknowledgment.
+    function resize(window: RawPtr, width: Number, height: Number) {}
+
+    function createSurface(instance: RawPtr, window: RawPtr) -> RawPtr {
+        return wgpuInstanceCreateSurface(
+            instance,
+            WGPUSurfaceDescriptor {
+                nextInChain: WGPUSurfaceSourceWaylandSurface {
+                    chain: WGPUChainedStruct { sType: DawnVocabulary.structureWaylandSurface },
+                    display: kira_wayland_proxy_get_display(window),
+                    surface: window
+                },
+                label: dawnText("ember-surface")
+            }
+        )
+    }
+
+    function close(window: RawPtr) -> Void {
+        kira_wayland_proxy_destroy(window)
+    }
+}
+
+// One frame's worth of Wayland events.
+//
+// A Wayland client has no message queue to peek: what it has is a socket. The C
+// seam performs prepare-read/poll(0)/read-events/dispatch as one operation, so
+// newly arrived motion is decoded without blocking an idle frame or racing a
+// packet that arrives between checking pending events and reading the socket.
+public function dawnPumpWayland(window: RawPtr) {
+    if isNull(window) {
+        return
+    }
+    let display = kira_wayland_proxy_get_display(window)
+    if isNull(display) {
+        return
+    }
+    if kira_wayland_display_pump(display) < I32(0) {
+        log warn("the Wayland display failed while reading its events")
+    }
+}

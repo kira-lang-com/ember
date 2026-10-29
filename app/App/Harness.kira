@@ -1,0 +1,321 @@
+import Foundation
+// The test-harness controls a run reads.
+//
+// These controls belong to the shared application harness, not to a renderer:
+// reading knobs off the environment and replaying a typing script through the
+// ordinary event handler are the same on Metal and on Dawn, which both reach
+// them through here. The clock is beside this, in `HarnessClock.kira`.
+
+// Where a run reports that it reached a stage, for a live-reload runner to watch.
+//
+// A `log`, because that is where a program's account of what it did belongs and
+// what `KIRA_LOG` already reads. A runner greps the output for these markers as
+// before; what changed is that the program no longer needs a C symbol that
+// happens to do nothing when there is no runner to define it strongly.
+//
+// The markers are `debug` rather than `info` so a run that reports them prints
+// nothing by default, and a run watching for them asks for `KIRA_LOG=debug`.
+public function emberLiveMarker(line: borrow String) {
+    log debug(line)
+}
+
+// The stages a run reports for the live-reload runner to watch. Each is a log
+// line the runner greps for.
+public function emberLiveUiFoundationAppStarted(): Void {
+    emberLiveMarker("live.ui_foundation.app.started")
+}
+
+public function emberLiveUiFoundationTreeBuilt(): Void {
+    emberLiveMarker("live.ui_foundation.tree.built")
+}
+
+public function emberLiveUiFoundationRetainedTreeReady(): Void {
+    emberLiveMarker("live.ui_foundation.retained_tree.ready")
+}
+
+public function emberLiveUiFoundationLayoutNonEmpty(): Void {
+    emberLiveMarker("live.ui_foundation.layout.non_empty")
+}
+
+public function emberLiveUiFoundationRenderCommandsGenerated(): Void {
+    emberLiveMarker("live.ui_foundation.render_commands.generated")
+}
+
+public function emberLiveVisibleContentSubmitted(): Void {
+    emberLiveMarker("live.kira_graphics.visible_content.submitted")
+    emberLiveMarker("KIRA_UI_DRAW_COMMANDS_SUBMITTED")
+    emberLiveMarker("KIRA_APP_RENDERED_VISIBLE_CONTENT")
+}
+
+// A backend reports where a frame reached, for the live-reload runner to watch.
+public function emberLiveFramePresented(): Void {
+    emberLiveMarker("live.kira_graphics.frame.submitted")
+}
+
+// The first frame of a run, which is the one a runner waits for before it has
+// anything to look at.
+public function emberLiveFirstFrame(): Void {
+    emberLiveMarker("live.first_frame")
+}
+
+public function emberLiveBackendInitialized(): Void {
+    emberLiveMarker("live.kira_graphics.backend.initialized")
+}
+
+// A small, backend-neutral environment parser for the harness scripts.
+//
+// KIRA_UI_CLICK_SCRIPT and its siblings use `frame@x,y;frame@x,y`. Every number
+// is taken in order, so separators are deliberately insignificant and negative
+// coordinates stay useful for input tests that verify misses.
+//
+// Foundation's `toNumber` does the reading: it takes a sign, it takes a
+// fraction, and it answers nothing rather than a partial parse for text that is
+// not a number at all — which is what lets any character that is not part of one
+// simply be skipped here instead of each being a case in a scanner of our own.
+public function harnessEnvInts(value: borrow String) -> [Number] {
+    var out: [Number] = []
+    var index = 0
+    while index < value.count {
+        match harnessEnvNumberAt(value, index) {
+            None -> index = index + 1
+            Some(found) -> {
+                out.append(found.value)
+                index = found.next
+            }
+        }
+    }
+    return move out
+}
+
+// One number in `value` at or after `start`, and where it ends. Nothing where
+// the text at `start` does not begin a number.
+public struct HarnessEnvNumber {
+    var value: UNumber = 0
+    var next: UNumber = 0
+}
+
+public function harnessEnvNumberAt(value: borrow String, start: Number) -> HarnessEnvNumber? {
+    // A sign belongs to the number it precedes, so a `-` alone at the end of the
+    // text is not the start of one.
+    var at = start
+    let first = value.charAt(start)
+    if (first == HarnessDigit.minus || first == HarnessDigit.plus) && start + 1 < value.count {
+        at = start + 1
+    }
+    let digits = harnessEnvDigitRun(value, at)
+    if digits == 0 { return .None }
+    let text = harnessEnvSlice(value, start, at + digits)
+    match text.toNumber() {
+        Some(number) -> return .Some(HarnessEnvNumber { value: number, next: at + digits })
+        // Unreachable while a digit run is a digit run, but a parse that fails
+        // must not be answered with a zero the script did not write.
+        None -> {
+            log warn("harness script number did not parse", text)
+            return .None
+        }
+    }
+}
+
+// How many bytes from `start` are ASCII digits.
+public function harnessEnvDigitRun(value: borrow String, start: Number) -> Number {
+    for at in start..value.count {
+        let byte = value.charAt(at)
+        if byte < HarnessDigit.zero || byte > HarnessDigit.nine {
+            return at - start
+        }
+    }
+    return value.count - start
+}
+
+public function harnessEnvSlice(value: borrow String, start: Number, end: Number) -> String {
+    if end <= start { return "" }
+    return value.substring(start, end)
+}
+
+// The ASCII bytes a number is spelled in.
+//
+// Named for what it is rather than `Ascii`, which is Foundation's: a namespace
+// and its members share one flat name across a module, so two of them by the
+// same name is a duplicate function at the merge.
+public namespace HarnessDigit {
+    let zero: UNumber = 48
+    let nine: UNumber = 57
+    let minus: UNumber = 45
+    let plus: UNumber = 43
+}
+
+// The knobs a run resolved: the harness value the application carries, or the
+// environment where it carries none.
+public struct HarnessKnobs {
+    var quitAfterFrames: UNumber = 0
+    var resizeSweep: UNumber = 0
+    var logFps: Bool = false
+    var scale: UNumber = 0
+    var headless: Bool = false
+    // Its frame always set.
+    var capture: FrameCapture? = .None
+    // Its last frame always set.
+    var video: VideoCapture? = .None
+    var script: InputScript = InputScript()
+}
+
+// `capture` with its frame settled: the frame asked for, else the one the run
+// quits after, else the first.
+public function settledCapture(
+    capture: borrow FrameCapture?,
+    quitAfterFrames: UNumber
+) -> FrameCapture? {
+    return match capture {
+        Some(asked) -> .Some(
+            FrameCapture {
+                path: copy asked.path,
+                frame: .Some(settledFrame(asked.frame, quitAfterFrames))
+            }
+        )
+        None -> .None
+    }
+}
+
+function settledFrame(asked: UNumber?, quitAfterFrames: UNumber) -> UNumber {
+    return match asked {
+        Some(frame) -> frame
+        None -> max(quitAfterFrames, 1)
+    }
+}
+
+// `video` with its last frame settled: the frame asked for, else the one the
+// run quits after.
+public function settledVideo(
+    video: borrow VideoCapture?,
+    quitAfterFrames: UNumber
+) -> VideoCapture? {
+    match video {
+        Some(asked) -> {
+            var settled = copy asked
+            settled.lastFrame = .Some(settledFrame(asked.lastFrame, quitAfterFrames))
+            return .Some(move settled)
+        }
+        None -> return .None
+    }
+}
+
+// The video the environment asks for: `KIRA_GRAPHICS_CAPTURE_VIDEO` names the
+// file, `KIRA_GRAPHICS_CAPTURE_VIDEO_FRAMES=first,last` the frames it holds and
+// `KIRA_GRAPHICS_CAPTURE_VIDEO_CROP=x,y,width,height` the part of each it keeps.
+// It plays at `KIRA_GRAPHICS_FRAME_RATE`, else 60.
+function environmentVideo() -> VideoCapture? {
+    let path = environmentValue("KIRA_GRAPHICS_CAPTURE_VIDEO")
+    if path.count == 0 {
+        return .None
+    }
+    var video = VideoCapture { path: move path }
+    let rate = environmentNumber("KIRA_GRAPHICS_FRAME_RATE", 0)
+    if rate > 0 {
+        video.frameRate = rate
+    }
+    let frames = harnessEnvInts(environmentValue("KIRA_GRAPHICS_CAPTURE_VIDEO_FRAMES"))
+    if frames.count >= 1 && frames[0] > 0 {
+        video.firstFrame = UNumber(frames[0])
+    }
+    if frames.count >= 2 && frames[1] > 0 {
+        video.lastFrame = .Some(UNumber(frames[1]))
+    }
+    let crop = harnessEnvInts(environmentValue("KIRA_GRAPHICS_CAPTURE_VIDEO_CROP"))
+    if crop.count >= 4 {
+        video.cropX = UNumber(max(crop[0], 0))
+        video.cropY = UNumber(max(crop[1], 0))
+        video.cropWidth = UNumber(max(crop[2], 0))
+        video.cropHeight = UNumber(max(crop[3], 0))
+    }
+    return .Some(move video)
+}
+
+// The capture the environment asks for. `KIRA_GRAPHICS_CAPTURE_AT` unset or 0
+// leaves the frame to `settledCapture`.
+function environmentCapture() -> FrameCapture? {
+    let path = environmentValue("KIRA_GRAPHICS_CAPTURE_FRAME")
+    if path.count == 0 {
+        return .None
+    }
+    let at = environmentNumber("KIRA_GRAPHICS_CAPTURE_AT", 0)
+    let frame: UNumber? = at > 0 ? .Some(at) : .None
+    return .Some(FrameCapture { path: move path, frame: frame })
+}
+
+// The knobs the environment asks for: a run's, when it was handed none, and a
+// host's that draws headless with no run of Ember's, so both read one set.
+public function environmentHarnessKnobs() -> HarnessKnobs {
+    let quitAfterFrames = environmentNumber("KIRA_GRAPHICS_QUIT_AFTER_FRAMES", 0)
+    let logFps = environmentValue("KIRA_GRAPHICS_LOG_FPS")
+    let headless = environmentValue("KIRA_GRAPHICS_HEADLESS")
+    return HarnessKnobs {
+        quitAfterFrames: quitAfterFrames,
+        // How many points the window's size sweeps by each frame, for measuring
+        // the resize path. Zero, so a run that did not ask resizes nothing.
+        resizeSweep: environmentNumber("KIRA_GRAPHICS_RESIZE_SWEEP", 0),
+        logFps: logFps.count > 0 && logFps != "0",
+        scale: environmentNumber("KIRA_GRAPHICS_SCALE", 0),
+        headless: headless.count > 0 && headless != "0",
+        capture: settledCapture(environmentCapture(), quitAfterFrames),
+        video: settledVideo(environmentVideo(), quitAfterFrames),
+        script: inputScriptFromEnvironment()
+    }
+}
+
+// The knobs every backend runs with.
+public function harnessKnobs(app: borrow GraphicsApplication) -> HarnessKnobs {
+    return match app.harness {
+        Some(harness) -> HarnessKnobs {
+            quitAfterFrames: harness.quitAfterFrames,
+            resizeSweep: harness.resizeSweep,
+            logFps: harness.logFps,
+            scale: harness.scale,
+            headless: harness.headless,
+            capture: settledCapture(harness.capture, harness.quitAfterFrames),
+            video: settledVideo(harness.video, harness.quitAfterFrames),
+            script: copy harness.script
+        }
+        None -> environmentHarnessKnobs()
+    }
+}
+
+// The path to write frame `frameIndex` to, where it is the frame the run reads
+// back.
+public function captureDue(capture: borrow FrameCapture?, frameIndex: UNumber) -> String? {
+    return match capture {
+        Some(due) -> due.frame == .Some(frameIndex) ? .Some(copy due.path) : .None
+        None -> .None
+    }
+}
+
+public function readHarnessKnobs(state: borrow mut GraphicsRuntimeState) {
+    let knobs = harnessKnobs(state.app)
+    state.quitAfterFrames = knobs.quitAfterFrames
+    state.resizeSweep = knobs.resizeSweep
+    state.logFps = knobs.logFps
+    state.scale = knobs.scale
+    state.headless = knobs.headless
+    state.capture = knobs.capture
+    state.inputScript = knobs.script
+}
+
+// The size a resize sweep walks the window through: up from the base by one
+// step a frame for `span` frames, then back down.
+//
+// A real resize is a drag, which no test can repeat and no hand can hold steady
+// for six hundred frames. Walking the size instead makes every frame take the
+// resize path, so a frame-cost summary describes resizing rather than idling.
+public namespace ResizeSweep {
+    let span: UNumber = 240
+    let baseWidth: Number = 1000
+    let baseHeight: Number = 700
+}
+
+// How far into the sweep's climb `frameIndex` is.
+public function sweepStep(frameIndex: UNumber) -> UNumber {
+    let step = frameIndex % (ResizeSweep.span * 2)
+    if step >= ResizeSweep.span {
+        return ResizeSweep.span * 2 - step
+    }
+    return step
+}

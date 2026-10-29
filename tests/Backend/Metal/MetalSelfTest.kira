@@ -1,0 +1,67 @@
+import Foundation
+import Ember
+
+// Metal's render self-tests: each draws offscreen and reads a pixel back, and
+// the self-test answers whether the draw came out as the shader says. These
+// run only on macOS, where Metal exists; on any other host the Metal backend
+// is not built and this file is not part of the run.
+
+// A clear fills the target with exactly the clear colour.
+@Test
+function clearRendersExactColor() {
+    expect!((metalSelfTestClearOk()) == (true))
+}
+
+// A triangle rasterizes its covered pixels and leaves the others untouched.
+@Test
+function triangleRasterizes() {
+    expect!((metalSelfTestTriangleOk()) == (true))
+}
+
+// An index buffer draws the quad its two triangles describe.
+@Test
+function indexedQuadRasterizes() {
+    expect!((metalSelfTestIndexedOk()) == (true))
+}
+
+// A uniform buffer supplies the fragment colour.
+@Test
+function uniformDrivesFragmentColor() {
+    expect!((metalSelfTestUniformOk()) == (true))
+}
+
+// A nearer surface occludes a farther one through the depth buffer.
+@Test
+function depthOccludesFarSurface() {
+    expect!((metalSelfTestDepthOk()) == (true))
+}
+
+// A texture is sampled at the coordinates the shader asks for.
+@Test
+function textureSampling() {
+    expect!((metalSelfTestTextureOk()) == (true))
+}
+
+// A bind group binds its uniform to the shader.
+@Test
+function bindGroupBindsUniform() {
+    expect!((metalSelfTestBindGroupOk()) == (true))
+}
+
+// A vertex uniform transforms the vertices before rasterization.
+@Test
+function vertexUniformTransform() {
+    expect!((metalSelfTestVertexUniformOk()) == (true))
+}
+
+// A dynamic buffer's contents, written after creation, are what gets drawn.
+@Test
+function dynamicBufferContentsDraw() {
+    expect!((metalSelfTestDynamicOk()) == (true))
+}
+
+// A custom blend subtracts the source from the destination.
+@Test
+function customBlendSubtracts() {
+    expect!((metalSelfTestBlendOk()) == (true))
+}

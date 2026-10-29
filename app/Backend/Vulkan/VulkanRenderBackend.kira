@@ -1,0 +1,310 @@
+import Foundation
+import Heap
+
+// Vulkan's answers to `RenderBackend`. The implementation is split by ownership:
+// context and lifetime, resources, pipelines, binding, passes, draws, compute and
+// the run loop each have one home. This file remains the readable dispatch table.
+construct VulkanRenderBackend(context: RawPtr) extends RenderBackend {
+    function createShader(descriptor: borrow ShaderDescriptor) -> ShaderResult {
+        return vulkanCreateShaderFromSources(context, descriptor)
+    }
+    function createShaderFromKsl(descriptor: borrow KslShaderDescriptor) -> ShaderResult {
+        return vulkanCreateShaderFromKsl(context, descriptor)
+    }
+    function createShaderFromKslArtifact(
+        label: borrow String,
+        artifact: borrow KslArtifact
+    ) -> ShaderResult {
+        return vulkanCreateShaderFromArtifact(context, label, artifact)
+    }
+    function destroyShader(shader: borrow GraphicsShader) -> Void {
+        vulkanDestroyShader(context, shader)
+    }
+
+    function createRenderPipeline(descriptor: borrow RenderPipelineDescriptor) -> PipelineResult {
+        return vulkanCreateRenderPipeline(context, descriptor)
+    }
+    function destroyPipeline(pipeline: borrow RenderPipeline) -> Void {
+        vulkanDestroyPipeline(context, pipeline)
+    }
+
+    function createDynamicBuffer(
+        label: borrow String,
+        floatCapacity: Number
+    ) -> DynamicBufferResult {
+        return vulkanCreateDynamicBuffer(context, label, floatCapacity)
+    }
+    function dynamicBufferFrameStart(buffer: borrow GraphicsBuffer) -> Number {
+        return vulkanDynamicBufferFrameStart(context, buffer)
+    }
+    function commitDynamicBuffer(
+        buffer: borrow GraphicsBuffer,
+        contents: RawPtr,
+        floatCount: Number
+    ) -> Void {}
+    function createBuffer(descriptor: borrow BufferDescriptor) -> BufferResult {
+        return vulkanCreateBuffer(context, descriptor)
+    }
+    function createIndexBuffer(descriptor: borrow IndexBufferDescriptor) -> BufferResult {
+        return vulkanCreateIndexBuffer(context, descriptor)
+    }
+    function destroyBuffer(buffer: borrow GraphicsBuffer) -> Void {
+        vulkanDestroyBuffer(context, buffer)
+    }
+
+    function createUniform(descriptor: borrow UniformDescriptor) -> UniformResult {
+        return vulkanCreateUniform(context, descriptor)
+    }
+    function updateUniform(uniform: borrow GraphicsUniform, data: borrow[Number]) -> Void {
+        vulkanUpdateUniform(context, uniform, data)
+    }
+    function destroyUniform(uniform: borrow GraphicsUniform) -> Void {
+        vulkanDestroyUniform(context, uniform)
+    }
+
+    function createBindGroup(descriptor: borrow BindGroupDescriptor) -> BindGroupResult {
+        return vulkanCreateBindGroup(context, descriptor)
+    }
+    function createUniformBindGroup(
+        label: borrow String,
+        uniformSlot: UN32,
+        uniform: borrow GraphicsUniform
+    ) -> BindGroupResult {
+        return vulkanCreateUniformBindGroup(label, uniformSlot, uniform)
+    }
+    function createStorageBufferBindGroup(
+        label: borrow String,
+        slot: UN32,
+        bufferId: BufferId
+    ) -> BindGroupResult {
+        return vulkanCreateStorageBufferBindGroup(label, slot, bufferId.raw)
+    }
+    function beginBindGroup(label: borrow String) -> BindGroupResult {
+        return vulkanBeginBindGroup(label)
+    }
+    function bindGroupAddTexture(
+        group: borrow BindGroup,
+        slot: UN32,
+        texture: borrow GraphicsTexture
+    ) -> Void {
+        vulkanBindGroupAddTexture(group, slot, texture)
+    }
+    function bindGroupAddSampler(
+        group: borrow BindGroup,
+        slot: UN32,
+        sampler: borrow GraphicsSampler
+    ) -> Void {
+        vulkanBindGroupAddSampler(group, slot, sampler)
+    }
+    function bindGroupAddUniform(
+        group: borrow BindGroup,
+        slot: UN32,
+        uniform: borrow GraphicsUniform
+    ) -> Void {
+        vulkanBindGroupAddUniform(group, slot, uniform)
+    }
+    function bindGroupAddStorageBuffer(
+        group: borrow BindGroup,
+        slot: UN32,
+        buffer: borrow GraphicsBuffer
+    ) -> Void {
+        vulkanBindGroupAddStorageBuffer(group, slot, buffer.id.raw)
+    }
+    function createTextureSamplerBindGroup(
+        binding: borrow TextureSamplerBinding
+    ) -> BindGroupResult {
+        return vulkanCreateTextureSamplerBindGroup(binding)
+    }
+    function destroyBindGroup(bindGroup: borrow BindGroup) -> Void {
+        vulkanDestroyBindGroup(bindGroup)
+    }
+
+    function createTexture(descriptor: borrow TextureDescriptor) -> TextureResult {
+        return vulkanCreateTexture(context, descriptor)
+    }
+    function createTextureFromPixels(
+        descriptor: borrow TextureDescriptor,
+        pixels: borrow[UN8]
+    ) -> TextureResult {
+        return vulkanCreateTextureFromPixels(context, descriptor, narrowBytes(pixels))
+    }
+    function createTextureFromBytes(
+        descriptor: borrow TextureDescriptor,
+        pixels: borrow[UN8]
+    ) -> TextureResult {
+        return vulkanCreateTextureFromPixels(context, descriptor, narrowBytes(pixels))
+    }
+    function updateTexture(
+        texture: borrow GraphicsTexture,
+        width: UN32,
+        height: UN32,
+        pixels: borrow[UN8]
+    ) -> Void {
+        if width != texture.width || height != texture.height {
+            log fault(
+                "texture update dimensions do not match the texture",
+                width: width,
+                height: height
+            )
+            return
+        }
+        vulkanUpdateTexture(context, texture, narrowBytes(pixels))
+    }
+    function updateTextureBytes(
+        texture: borrow GraphicsTexture,
+        bytes: RawPtr,
+        byteCount: UNumber
+    ) -> Void {
+        vulkanUpdateTextureBytes(context, texture, bytes, byteCount)
+    }
+    function updateTextureRows(
+        texture: borrow GraphicsTexture,
+        bytes: RawPtr,
+        firstRow: UN32,
+        rowCount: UN32
+    ) -> Void {
+        vulkanUpdateTextureRows(
+            context,
+            texture,
+            bytes,
+            VulkanRowRange { first: UNumber(firstRow), count: UNumber(rowCount) }
+        )
+    }
+    function destroyTexture(texture: borrow GraphicsTexture) -> Void {
+        vulkanDestroyTexture(context, texture)
+    }
+    function createExportedTexture(
+        descriptor: borrow ExportedTextureDescriptor
+    ) -> ExportedTextureResult {
+        return vulkanCreateExportedTexture(context, descriptor)
+    }
+    function destroyExportedTexture(exported: borrow ExportedTexture) -> Void {
+        vulkanDestroyExportedTexture(context, exported)
+    }
+    function importTexture(memory: borrow ExportedMemory) -> ImportedTextureResult {
+        return vulkanImportTexture(context, memory)
+    }
+    function acquireImportedTexture(texture: borrow GraphicsTexture) -> Bool {
+        return vulkanAcquireImportedTexture(context, texture)
+    }
+    function releaseImportedTexture(texture: borrow GraphicsTexture) -> Bool {
+        return vulkanReleaseImportedTexture(context, texture)
+    }
+    function createSampler(descriptor: borrow SamplerDescriptor) -> SamplerResult {
+        return vulkanCreateSampler(context, descriptor)
+    }
+    function destroySampler(sampler: borrow GraphicsSampler) -> Void {
+        vulkanDestroySampler(context, sampler)
+    }
+
+    function backingScale() -> Number {
+        return vulkanWindowScale(context)
+    }
+    function contextWidth() -> Number {
+        return vulkanContextWidth(context)
+    }
+    function contextHeight() -> Number {
+        return vulkanContextHeight(context)
+    }
+    function viewportWidth() -> Number {
+        return vulkanViewportWidth(context)
+    }
+    function viewportHeight() -> Number {
+        return vulkanViewportHeight(context)
+    }
+    function safeAreaInsets() -> ViewportInsets {
+        return ViewportInsets {}
+    }
+
+    function windowMode() -> WindowMode {
+        return vulkanWindowMode(context)
+    }
+    function setWindowMode(mode: borrow WindowMode) -> Void {
+        vulkanSetWindowMode(context, mode)
+    }
+    function minimizeWindow() -> Void {
+        vulkanMinimizeWindow(context)
+    }
+    function toggleMaximizeWindow() -> Void {
+        vulkanToggleMaximizeWindow(context)
+    }
+
+    function showKeyboard(show: Bool) -> Void {}
+    function keyboardShown() -> Bool { return false }
+    function showMouse(show: Bool) -> Void {
+        vulkanShowMouse(context, show)
+    }
+    function mouseShown() -> Bool { return vulkanMouseShown(context) }
+    function lockMouse(lock: Bool) -> Void {
+        vulkanLockMouse(context, lock)
+    }
+    function mouseLocked() -> Bool { return vulkanMouseLocked(context) }
+
+    function supportsCompute() -> Bool { return true }
+    function createComputePipeline(
+        label: borrow String,
+        shader: borrow GraphicsShader,
+        entryName: borrow String
+    ) -> ComputePipelineId {
+        return ComputePipelineId(
+            U32(vulkanCreateComputePipeline(context, label, shader, entryName))
+        )
+    }
+    function dispatchTextureComputePair(pair: borrow TextureComputePair) -> Void {
+        vulkanDispatchTextureComputePair(context, pair)
+    }
+    function dispatchComputeBuffers(dispatch: borrow BufferDispatch) -> Void {
+        vulkanDispatchComputeBuffers(context, dispatch)
+    }
+    function dispatchDepthComputeBuffers(
+        depth: borrow GraphicsTexture,
+        dispatch: borrow BufferDispatch
+    ) -> Void {
+        vulkanDispatchDepthComputeBuffers(context, depth, dispatch)
+    }
+    function readBufferU32(buffer: borrow GraphicsBuffer, index: UN32) -> BufferReadResult {
+        return vulkanReadBufferU32(context, buffer, index)
+    }
+    function createStorageBufferWords(label: borrow String, data: borrow[UN32]) -> BufferResult {
+        return vulkanCreateStorageBufferWords(context, label, narrowWords(data))
+    }
+    function optimizeTexture(textureId: UN32) -> Void {
+        vulkanOptimizeTexture(context, textureId)
+    }
+
+    function monotonicNanoseconds() -> Number {
+        return vulkanMonotonicNanoseconds()
+    }
+
+    function framesInFlight() -> Number {
+        return VulkanRenderBackendIds.framesInFlight
+    }
+    function statistics() -> FrameStatistics { return vulkanFrameStatistics(context) }
+    function measureGpu(on: Bool) -> Void { vulkanMeasureGpu(context, on) }
+    function beginRenderPass(frame: borrow RenderFrame) -> Bool {
+        return vulkanBeginRenderPass(context, frame)
+    }
+    function endPassAndCommit(frame: borrow RenderFrame) -> Void {
+        vulkanEndPassAndCommit(context)
+    }
+    function makeEncoder(passActive: Bool) -> RenderEncoder {
+        if !passActive {
+            return RenderEncoder { storage: nativeState(RenderEncoderState()) }
+        }
+        return RenderEncoder {
+            storage: nativeState(RenderEncoderState { target: .Vulkan(context) })
+        }
+    }
+    function submitFrame(frame: borrow RenderFrame) -> Void {
+        vulkanSubmitFrame(context, frame)
+    }
+    function runApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) -> Void {
+        vulkanRunApplication(app, runtimeUserData)
+    }
+}
+
+// How many frames this backend keeps in flight. One: the command buffer and
+// its fence are not a ring here, unlike Dawn's queue.
+public namespace VulkanRenderBackendIds {
+    let framesInFlight: UNumber = 1
+}

@@ -1,0 +1,66 @@
+import Foundation
+import Ember
+
+// Pipelines as declarations.
+//
+// Each of these is a `Pipeline`-backed declaration: it states what it runs and
+// what it reads, and says nothing about the rest. The collector in Ember
+// finds all of them without this file registering anything, which is what makes
+// adding a pipeline a matter of writing one.
+
+construct Glyph() extends Pipeline {
+    shader { return KslArtifact(shaderName: "UiGlyph", vertexEntry: "UiGlyph__vertex__main") }
+    vertices {
+        return VertexStream(
+            stride: 24,
+            attributes: [VertexAttributeSpec(
+                location: 0,
+                format: .Float2,
+                offset: 0
+            ), VertexAttributeSpec(location: 1, format: .Float2, offset: 8),]
+        )
+    }
+}
+
+construct Glow() extends Pipeline {
+    shader { return KslArtifact(shaderName: "UiGlow", vertexEntry: "UiGlow__vertex__main") }
+    vertices {
+        return VertexStream(
+            stride: 16,
+            attributes: [VertexAttributeSpec(location: 0, format: .Float4, offset: 0)]
+        )
+    }
+    blending { return Blending(enabled: true, preset: .Additive) }
+}
+
+construct Scene() extends Pipeline {
+    shader { return KslArtifact(shaderName: "Scene", vertexEntry: "Scene__vertex__main") }
+    vertices {
+        return VertexStream(
+            stride: 32,
+            attributes: [VertexAttributeSpec(location: 0, format: .Float3, offset: 0)]
+        )
+    }
+    depth { return DepthTest(enabled: true, writes: true, compare: .LessEqual) }
+    raster { return Rasterization(cull: .Back, front: .CounterClockwise, topology: .TriangleList) }
+    colorFormat { return .Rgba16Float }
+}
+
+function describe(plan: borrow PipelinePlan) -> String {
+    var line = plan.label + ": stride " + String(plan.vertices.stride)
+    line = line + ", " + String(plan.vertices.attributes.count) + " attribute(s)"
+    line = line + ", blend " + String(blendPresetCode(plan.blending.preset))
+    if plan.depth.enabled {
+        line = line + ", depth-tested"
+    }
+    return line
+}
+
+@Main
+function main() {
+    let plans = declaredPipelines()
+    print("declared pipelines: \(plans.count)")
+    for plan in plans {
+        print("  \(describe(plan))")
+    }
+}

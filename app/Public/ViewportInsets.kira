@@ -1,0 +1,12 @@
+// Space reserved by the window system, in logical viewport points.
+//
+// `Number` because an inset is a measure, not a device float: a display reports
+// its safe area in fractional points, and a caller laying out beside it should
+// not have to claim the precision it will be narrowed to anyway. The viewport
+// they are read beside is a `Number` for the same reason.
+public struct ViewportInsets {
+    let top: UNumber = 0
+    let leading: UNumber = 0
+    let bottom: UNumber = 0
+    let trailing: UNumber = 0
+}

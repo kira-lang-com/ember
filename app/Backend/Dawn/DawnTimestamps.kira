@@ -1,0 +1,403 @@
+import Foundation
+import Heap
+// What the GPU spent on a frame, measured while that frame was presented.
+//
+// # Why this exists beside `DawnGpuTrace.kira`
+//
+// The trace submits every segment on its own and drains the queue between them,
+// so the wall time either side of a drain is that segment's GPU time. It is
+// exact and it is not the frame anyone sees: draining serializes CPU and GPU,
+// the frame takes several times what it takes in a run, and nothing is being
+// presented on a schedule. A number measured that way answers "what would this
+// pass cost alone", which is a different question from "what does this frame
+// cost".
+//
+// This measures the frame that IS presented. WebGPU's timestamp query set
+// records the GPU's own clock at points on the command stream; the results are
+// resolved into a buffer, copied to a readback buffer and mapped
+// ASYNCHRONOUSLY, so no frame ever waits for them — a frame's numbers arrive a
+// frame or two later and are reported then. Present stays FIFO, the window stays
+// on screen, and the cost reported is the cost paid.
+//
+// # What a segment is
+//
+// The same thing the trace calls one: a render pass, or one compute dispatch.
+// Every segment is bracketed by a pair of timestamps written on the frame's own
+// command encoder, and the pairs before the swapchain pass are the backdrop
+// preparation while the swapchain pass itself is the composite — the same split
+// the trace reports, so the two are comparable.
+//
+// # When it is not available
+//
+// `timestamp-query` is an optional feature. Where the adapter does not report
+// it, nothing here is created and `hasGpuSeconds` stays false, which is the
+// honest answer: a counter nothing measured is not a counter that measured zero.
+
+// How many timestamps the set holds — one pair per segment. A liquid-glass
+// frame uses five pairs; the rest is headroom for a program that stacks more
+// passes, and a frame that ran out simply stops recording and says so once.
+
+// How many frames of results may be in flight at once.
+//
+// One would be a measurement of every other frame: the map for frame N is still
+// open when frame N+1 wants to record, and the frame skipped is exactly as
+// likely to be the expensive one as any other. Three covers the two frames the
+// swapchain keeps in flight with a slot to spare.
+
+// The query set a frame's timestamps are written into, and the buffer they are
+// resolved through.
+public struct DawnClockObjects {
+    let querySetId: U32 = 0
+    let resolveBufferId: U32 = 0
+}
+
+// Where a timed segment's pair goes: the query set, and the first of its two
+// indices.
+public struct DawnClockPair {
+    let querySet: RawPtr = nullPointer()
+    let first: UNumber = 0
+}
+
+public struct DawnGpuClock {
+    var supported: Bool = false
+    // Built on the first frame that records; nothing until then.
+    var objects: DawnClockObjects? = .None
+    // One readback buffer per in-flight frame, and what was recorded into it.
+    var readbackIds: [U32] = []
+    var readbackBusy: [Bool] = []
+    var readbackUsed: [Number] = []
+    var readbackComposite: [Number?] = []
+    var readbackSerial: [Number] = []
+    // The 8-byte block each slot hands the map callback as its `userdata2`, so
+    // the callback knows which of the three answered.
+    var slotBlocks: [RawPtr] = []
+    var nextSlot: UNumber = 0
+    // The frame being recorded: how many timestamps are written, and the index
+    // the swapchain pass's pair starts at (everything below it is preparation).
+    // Nothing until the swapchain pass opens, so a frame that is nothing but a
+    // composite is not read as a frame that is nothing but preparation — and
+    // "nothing" is said rather than spelled -1, which is an index nothing could
+    // hold.
+    var used: UNumber = 0
+    var compositeAt: UNumber? = .None
+    var overflowed: Bool = false
+
+    // The last frame whose results came back.
+    var measured: Bool = false
+    var prepMilliseconds: UNumber = 0
+    var compositeMilliseconds: UNumber = 0
+    var frameMilliseconds: UNumber = 0
+    // Whether each frame's numbers are printed as they arrive
+    // (`KIRA_GRAPHICS_GPU_TIMES`). Off, the measurement still runs and still
+    // feeds the HUD — it is the log that is opt-in, not the timer.
+    var logging: Bool = false
+}
+
+public function dawnReadGpuTimesKnob(state: borrow mut GraphicsRuntimeState) {
+    let value = environmentValue("KIRA_GRAPHICS_GPU_TIMES")
+    state.dawn.clock.logging = value.count > 0 && value != "0"
+}
+
+// Whether this adapter can time a frame without stopping it.
+public function dawnAdapterTimesFrames(adapter: RawPtr) -> Bool {
+    if isNull(adapter) {
+        return false
+    }
+    return wgpuAdapterHasFeature(adapter, DawnTimestamps.featureTimestampQuery) != U32(0)
+}
+
+// Builds the query set and its buffers, once, on the first frame that records.
+// A device that refuses any of them leaves the clock off.
+public function dawnClockEnsure(state: borrow mut GraphicsRuntimeState) {
+    if !state.dawn.clock.supported || state.dawn.clock.objects != .None {
+        return
+    }
+    match dawnClockBuild(state) {
+        Some(objects) -> state.dawn.clock.objects = .Some(objects)
+        None -> {
+            state.dawn.clock.supported = false
+            log fault(
+                "refused the GPU clock's query set or buffers, so frame GPU time goes unmeasured"
+            )
+        }
+    }
+}
+
+function dawnClockBuild(state: borrow mut GraphicsRuntimeState) -> DawnClockObjects? {
+    let querySet = wgpuDeviceCreateQuerySet(
+        state.dawn.device,
+        WGPUQuerySetDescriptor {
+            label: dawnText("kira-gpu-clock"),
+            type_value: DawnTimestamps.queryTypeTimestamp,
+            count: U32(DawnTimestamps.maxTimestamps)
+        }
+    )
+    if isNull(querySet) {
+        return .None
+    }
+    let querySetId = dawnRegisterObject(state, querySet, DawnVocabulary.formatUndefined)
+    let bytes = DawnTimestamps.maxTimestamps * sizeOf<U64>()
+    let resolveBufferId = match dawnMakeBuffer(
+        state,
+        "kira-gpu-clock-resolve",
+        DawnTimestamps.bufferUsageQueryResolve | DawnVocabulary.bufferUsageCopySource,
+        bytes,
+    ) {
+        Some(id) -> id
+        None -> return .None
+    }
+    for slot in 0..DawnTimestamps.timestampSlots {
+        let readbackId = match dawnMakeBuffer(
+            state,
+            "kira-gpu-clock-readback",
+            DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+            bytes,
+        ) {
+            Some(id) -> id
+            None -> return .None
+        }
+        dawnClockAddSlot(state, slot, readbackId)
+    }
+    return .Some(DawnClockObjects { querySetId: querySetId, resolveBufferId: resolveBufferId })
+}
+
+// One idle readback slot, and the block its map callback is told its slot
+// number through.
+function dawnClockAddSlot(state: borrow mut GraphicsRuntimeState, slot: UNumber, readbackId: U32) {
+    state.dawn.clock.readbackIds.append(readbackId)
+    state.dawn.clock.readbackBusy.append(false)
+    state.dawn.clock.readbackUsed.append(0)
+    state.dawn.clock.readbackComposite.append(.None)
+    state.dawn.clock.readbackSerial.append(0)
+    let block = allocateZeroed(memoryLayout(sizeOf<U64>(), alignOf<U64>()))
+    writeDoubleWord(block, U64(0), U64(slot))
+    state.dawn.clock.slotBlocks.append(block)
+}
+
+// Opens a frame's recording. Nothing is written until a pass or a dispatch says
+// so, and a frame that records nothing reports nothing.
+public function dawnClockBeginFrame(state: borrow mut GraphicsRuntimeState) {
+    if !state.dawn.clock.supported {
+        return
+    }
+    dawnClockEnsure(state)
+    state.dawn.clock.used = 0
+    state.dawn.clock.compositeAt = .None
+    state.dawn.clock.overflowed = false
+}
+
+// Claims the pair of query slots one segment is bracketed by, and answers the
+// first of them — or nothing when this frame is not being timed.
+//
+// The pair goes on the PASS, through the `timestampWrites` every pass descriptor
+// carries: WebGPU writes the beginning one as the pass starts on the GPU and the
+// end one as it retires. Writing them on the command encoder instead is a Dawn
+// extension behind an unsafe-API toggle, and a measurement that needs the device
+// put in an unsupported mode is not one a shipped program can take.
+public function dawnClockOpenPair(
+    state: borrow mut GraphicsRuntimeState,
+    composite: Bool
+) -> DawnClockPair? {
+    if !state.dawn.clock.supported {
+        return .None
+    }
+    let objects = match state.dawn.clock.objects {
+        Some(objects) -> objects
+        None -> return .None
+    }
+    if state.dawn.clock.used + DawnTimestamps.pairStamps > DawnTimestamps.maxTimestamps {
+        if !state.dawn.clock.overflowed {
+            state.dawn.clock.overflowed = true
+            log fault(
+                "a frame recorded more segments than the GPU clock holds, so the rest went untimed"
+            )
+        }
+        return .None
+    }
+    if composite && state.dawn.clock.compositeAt == .None {
+        state.dawn.clock.compositeAt = .Some(state.dawn.clock.used)
+    }
+    let first = state.dawn.clock.used
+    state.dawn.clock.used = state.dawn.clock.used + DawnTimestamps.pairStamps
+    return .Some(DawnClockPair { querySet: dawnObject(state, objects.querySetId), first: first })
+}
+
+// The pair a pass descriptor carries, for a segment `dawnClockOpenPair` gave a
+// slot to.
+public function dawnClockWrites(pair: borrow DawnClockPair) -> WGPUPassTimestampWrites {
+    return WGPUPassTimestampWrites {
+        querySet: pair.querySet,
+        beginningOfPassWriteIndex: U32(pair.first),
+        endOfPassWriteIndex: U32(pair.first + 1)
+    }
+}
+
+// The first readback slot not still waiting on a map, looking from the one
+// after the last used.
+function dawnClockFreeSlot(clock: borrow DawnGpuClock) -> UNumber? {
+    for candidate in 0..clock.readbackIds.count {
+        let index = (clock.nextSlot + candidate) % clock.readbackIds.count
+        if !clock.readbackBusy[index] {
+            return .Some(index)
+        }
+    }
+    return .None
+}
+
+// Records the resolve and the copy that carry this frame's timestamps back, on
+// the frame's own encoder and therefore inside the one submission the frame
+// makes. Answers the readback slot the results will arrive in, or nothing when
+// this frame goes unmeasured.
+public function dawnClockResolve(state: borrow mut GraphicsRuntimeState) -> UNumber? {
+    if !state.dawn.clock.supported || state.dawn.clock.used < DawnTimestamps.pairStamps {
+        return .None
+    }
+    let objects = match state.dawn.clock.objects {
+        Some(objects) -> objects
+        None -> return .None
+    }
+    // Every slot still waiting on a map leaves the frame unmeasured rather than
+    // waiting for one, which is the whole point of measuring this way.
+    let slot = match dawnClockFreeSlot(state.dawn.clock) {
+        Some(slot) -> slot
+        None -> return .None
+    }
+    let count = state.dawn.clock.used
+    let resolve = dawnObject(state, objects.resolveBufferId)
+    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+    if isNull(resolve) || isNull(readback) {
+        return .None
+    }
+    let encoder = dawnFrameEncoder(state)
+    let querySet = dawnObject(state, objects.querySetId)
+    wgpuCommandEncoderResolveQuerySet(encoder, querySet, U32(0), U32(count), resolve, U64(0))
+    let bytes = U64(count * sizeOf<U64>())
+    wgpuCommandEncoderCopyBufferToBuffer(encoder, resolve, U64(0), readback, U64(0), bytes)
+    state.dawn.clock.readbackBusy[slot] = true
+    state.dawn.clock.readbackUsed[slot] = count
+    state.dawn.clock.readbackComposite[slot] = state.dawn.clock.compositeAt
+    state.dawn.clock.readbackSerial[slot] = state.dawn.stats.frameSerial
+    state.dawn.clock.nextSlot = (slot + 1) % state.dawn.clock.readbackIds.count
+    return .Some(slot)
+}
+
+// Asks for the slot's bytes. Called after the frame has been submitted, and it
+// waits for nothing: the callback runs inside a later `wgpuInstanceProcessEvents`.
+public function dawnClockRequest(
+    state: borrow mut GraphicsRuntimeState,
+    context: RawPtr,
+    slot: UNumber
+) {
+    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+    if isNull(readback) {
+        state.dawn.clock.readbackBusy[slot] = false
+        return
+    }
+    wgpuBufferMapAsync(
+        readback,
+        DawnVocabulary.mapModeRead,
+        U64(0),
+        U64(state.dawn.clock.readbackUsed[slot] * sizeOf<U64>()),
+        WGPUBufferMapCallbackInfo {
+            mode: DawnVocabulary.callbackOnProcessEvents,
+            callback: dawnClockMapped,
+            userdata1: context,
+            userdata2: state.dawn.clock.slotBlocks[slot]
+        }
+    )
+}
+
+// One frame's timestamps, arriving.
+public function dawnClockMapped(
+    status: I32,
+    message: WGPUStringViewPointer,
+    userdata1: RawPtr,
+    userdata2: RawPtr
+) -> Void {
+    if isNull(userdata1) || isNull(userdata2) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+    let slot = Number(readDoubleWord(userdata2, U64(0)))
+    if slot < 0 || slot >= state.dawn.clock.readbackIds.count {
+        return
+    }
+    if status == DawnVocabulary.mapSucceeded {
+        dawnClockReadSlot(state, slot)
+    }
+    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+    if !isNull(readback) && status == DawnVocabulary.mapSucceeded {
+        wgpuBufferUnmap(readback)
+    }
+    state.dawn.clock.readbackBusy[slot] = false
+}
+
+// The GPU time one frame spent before its swapchain pass, and in it.
+struct DawnClockSpans {
+    var prepNanoseconds: UNumber = 0
+    var compositeNanoseconds: UNumber = 0
+}
+
+// Sums the `count` mapped ticks pair by pair. Everything from the swapchain
+// pass's first pair onward is the composite; everything before it is
+// preparation.
+//
+// A pair whose end is not after its beginning is dropped rather than clamped:
+// the GPU's clock can be reset under the driver, and a negative span is a
+// reading that did not happen, not a segment that took no time.
+function dawnClockSpans(mapped: RawPtr, count: UNumber, compositeFrom: UNumber) -> DawnClockSpans {
+    var spans = DawnClockSpans()
+    let stampBytes = sizeOf<U64>()
+    for pair in 0..count / DawnTimestamps.pairStamps {
+        let index = pair * DawnTimestamps.pairStamps
+        let begin = readDoubleWord(mapped, U64(index * stampBytes))
+        let end = readDoubleWord(mapped, U64((index + 1) * stampBytes))
+        if end > begin {
+            if index >= compositeFrom {
+                spans.compositeNanoseconds = spans.compositeNanoseconds + Number(end - begin)
+            } else {
+                spans.prepNanoseconds = spans.prepNanoseconds + Number(end - begin)
+            }
+        }
+    }
+    return spans
+}
+
+// Turns one slot's nanosecond ticks into the frame's two numbers.
+public function dawnClockReadSlot(state: borrow mut GraphicsRuntimeState, slot: Number) {
+    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+    let count = state.dawn.clock.readbackUsed[slot]
+    let mapped = wgpuBufferGetConstMappedRange(readback, U64(0), U64(count * sizeOf<U64>()))
+    if isNull(mapped) {
+        return
+    }
+    // A frame with no swapchain pass recorded is all preparation.
+    let compositeFrom = match state.dawn.clock.readbackComposite[slot] {
+        Some(at) -> at
+        None -> count
+    }
+    let spans = dawnClockSpans(mapped, count, compositeFrom)
+    state.dawn.clock.prepMilliseconds = millisecondsFromNanoseconds(spans.prepNanoseconds)
+    state.dawn.clock.compositeMilliseconds = millisecondsFromNanoseconds(spans.compositeNanoseconds)
+    state.dawn.clock.frameMilliseconds = state.dawn.clock.prepMilliseconds + state.dawn.clock.compositeMilliseconds
+    state.dawn.clock.measured = true
+    if state.dawn.clock.logging {
+        log info(
+            "timed a live GPU frame",
+            frameSerial: state.dawn.clock.readbackSerial[slot],
+            prepMilliseconds: state.dawn.clock.prepMilliseconds,
+            compositeMilliseconds: state.dawn.clock.compositeMilliseconds,
+            frameMilliseconds: state.dawn.clock.frameMilliseconds
+        )
+    }
+}
+
+public namespace DawnTimestamps {
+    let bufferUsageQueryResolve: U64 = U64(512)
+    let maxTimestamps: UNumber = 32
+    let timestampSlots: UNumber = 3
+    let queryTypeTimestamp: I32 = I32(WGPUQueryType_Timestamp)
+    let featureTimestampQuery: I32 = I32(WGPUFeatureName_TimestampQuery)
+    // A segment is timed by a pair: where it began and where it ended.
+    let pairStamps: UNumber = 2
+}

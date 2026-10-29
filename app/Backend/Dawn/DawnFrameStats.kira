@@ -1,0 +1,217 @@
+import Foundation
+import Heap
+// What one presented frame cost, on the Dawn backend, and the clock it is
+// measured with.
+//
+// The counters are gathered while the frame is built and moved to the `last*`
+// fields when it ends, because an application lays its HUD out while the frame
+// the HUD will appear in is still being recorded — so the last COMPLETED frame
+// is what there is to report.
+//
+// `gpuSeconds` is the GPU's own clock, read through a timestamp query set while
+// the frame is presented rather than by draining the queue around it — see
+// `DawnTimestamps.kira`. Where the adapter does not report the `timestamp-query`
+// feature there is no timer, and `hasGpuSeconds` says so: a counter a backend
+// cannot measure is not a counter that measured zero.
+
+// `QueryPerformanceCounter` and its frequency. A monotonic clock is a platform
+// call — Kira has no clock of its own — and this is Windows', read through the
+// same `LARGE_INTEGER` out-parameter shape the window messages use.
+public @FFI.Extern { library: kernel32, symbol: QueryPerformanceCounter, abi: c }
+function performanceCounter(value: RawPtr) -> I32
+
+public @FFI.Extern { library: kernel32, symbol: QueryPerformanceFrequency, abi: c }
+function performanceFrequency(value: RawPtr) -> I32
+
+public @FFI.Extern { library: kira_runtime, symbol: kira_dynamic_read_u64_at, abi: c }
+function readDoubleWord(ptr: RawPtr, offset: U64) -> U64
+
+public @FFI.Extern { library: kira_runtime, symbol: kira_dynamic_write_u64_at, abi: c }
+function writeDoubleWord(ptr: RawPtr, offset: U64, value: U64) -> Void
+
+public struct DawnFrameStats {
+    // The frame being recorded.
+    var drawCount: UNumber = 0
+    var triangleCount: UNumber = 0
+    var passCount: UNumber = 0
+    var startedAt: UNumber = 0
+    // The frame before it, which is what a caller may honestly read.
+    var frameSerial: UNumber = 0
+    var lastFrameSeconds: UNumber = 0
+    var lastDrawCount: UNumber = 0
+    var lastTriangleCount: UNumber = 0
+    var lastPassCount: UNumber = 0
+    // Frame-rate telemetry (`KIRA_GRAPHICS_LOG_FPS`): committed frames per wall
+    // second, so a pacing regression is measurable instead of eyeballed.
+    var fpsWindowStartNanoseconds: UNumber = 0
+    var fpsFrames: UNumber = 0
+}
+
+// Nanoseconds on Windows' monotonic performance counter.
+//
+// Whole seconds and the remainder are scaled separately. Multiplying the raw
+// tick count by a billion first would overflow a 64-bit word after about two
+// hours of uptime on a 10 MHz counter, and the answer would go backwards.
+public function dawnMonotonicNanoseconds() -> Number {
+    let ticks = dawnPerformanceTicks()
+    let perSecond = dawnPerformanceTicksPerSecond()
+    return ticks / perSecond * FrameClock.nanosecondsPerSecond
+        + ticks % perSecond * FrameClock.nanosecondsPerSecond / perSecond
+}
+
+// The counter's current tick and the ticks-per-second beside it.
+//
+// Where a platform has no counter of its own the shared monotonic clock answers
+// in seconds, so its ticks ARE microseconds — which is why the per-second below
+// is a microsecond count too, and why the two agree on every target.
+public namespace PerformanceTick {
+    let microsecondsPerSecond: UNumber = 1000000
+}
+
+public function dawnPerformanceTicks() -> Number {
+    // A monotonic clock is a platform call, and this is the one the graphics
+    // library already carries on every target it builds for. Windows keeps its
+    // own counter because the frequency beside it is what the frame budget is
+    // expressed in there.
+    if targetPlatform!() != .Windows {
+        return harnessClockSeconds() * PerformanceTick.microsecondsPerSecond
+    }
+    let block = allocateZeroed(memoryLayout(8, alignOf<U64>()))
+    if isNull(block) {
+        return 0
+    }
+    var ticks: UNumber = 0
+    if performanceCounter(block) != 0 {
+        ticks = Number(readDoubleWord(block, U64(0)))
+    }
+    deallocate(block)
+    return ticks
+}
+
+public function dawnPerformanceTicksPerSecond() -> Number {
+    // Microseconds, matching the tick above.
+    if targetPlatform!() != .Windows {
+        return PerformanceTick.microsecondsPerSecond
+    }
+    let block = allocateZeroed(memoryLayout(8, alignOf<U64>()))
+    if isNull(block) {
+        return 1
+    }
+    var ticks: UNumber = 1
+    if performanceFrequency(block) != 0 {
+        ticks = Number(readDoubleWord(block, U64(0)))
+    }
+    deallocate(block)
+    if ticks == 0 {
+        return 1
+    }
+    return ticks
+}
+
+// Opens a frame's counters.
+public function dawnBeginFrameStats(state: borrow mut GraphicsRuntimeState) {
+    state.dawn.stats.drawCount = 0
+    state.dawn.stats.triangleCount = 0
+    state.dawn.stats.passCount = 0
+    state.dawn.stats.startedAt = dawnPerformanceTicks()
+    if state.tracing.frame {
+        log debug(
+            "Ember began a frame",
+            area: "frame",
+            frame: state.dawn.stats.frameSerial + 1,
+            width: state.dawn.surfaceWidth,
+            height: state.dawn.surfaceHeight
+        )
+    }
+    dawnClockBeginFrame(state)
+}
+
+// Closes them, moving what the frame cost to where a HUD may read it.
+public function dawnEndFrameStats(state: borrow mut GraphicsRuntimeState) {
+    let elapsed = dawnPerformanceTicks() - state.dawn.stats.startedAt
+    state.dawn.stats.lastFrameSeconds = Number(elapsed) / Number(dawnPerformanceTicksPerSecond())
+    state.dawn.stats.lastDrawCount = state.dawn.stats.drawCount
+    state.dawn.stats.lastTriangleCount = state.dawn.stats.triangleCount
+    state.dawn.stats.lastPassCount = state.dawn.stats.passCount
+    state.dawn.stats.frameSerial = state.dawn.stats.frameSerial + 1
+    noteFrameCost(
+        state,
+        state.dawn.stats.lastFrameSeconds,
+        state.dawn.stats.lastPassCount,
+        state.dawn.stats.lastDrawCount
+    )
+    if state.tracing.frame {
+        log debug(
+            "Ember finished a frame",
+            area: "frame",
+            frame: state.dawn.stats.frameSerial,
+            seconds: state.dawn.stats.lastFrameSeconds,
+            passes: state.dawn.stats.lastPassCount,
+            draws: state.dawn.stats.lastDrawCount,
+            triangles: state.dawn.stats.lastTriangleCount
+        )
+    }
+    // A frame that took longer than the display's interval is not a failure, but
+    // it is the one measurement that says why a frame rate is what it is, so it is
+    // said rather than left to be inferred from a HUD reading.
+    if state.dawn.stats.lastFrameSeconds > FrameBudget.vsyncMilliseconds / 1000 {
+        log warn(
+            "a frame took longer than the vsync interval",
+            lastFrameSeconds: state.dawn.stats.lastFrameSeconds * 1000,
+            vsyncMilliseconds: FrameBudget.vsyncMilliseconds
+        )
+    }
+}
+
+public function dawnFrameStatistics(context: RawPtr) -> FrameStatistics {
+    if isNull(context) {
+        return FrameStatistics {}
+    }
+    let state = nativeRecover<GraphicsRuntimeState>(context)
+    return FrameStatistics {
+        frameSeconds: state.dawn.stats.lastFrameSeconds,
+        cpuSeconds: state.dawn.stats.lastFrameSeconds,
+        gpuSeconds: state.dawn.clock.frameMilliseconds / 1000,
+        hasGpuSeconds: state.dawn.clock.measured,
+        drawableWidth: UN32(state.dawn.surfaceWidth),
+        drawableHeight: UN32(state.dawn.surfaceHeight),
+        allocatedBytes: state.dawn.allocatedBytes,
+        hasAllocatedBytes: true,
+        resourceCount: state.dawn.resourceCount,
+        passCount: state.dawn.stats.lastPassCount,
+        drawCount: state.dawn.stats.lastDrawCount,
+        triangleCount: state.dawn.stats.lastTriangleCount,
+        framesInFlight: 2,
+        frameSerial: state.dawn.stats.frameSerial,
+        windowState: state.dawn.input.focused ? .FocusedVisible : .VisibleUnfocused
+    }
+}
+
+public function dawnLogFrameRate(state: borrow mut GraphicsRuntimeState) {
+    if !state.logFps {
+        return
+    }
+    let now = dawnPerformanceTicks()
+    if state.dawn.stats.fpsWindowStartNanoseconds == U64(0) {
+        state.dawn.stats.fpsWindowStartNanoseconds = now
+    }
+    state.dawn.stats.fpsFrames = state.dawn.stats.fpsFrames + 1
+    let elapsed = Number(now - state.dawn.stats.fpsWindowStartNanoseconds)
+        / Number(dawnPerformanceTicksPerSecond())
+    if elapsed >= 1 {
+        log info(
+            "measured the frame rate",
+            fps: Number(state.dawn.stats.fpsFrames) / elapsed,
+            frames: state.dawn.stats.fpsFrames
+        )
+        state.dawn.stats.fpsWindowStartNanoseconds = now
+        state.dawn.stats.fpsFrames = 0
+    }
+}
+
+// How many frames this backend keeps in flight. Two: the queue owns one frame's
+// submissions while the compositor holds the one before it, which is what a
+// `Fifo` present mode means and what a telemetry readout should say here.
+public namespace DawnFrameStats {
+    let framesInFlight: UNumber = 2
+}

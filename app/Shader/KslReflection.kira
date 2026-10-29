@@ -1,0 +1,365 @@
+// The `resourceReflection` digest a `ksl!` artifact carries, read in Kira.
+//
+// The digest is the KSL compiler's statement of what one shader binds: one
+// record per resource, records separated by `;`, each opening with a letter
+// naming its kind. Read here rather than in C because the sides that need it are
+// Kira: each backend decides from it which of the bindings an encoder carries
+// belong in the one WebGPU group a pipeline reads.
+//
+// A record whose kind this does not know is skipped rather than misread as
+// another kind's fields: the format is append-only, so a shader compiled by a
+// newer toolchain still binds what this understands.
+//
+// `stageMask` is bit 0 vertex, bit 1 fragment, bit 2 compute — the same three
+// bits, in the same order, that `WGPUShaderStage` uses.
+import Foundation
+
+// How a uniform member's bytes are loaded.
+//
+// A member's size says how wide it is and nothing about how it is written: a
+// `float` and an `int` are both four bytes, and GL reaches them through
+// different calls. The digest names the kind for exactly that reason.
+public enum UniformScalarKind {
+    Floating
+    Signed
+    Unsigned
+}
+
+// What kind of resource a digest record describes.
+//
+// The digest writes this as the record's leading letter, and every reader
+// otherwise dispatches on that letter — so it is turned into this once, where
+// the record arrives. A new kind is one case here and one arm on each parse,
+// rather than another string comparison in a chain somewhere downstream.
+public enum KslResourceKind {
+    UniformBlock
+    Sampler
+    Texture
+    StorageImage
+    StorageBuffer
+}
+
+public struct KslUniformMember {
+    var name: String = ""
+    var offset: UN32 = 0
+    var size: UN32 = 0
+    var kind: UniformScalarKind = .Floating
+}
+
+public struct KslUniformBlock {
+    var name: String = ""
+    var binding: UN32 = 0
+    // The resource group this block sits in. A binding is numbered from zero
+    // within its group, so the pair identifies a resource and the binding alone
+    // does not.
+    var group: UN32 = 0
+    var size: UN32 = 0
+    var stageMask: UN32 = 0
+    var members: [KslUniformMember] = []
+}
+
+public struct KslTextureBinding {
+    var name: String = ""
+    var binding: UN32 = 0
+    var group: UN32 = 0
+    var stageMask: UN32 = 0
+    // The slot of the sampler the shader's body samples this texture with, or
+    // nothing when no stage samples it. GL collapses the pair into one
+    // `sampler2D`, which is what `glslName` is.
+    var samplerBinding: UN32? = .None
+    var glslName: String = ""
+}
+
+public struct KslStorageImage {
+    var name: String = ""
+    var binding: UN32 = 0
+    var group: UN32 = 0
+    var stageMask: UN32 = 0
+    // The image unit its `layout(binding = n)` was emitted with. Distinct from
+    // `binding`, which is the slot a host binds the view at.
+    var glslBinding: UN32 = 0
+    var writeOnly: Bool = true
+}
+
+public struct KslSamplerBinding {
+    var name: String = ""
+    var binding: UN32 = 0
+    var group: UN32 = 0
+    var stageMask: UN32 = 0
+}
+
+public struct KslStorageBuffer {
+    var name: String = ""
+    var binding: UN32 = 0
+    var group: UN32 = 0
+    var stageMask: UN32 = 0
+    // The `std430` block's own GLSL binding, which is not the slot a host binds
+    // the buffer at — the same distinction `KslStorageImage.glslBinding` draws.
+    var glslBinding: UN32 = 0
+    var readOnly: Bool = true
+}
+
+public struct KslResourceReflection {
+    var uniforms: [KslUniformBlock] = []
+    var textures: [KslTextureBinding] = []
+    var images: [KslStorageImage] = []
+    var samplers: [KslSamplerBinding] = []
+    var storageBuffers: [KslStorageBuffer] = []
+}
+
+// The number a digest field spells, or zero when it spells none.
+//
+// Zero rather than a trap: a truncated record is a compiler that emitted
+// something this reader does not understand, and the shader it describes will
+// be refused by the validation that follows rather than by a crash here.
+public function kslDigestInt(text: borrow String) -> Number {
+    match text.toNumber() {
+        Some(value) -> return floor(value)
+        None -> return 0
+    }
+}
+
+// The digest field at `index`, or nothing where the record is short.
+//
+// Optional rather than empty: an absent field is not a field holding nothing,
+// and a reader that cannot tell the two will read a truncated record as one
+// whose value happens to be blank.
+public function kslDigestField(fields: borrow[String], index: Number) -> String? {
+    if index < 0 || index >= fields.count {
+        return .None
+    }
+    return .Some(fields[index])
+}
+
+// The field at `index` as the number it spells, or zero where the record is
+// short or the field spells none. The two are the same answer for every field a
+// record reads this way, so there is one function rather than one per caller.
+public function kslDigestNumber(fields: borrow[String], index: Number) -> Number {
+    match kslDigestField(fields, index) {
+        Some(field) -> return kslDigestInt(field)
+        None -> return 0
+    }
+}
+
+// A field that is a binding, a size, a stage mask or a group: a 32-bit word.
+public function kslDigestWord(fields: borrow[String], index: Number) -> UN32 {
+    return UN32(kslDigestNumber(fields, index))
+}
+
+// A digest field the shader declares a truth value in, as the flag it is.
+public function kslDigestFlag(fields: borrow[String], index: Number) -> Bool {
+    return kslDigestNumber(fields, index) != 0
+}
+
+// Where each field sits in each record, named once because the digest is a wire
+// format and a bare index is a position with nothing saying what it points at.
+public namespace KslDigestField {
+    // Every record opens with its name.
+    let name: UNumber = 0
+    // Every record names the slot a host binds it at.
+    let binding: UNumber = 1
+
+    // `u|name:binding:size:stageMask:memberCount:member,member:kinds:group`
+    namespace UniformBlock {
+        let size: UNumber = 2
+        let stageMask: UNumber = 3
+        let memberCount: UNumber = 4
+        let members: UNumber = 5
+        let kinds: UNumber = 6
+        let group: UNumber = 7
+    }
+
+    // `m|name:binding:stageMask:group`
+    namespace Sampler {
+        let stageMask: UNumber = 2
+        let group: UNumber = 3
+    }
+
+    // `t|name:binding:stageMask:samplerBinding:glslName:group`
+    namespace Texture {
+        let stageMask: UNumber = 2
+        let samplerBinding: UNumber = 3
+        let glslName: UNumber = 4
+        let group: UNumber = 5
+    }
+
+    // `i|name:binding:stageMask:glslBinding:writeonly:group`
+    namespace StorageImage {
+        let stageMask: UNumber = 2
+        let glslBinding: UNumber = 3
+        let writeOnly: UNumber = 4
+        let group: UNumber = 5
+    }
+
+    // `s|name:binding:stageMask:glslBinding:readonly:group`
+    namespace StorageBuffer {
+        let stageMask: UNumber = 2
+        let glslBinding: UNumber = 3
+        let readOnly: UNumber = 4
+        let group: UNumber = 5
+    }
+}
+
+// The letter a record opens with, and the empty string where it opens with
+// nothing.
+public function kslRecordLetter(record: borrow String) -> String {
+    return record.substring(0, 1)
+}
+
+// The kind a record describes, or nothing where its letter names none.
+public function kslResourceKind(record: borrow String) -> KslResourceKind? {
+    match kslRecordLetter(record) {
+        "u" -> return .Some(.UniformBlock)
+        "m" -> return .Some(.Sampler)
+        "t" -> return .Some(.Texture)
+        "i" -> return .Some(.StorageImage)
+        "s" -> return .Some(.StorageBuffer)
+        else -> return .None
+    }
+}
+
+// One `name@offset#size` member, with the kind letter that stands beside it.
+public function kslParseUniformMember(
+    text: borrow String,
+    kind: borrow String
+) -> KslUniformMember {
+    let atSplit = text.split("@")
+    let hashSplit = kslDigestFieldText(atSplit, 1).split("#")
+    return KslUniformMember {
+        name: kslDigestFieldText(atSplit, 0),
+        offset: UN32(kslDigestInt(kslDigestFieldText(hashSplit, 0))),
+        size: UN32(kslDigestInt(kslDigestFieldText(hashSplit, 1))),
+        kind: kslUniformScalarKind(kind)
+    }
+}
+
+public function kslUniformScalarKind(letter: borrow String) -> UniformScalarKind {
+    match letter {
+        "i" -> return .Signed
+        "u" -> return .Unsigned
+        else -> return .Floating
+    }
+}
+
+// The letter standing for member `index`, or `f` when the digest carries none.
+public function kslKindLetter(kinds: borrow String, index: Number) -> String {
+    if index < 0 || index + 1 > kinds.count {
+        return "f"
+    }
+    return kinds.substring(index, index + 1)
+}
+
+public function kslParseUniformBlock(fields: borrow[String]) -> KslUniformBlock {
+    var block = KslUniformBlock {
+        name: kslDigestFieldText(fields, KslDigestField.name),
+        binding: kslDigestWord(fields, KslDigestField.binding),
+        size: kslDigestWord(fields, KslDigestField.UniformBlock.size),
+        stageMask: kslDigestWord(fields, KslDigestField.UniformBlock.stageMask),
+        group: kslDigestWord(fields, KslDigestField.UniformBlock.group)
+    }
+    let memberCount = kslDigestNumber(fields, KslDigestField.UniformBlock.memberCount)
+    if memberCount == 0 {
+        return block
+    }
+    let kinds = kslDigestFieldText(fields, KslDigestField.UniformBlock.kinds)
+    let written = kslDigestFieldText(fields, KslDigestField.UniformBlock.members).split(",")
+    for (index, member) in written.enumerated() {
+        block.members.append(kslParseUniformMember(member, kslKindLetter(kinds, index)))
+    }
+    return block
+}
+
+// The digest field at `index` as text, or nothing where the record is short.
+public function kslDigestFieldText(fields: borrow[String], index: Number) -> String {
+    match kslDigestField(fields, index) {
+        Some(field) -> return field
+        None -> return ""
+    }
+}
+
+// Read one shader's whole digest.
+public function kslParseResourceReflection(digest: borrow String) -> KslResourceReflection {
+    var reflection = KslResourceReflection {}
+    for record in digest.split(";") {
+        // A record opens with its letter, so anything shorter cannot be one.
+        if record.count < 2 {
+            continue
+        }
+        // The fields follow the letter and its separator.
+        let fields = record.substring(2, record.count).split(":")
+        match kslResourceKind(record) {
+            None -> {}
+            Some(kind) -> kslReadResourceRecord(reflection, kind, move fields)
+        }
+    }
+    return reflection
+}
+
+// One record, filed under the kind it names.
+//
+// Mutates the reflection rather than answering a new one, because a digest is
+// many records and each is filed as it is read — building a fresh reflection per
+// record and joining them would copy every list once per resource.
+public function kslReadResourceRecord(
+    reflection: borrow mut KslResourceReflection,
+    kind: borrow KslResourceKind,
+    fields: [String]
+) {
+    match kind {
+        UniformBlock -> reflection.uniforms.append(kslParseUniformBlock(fields))
+        Sampler -> reflection.samplers.append(kslParseSampler(fields))
+        Texture -> reflection.textures.append(kslParseTexture(fields))
+        StorageImage -> reflection.images.append(kslParseStorageImage(fields))
+        StorageBuffer -> reflection.storageBuffers.append(kslParseStorageBuffer(fields))
+    }
+}
+
+function kslParseSampler(fields: borrow[String]) -> KslSamplerBinding {
+    return KslSamplerBinding {
+        name: kslDigestFieldText(fields, KslDigestField.name),
+        binding: kslDigestWord(fields, KslDigestField.binding),
+        stageMask: kslDigestWord(fields, KslDigestField.Sampler.stageMask),
+        group: kslDigestWord(fields, KslDigestField.Sampler.group)
+    }
+}
+
+function kslParseTexture(fields: borrow[String]) -> KslTextureBinding {
+    return KslTextureBinding {
+        name: kslDigestFieldText(fields, KslDigestField.name),
+        binding: kslDigestWord(fields, KslDigestField.binding),
+        stageMask: kslDigestWord(fields, KslDigestField.Texture.stageMask),
+        samplerBinding: kslOptionalWord(fields, KslDigestField.Texture.samplerBinding),
+        glslName: kslDigestFieldText(fields, KslDigestField.Texture.glslName),
+        group: kslDigestWord(fields, KslDigestField.Texture.group)
+    }
+}
+
+function kslParseStorageImage(fields: borrow[String]) -> KslStorageImage {
+    return KslStorageImage {
+        name: kslDigestFieldText(fields, KslDigestField.name),
+        binding: kslDigestWord(fields, KslDigestField.binding),
+        stageMask: kslDigestWord(fields, KslDigestField.StorageImage.stageMask),
+        glslBinding: kslDigestWord(fields, KslDigestField.StorageImage.glslBinding),
+        writeOnly: kslDigestFlag(fields, KslDigestField.StorageImage.writeOnly),
+        group: kslDigestWord(fields, KslDigestField.StorageImage.group)
+    }
+}
+
+function kslParseStorageBuffer(fields: borrow[String]) -> KslStorageBuffer {
+    return KslStorageBuffer {
+        name: kslDigestFieldText(fields, KslDigestField.name),
+        binding: kslDigestWord(fields, KslDigestField.binding),
+        stageMask: kslDigestWord(fields, KslDigestField.StorageBuffer.stageMask),
+        glslBinding: kslDigestWord(fields, KslDigestField.StorageBuffer.glslBinding),
+        readOnly: kslDigestFlag(fields, KslDigestField.StorageBuffer.readOnly),
+        group: kslDigestWord(fields, KslDigestField.StorageBuffer.group)
+    }
+}
+
+// The field at `index` as a 32-bit word, or nothing where the record is short.
+public function kslOptionalWord(fields: borrow[String], index: Number) -> UN32? {
+    match kslDigestField(fields, index) {
+        Some(field) -> return .Some(UN32(kslDigestInt(field)))
+        None -> return .None
+    }
+}

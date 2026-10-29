@@ -1,0 +1,218 @@
+import Foundation
+import Heap
+
+// What one render pass records: the pipeline, buffers and bind groups the next
+// draw reads, set one at a time and read off together when a draw is issued.
+
+// How many bind groups an encoder carries, and so the most a pipeline reads.
+public namespace EncoderBindGroup {
+    let slots: UN32 = 4
+}
+
+// The backend an encoder records into, with the state its draws go through.
+public enum EncoderTarget {
+    // No pass is open, so every draw is dropped.
+    Closed
+    // The Metal context.
+    Metal(RawPtr)
+    // The `GraphicsRuntimeState` behind a Dawn frame, where the open pass
+    // encoder lives.
+    Dawn(RawPtr)
+    // The `GraphicsRuntimeState` behind a Vulkan frame.
+    Vulkan(RawPtr)
+}
+
+// The index buffer a draw reads, and how wide each index in it is.
+public struct IndexBinding {
+    var buffer: BufferId = NoBufferId
+    var format: IndexFormat = .Uint32
+}
+
+// A rectangle of a pass in top-left pixels.
+public struct ScissorRect {
+    var x: N32 = 0
+    var y: N32 = 0
+    var width: UN32 = 0
+    var height: UN32 = 0
+}
+
+// How much one draw draws.
+public struct DrawCounts {
+    var vertexCount: UN32 = 0
+    var indexCount: UN32 = 0
+    var instanceCount: UN32 = 1
+    var firstIndex: UN32 = 0
+}
+
+public struct RenderEncoderState {
+    var target: EncoderTarget = .Closed
+    var pipeline: RenderPipeline? = .None
+    var vertexBuffer: BufferId? = .None
+    var indexBuffer: IndexBinding? = .None
+    // Each slot holds the whole `BindGroup`, not just its id: the Vulkan and
+    // Dawn draw paths read bound uniforms' current values straight off it.
+    var bindGroups: [BindGroup?] = [.None, .None, .None, .None]
+    // The scissor a caller set, remembered rather than applied and forgotten:
+    // the portable draw paths set the viewport and scissor on every draw, since
+    // the pass may be an offscreen target of its own size, and a scissor reset
+    // to the whole pass by the next draw is the defect that once made the glass
+    // capture redraw the whole scene for each of its bounds.
+    var scissor: ScissorRect? = .None
+}
+
+// The part of `scissor` inside a `width` by `height` pass: the whole pass where
+// no scissor is set, and nothing where the scissor misses the pass.
+public function scissorWithinPass(
+    scissor: borrow ScissorRect?,
+    width: UN32,
+    height: UN32
+) -> ScissorRect? {
+    match scissor {
+        None -> return .Some(ScissorRect { width: width, height: height })
+        Some(rect) -> {
+            let left = max(rect.x, 0)
+            let top = max(rect.y, 0)
+            let right = min(rect.x + rect.width, width)
+            let bottom = min(rect.y + rect.height, height)
+            if right <= left || bottom <= top {
+                return .None
+            }
+            return .Some(
+                ScissorRect {
+                    x: N32(left),
+                    y: N32(top),
+                    width: UN32(right - left),
+                    height: UN32(bottom - top)
+                }
+            )
+        }
+    }
+}
+
+// One draw handed to the backend the encoder records into.
+function encoderIssue(state: borrow RenderEncoderState, counts: borrow DrawCounts) {
+    if state.pipeline == .None {
+        return
+    }
+    match state.target {
+        Closed -> {}
+        Metal(context) -> metalEncoderIssue(context, state, counts)
+        Dawn(runtime) -> dawnDrawWithBindings(runtime, state, counts)
+        Vulkan(runtime) -> vulkanDrawWithBindings(runtime, state, counts)
+    }
+}
+
+public class RenderEncoder {
+    var storage: NativeState<RenderEncoderState>
+
+    function setPipeline(pipeline: borrow RenderPipeline) {
+        var state = nativeRecover<RenderEncoderState>(self.storage)
+        state.pipeline = .None
+        if pipeline.id.isPresent() {
+            state.pipeline = .Some(pipeline)
+        }
+    }
+
+    function setVertexBuffer(buffer: borrow GraphicsBuffer) {
+        var state = nativeRecover<RenderEncoderState>(self.storage)
+        state.vertexBuffer = .None
+        if buffer.id.isPresent() {
+            state.vertexBuffer = .Some(buffer.id)
+        }
+    }
+
+    function setIndexBuffer(buffer: borrow GraphicsBuffer, format: IndexFormat) {
+        var state = nativeRecover<RenderEncoderState>(self.storage)
+        state.indexBuffer = .None
+        if buffer.id.isPresent() {
+            state.indexBuffer = .Some(IndexBinding { buffer: buffer.id, format: move format })
+        }
+    }
+
+    function setBindGroup(slot: UN32, bindGroup: borrow BindGroup) {
+        if slot >= EncoderBindGroup.slots {
+            log fault(
+                "a bind group was set past the encoder's slots",
+                slot: slot,
+                slots: EncoderBindGroup.slots
+            )
+            return
+        }
+        var state = nativeRecover<RenderEncoderState>(self.storage)
+        state.bindGroups[slot] = .None
+        if bindGroup.id != 0 {
+            state.bindGroups[slot] = .Some(bindGroup)
+        }
+    }
+
+    // Pixel-space scissor in the current render target. Callers restore the
+    // full target explicitly when finished.
+    function setScissorRect(x: N32, y: N32, width: UN32, height: UN32) {
+        var state = nativeRecover<RenderEncoderState>(self.storage)
+        if width == 0 || height == 0 {
+            return
+        }
+        match state.target {
+            Closed -> {}
+            Metal(context) -> metalEncoderSetScissorRect(
+                context,
+                ScissorRect { x: x, y: y, width: width, height: height }
+            )
+            Dawn(_) -> state.scissor = .Some(
+                ScissorRect { x: x, y: y, width: width, height: height }
+            )
+            Vulkan(_) -> state.scissor = .Some(
+                ScissorRect { x: x, y: y, width: width, height: height }
+            )
+        }
+    }
+
+    function draw(vertexCount: UN32) {
+        encoderIssue(
+            nativeRecover<RenderEncoderState>(self.storage),
+            DrawCounts { vertexCount: vertexCount }
+        )
+    }
+
+    function drawInstanced(vertexCount: UN32, instanceCount: UN32) {
+        encoderIssue(
+            nativeRecover<RenderEncoderState>(self.storage),
+            DrawCounts { vertexCount: vertexCount, instanceCount: instanceCount }
+        )
+    }
+
+    function drawIndexed(indexCount: UN32) {
+        encoderIssue(
+            nativeRecover<RenderEncoderState>(self.storage),
+            DrawCounts { indexCount: indexCount }
+        )
+    }
+
+    function drawIndexedInstanced(indexCount: UN32, instanceCount: UN32) {
+        encoderIssue(
+            nativeRecover<RenderEncoderState>(self.storage),
+            DrawCounts { indexCount: indexCount, instanceCount: instanceCount }
+        )
+    }
+
+    function drawIndexedRange(indexCount: UN32, firstIndex: UN32) {
+        encoderIssue(
+            nativeRecover<RenderEncoderState>(self.storage),
+            DrawCounts { indexCount: indexCount, firstIndex: firstIndex }
+        )
+    }
+
+    // GPU-driven draw: arguments come from a compute-written indirect buffer.
+    function drawIndirect(indirectBufferId: UNumber) {
+        let state = nativeRecover<RenderEncoderState>(self.storage)
+        if state.pipeline == .None {
+            return
+        }
+        match state.target {
+            Closed -> {}
+            Metal(context) -> metalEncoderIssueIndirect(context, state, indirectBufferId)
+            Dawn(runtime) -> dawnEncoderDrawIndirect(runtime, state, indirectBufferId)
+            Vulkan(runtime) -> vulkanEncoderDrawIndirect(runtime, state, indirectBufferId)
+        }
+    }
+}

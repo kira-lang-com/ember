@@ -1,0 +1,45 @@
+import Heap
+
+// The Windows window, as the platform contract sees it.
+//
+// Every member delegates: the Win32 is `DawnWindow.kira`, unchanged, and this is
+// the declaration that makes it one of `DawnPlatform`'s answers. The window class
+// is registered inside `open` rather than by the caller, because registering one
+// is part of opening a window on this platform and no other platform has the step
+// at all -- a caller that had to know about it would be a caller that knows which
+// window it is holding.
+construct DawnWindowWin32() extends DawnWindow {
+    function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure> {
+        let instance = moduleHandle("")
+        if !dawnRegisterWindowClass(instance, "EmberDawnWindow") {
+            return .Error(.ClassNotRegistered)
+        }
+        return dawnOpenWindow(instance, "EmberDawnWindow", window)
+    }
+
+    function clientWidth(window: RawPtr) -> Number { return dawnClientWidth(window) }
+    function clientHeight(window: RawPtr) -> Number { return dawnClientHeight(window) }
+    function scale(window: RawPtr) -> Number { return dawnWindowScale(window) }
+
+    function resize(window: RawPtr, width: Number, height: Number) {
+        dawnResizeWindow(window, width, height)
+    }
+
+    function createSurface(instance: RawPtr, window: RawPtr) -> RawPtr {
+        return wgpuInstanceCreateSurface(
+            instance,
+            WGPUSurfaceDescriptor {
+                nextInChain: WGPUSurfaceSourceWindowsHWND {
+                    chain: WGPUChainedStruct { sType: DawnVocabulary.structureWindowsHwnd },
+                    hinstance: moduleHandle(""),
+                    hwnd: window
+                },
+                label: dawnText("ember-surface")
+            }
+        )
+    }
+
+    function close(window: RawPtr) -> Void {
+        destroyWindowHandle(window)
+    }
+}

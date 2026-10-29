@@ -1,0 +1,118 @@
+import Foundation
+import Heap
+
+// Resource retirement and public destruction entry points.
+
+public function vulkanDeferObjectRelease(state: borrow mut VulkanState, id: U32) -> Bool {
+    if !state.frameActive { return false }
+    for pending in state.pendingRetireObjects {
+        if pending == id { return true }
+    }
+    state.pendingRetireObjects.append(id)
+    return true
+}
+
+// Views go before the images they look into, so a frame's retirements are
+// released in two sweeps.
+public function vulkanReleaseRetiredObjects(state: borrow mut VulkanState) {
+    let retired = state.pendingRetireObjects
+    state.pendingRetireObjects = []
+    for id in retired {
+        if vulkanObjectKindIs(state, id, .ImageView) { vulkanReleaseObject(state, id) }
+    }
+    for id in retired {
+        vulkanReleaseObject(state, id)
+    }
+    for index in state.pendingRetirePipelines { vulkanReleasePipeline(state, index) }
+    state.pendingRetirePipelines = []
+}
+
+function vulkanObjectKindIs(state: borrow VulkanState, id: U32, kind: VulkanObjectKind) -> Bool {
+    return match vulkanObjectRecord(state, id) {
+        Some(object) -> object.kind == kind
+        None -> false
+    }
+}
+
+// The object `id` names destroyed now, its memory with it, and its id freed.
+// Nothing waits on it: the caller knows the GPU is done with it.
+public function vulkanDestroyObject(state: borrow mut VulkanState, object: borrow VulkanObject) {
+    if isNull(state.device) {
+        return
+    }
+    match object.kind {
+        Buffer -> {
+            match object.mapped {
+                Some(_) -> match object.memory {
+                    Some(memory) -> vkUnmapMemory(state.device, memory)
+                    None -> {}
+                }
+                None -> {}
+            }
+            vkDestroyBuffer(state.device, object.handle, nullPointer())
+        }
+        Image -> vkDestroyImage(state.device, object.handle, nullPointer())
+        ImageView -> vkDestroyImageView(state.device, object.handle, nullPointer())
+        Sampler -> vkDestroySampler(state.device, object.handle, nullPointer())
+    }
+    match object.memory {
+        Some(memory) -> vkFreeMemory(state.device, memory, nullPointer())
+        None -> {}
+    }
+}
+
+// The object `id` names released: after this frame where one is being
+// recorded, since its commands may still use it, and otherwise once the queue
+// is idle.
+public function vulkanReleaseObject(state: borrow mut VulkanState, id: U32) {
+    let object = match vulkanObjectRecord(state, id) {
+        Some(object) -> object
+        None -> return
+    }
+    if vulkanDeferObjectRelease(state, id) { return }
+    vulkanSettleQueue(state, "an object")
+    vulkanDestroyObject(state, object)
+    vulkanForgetObject(state, id)
+}
+
+public function vulkanDestroyBuffer(context: RawPtr, buffer: borrow GraphicsBuffer) {
+    if !vulkanHasDevice(context) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    vulkanReleaseObject(state.vulkan, buffer.id.raw)
+}
+
+public function vulkanDestroyUniform(context: RawPtr, uniform: borrow GraphicsUniform) {
+    if !vulkanHasDevice(context) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    vulkanReleaseObject(state.vulkan, uniform.id.raw)
+}
+
+public function vulkanDestroySampler(context: RawPtr, sampler: borrow GraphicsSampler) {
+    if !vulkanHasDevice(context) || sampler.id == 0 {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    vulkanReleaseObject(state.vulkan, sampler.id.raw)
+}
+
+public function vulkanDestroyTexture(context: RawPtr, texture: borrow GraphicsTexture) {
+    if !vulkanHasDevice(context) || texture.id == 0 {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    if texture.storageViewId.raw != 0 {
+        vulkanReleaseObject(state.vulkan, texture.storageViewId.raw)
+    }
+    if texture.depthViewId.raw != 0 {
+        vulkanReleaseObject(state.vulkan, texture.depthViewId.raw)
+    }
+    if texture.colorViewId.raw != 0 {
+        vulkanReleaseObject(state.vulkan, texture.colorViewId.raw)
+    }
+    if texture.viewId.raw != 0 { vulkanReleaseObject(state.vulkan, texture.viewId.raw) }
+    vulkanReleaseObject(state.vulkan, texture.id.raw)
+}

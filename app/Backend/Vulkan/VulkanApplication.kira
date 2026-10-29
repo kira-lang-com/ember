@@ -1,0 +1,259 @@
+import Foundation
+import Heap
+
+// Vulkan's native run loop. Window events are added at the platform boundary;
+// the GPU lifetime below is deliberately independent of that translation.
+
+// The window `app` asks for, open and wired to the runtime: on Windows the
+// window procedure can reach the run state, and on Wayland the seat is bound
+// and the first configure has been read.
+function vulkanOpenWindow(
+    runtime: borrow mut GraphicsRuntimeState,
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+) -> Result<RawPtr, WindowFailure> {
+    let window = match vulkanWindowFor(vulkanWindowPlatformForHost()).open(app.windowRequest()) {
+        Ok(window) -> window
+        Error(failure) -> return .Error(failure)
+    }
+    runtime.vulkan.window = window
+    if targetPlatform!() == .Windows {
+        runtime.vulkan.messageBlock = allocateZeroed(
+            memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
+        )
+        dawnAttachWindowRuntime(window, runtimeUserData)
+    }
+    if targetPlatform!() == .Linux {
+        runtime.dawn.window = window
+        if runtime.scale > 0 {
+            kira_wayland_surface_set_scale(window, I32(runtime.scale))
+        }
+        dawnWaylandAttachInput(runtime, runtimeUserData)
+        kira_wayland_surface_commit(window)
+        if kira_wayland_display_roundtrip(kira_wayland_proxy_get_display(window)) < I32(0) {
+            return .Error(.NoDisplay)
+        }
+    }
+    return .Ok(window)
+}
+
+function vulkanGraphics(runtime: borrow GraphicsRuntimeState, runtimeUserData: RawPtr) -> Graphics {
+    return Graphics {
+        userData: runtime.userData,
+        backend: .Vulkan,
+        backendContext: runtimeUserData
+    }
+}
+
+public function vulkanRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    runtime.vulkan = VulkanState()
+    readHarnessKnobs(runtime)
+    if runtime.headless {
+        return vulkanRunHeadlessApplication(app, runtimeUserData)
+    }
+    if targetPlatform!() == .Windows && app.highDpi {
+        markProcessDpiAware()
+    }
+    match vulkanOpenWindow(runtime, app, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault(
+                "could not open the window; is a display server running?",
+                failure,
+                title: app.title
+            )
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
+    }
+    match vulkanSetUpWindowed(runtime.vulkan, vulkanWindowFor(vulkanWindowPlatformForHost())) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not set up Vulkan for its window", failure)
+            vulkanShutdownState(runtime.vulkan)
+            return
+        }
+    }
+    runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
+    runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
+    runtime.vulkan.initialized = true
+    emberLiveBackendInitialized()
+    let onInit: (Graphics) -> Void = runtime.app.initHandler
+    onInit(vulkanGraphics(runtime, runtimeUserData))
+    vulkanDriveFrames(runtimeUserData)
+    vulkanSettleDevice(runtime.vulkan, "the application's resources")
+    let onCleanup: (Graphics) -> Void = runtime.app.cleanupHandler
+    onCleanup(vulkanGraphics(runtime, runtimeUserData))
+    vulkanShutdownState(runtime.vulkan)
+}
+
+// What an unpresented frame waits out. A frame that presents nothing has no
+// compositor to pace it, so the loop would otherwise spin as fast as the CPU
+// allows. This is the interval it asks for rather than a cap on what it measures:
+// a frame that overran waits zero, which is the whole point — the sleep is the
+// floor, not a limiter on the work.
+public namespace VulkanIdleFrame {
+    let seconds: Number = 1 / 60
+}
+
+// Drains the platform's queue. The two window systems are least alike here:
+// Windows hands a client a message queue it peeks, and Wayland hands it a
+// socket whose events are dispatched to the listeners already installed on each
+// object.
+function vulkanPumpEvents(runtime: borrow mut GraphicsRuntimeState) {
+    if targetPlatform!() == .Windows {
+        vulkanPumpWindows(runtime)
+    }
+    if targetPlatform!() == .Linux {
+        dawnPumpWayland(runtime.vulkan.window)
+    }
+}
+
+public function vulkanDriveFrames(runtimeUserData: RawPtr) {
+    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    while !runtime.vulkan.quitRequested {
+        vulkanPumpEvents(runtime)
+        if runtime.vulkan.quitRequested {
+            return
+        }
+        vulkanResizeIfNeeded(runtime)
+        match vulkanAcquireFrame(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not begin a frame; the run ends", failure)
+                return
+            }
+        }
+        vulkanRunFrame(runtime, runtimeUserData)
+        if runtime.quitAfterFrames > 0 && runtime.frameIndex >= runtime.quitAfterFrames {
+            return
+        }
+    }
+}
+
+// One acquired frame: scripted input, the application's frame, the submit,
+// and the capture when the harness asked for one on this frame.
+function vulkanRunFrame(runtime: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
+    runtime.vulkan.frameStartedAt = vulkanMonotonicNanoseconds()
+    runtime.vulkan.framePassCount = 0
+    runtime.vulkan.frameDrawCount = 0
+    runtime.vulkan.frameTriangleCount = 0
+    var frame = vulkanGraphics(runtime, runtimeUserData).frame()
+    runtime.frameIndex = runtime.frameIndex + 1
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    driveInputScript(runtime.inputScript, Number(runtime.frameIndex) - 1, onEvent)
+    let onFrame: (borrow mut RenderFrame) -> Void = runtime.app.frameHandler
+    onFrame(frame)
+    if frame.shouldQuit {
+        runtime.vulkan.quitRequested = true
+    }
+    match captureDue(runtime.capture, runtime.frameIndex) {
+        Some(path) -> vulkanSubmitCapturedFrame(runtime, runtimeUserData, frame, path)
+        None -> vulkanSubmitFrame(runtimeUserData, frame)
+    }
+    vulkanSettleFrame(runtime)
+}
+
+// The frame submitted with its swapchain image copied out first, and the copy
+// written to `path` once the submit has retired it.
+function vulkanSubmitCapturedFrame(
+    runtime: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr,
+    frame: borrow mut RenderFrame,
+    path: borrow String
+) {
+    let staging = match vulkanRecordFrameCapture(runtime.vulkan) {
+        Ok(staging) -> staging
+        Error(failure) -> {
+            log fault("could not capture the frame", failure)
+            vulkanSubmitFrame(runtimeUserData, frame)
+            return
+        }
+    }
+    vulkanSubmitFrame(runtimeUserData, frame)
+    match vulkanWriteFrameCapture(runtime.vulkan, staging, path) {
+        Ok -> log debug("wrote the presented frame", path: path)
+        Error(failure) -> log fault("could not write the presented frame", failure, path: path)
+    }
+}
+
+// Presenting is what paces a frame to the display. A frame that presents
+// nothing waits out the interval itself, or the loop spins. A frame that
+// overran the interval waits nothing, so the subtraction is floored rather than
+// handed to the clock as a negative sleep.
+function vulkanSettleFrame(runtime: borrow GraphicsRuntimeState) {
+    if runtime.vulkan.presentedThisFrame {
+        log debug(
+            "presented a frame",
+            frameIndex: runtime.frameIndex,
+            currentImageIndex: runtime.vulkan.currentImageIndex,
+            passCount: runtime.vulkan.stats.passCount,
+            drawCount: runtime.vulkan.stats.drawCount
+        )
+        return
+    }
+    let spent = harnessClockSeconds() - secondsFromNanoseconds(
+        Number(runtime.vulkan.frameStartedAt)
+    )
+    let remaining = VulkanIdleFrame.seconds - spent
+    if remaining > 0 {
+        harnessSleepSeconds(remaining)
+    }
+}
+
+public function vulkanResizeIfNeeded(runtime: borrow mut GraphicsRuntimeState) {
+    let window = vulkanWindowFor(vulkanWindowPlatformForHost())
+    let width = window.clientWidth(runtime.vulkan.window)
+    let height = window.clientHeight(runtime.vulkan.window)
+    if width <= 0 || height <= 0 || (
+        width == runtime.vulkan.swapchainWidth && height == runtime.vulkan.swapchainHeight
+    ) {
+        return
+    }
+    match vulkanRecreateSwapchain(runtime.vulkan) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault(
+                "could not recreate the swapchain at the window's new size",
+                failure,
+                width: width,
+                height: height
+            )
+            return
+        }
+    }
+    runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
+    runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
+    let scale = window.scale(runtime.vulkan.window)
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    onEvent(
+        AppEvent {
+            kind: .Resized,
+            // Points, not whole pixels: at a 1.25x scale a 1924-pixel client
+            // area is 1539.2 points, and an event that rounds it here is a
+            // layout that lays out one pixel out.
+            windowWidth: Number(width) / scale,
+            windowHeight: Number(height) / scale,
+            framebufferWidth: UN32(width),
+            framebufferHeight: UN32(height)
+        }
+    )
+}
+
+// Drains the Win32 message queue, turning what the application cares about into
+// `AppEvent`s and dispatching the rest.
+public function vulkanPumpWindows(runtime: borrow mut GraphicsRuntimeState) {
+    let scale = vulkanWindowFor(vulkanWindowPlatformForHost()).scale(runtime.vulkan.window)
+    // Every delivery passes through here, so the trace sees them all in order
+    // without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = vulkanTracedEvent(runtime)
+    match win32DrainMessages(runtime.vulkan.messageBlock, scale, runtime.vulkan.input, onEvent) {
+        QuitPosted -> runtime.vulkan.quitRequested = true
+        Empty -> {}
+    }
+}

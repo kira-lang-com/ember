@@ -1,0 +1,415 @@
+import Foundation
+import Heap
+
+// Recording a run of frames as an H.264 MP4, on Metal.
+//
+// A frame capture writes one PPM: at a phone's 3x that is 9 MB a frame, and a
+// second of animation is half a gigabyte of files that each needed a run of
+// their own. This encodes the frames a single run draws as it draws them, with
+// AVFoundation's `AVAssetWriter`, into one small file that plays at the run's
+// frame rate.
+//
+// Each frame is read straight out of the target into a pixel buffer from the
+// writer's own pool, cropped by the region the read asks for, so no frame is
+// copied twice and no frame is held past its append. Presentation times count
+// frames at the video's rate, never the wall clock, so the video shows the
+// run's time whatever the frames cost to draw.
+
+public @FFI.Extern { library: kira_metal, symbol: dlopen, abi: c }
+function metalDlopen(path: CString, mode: I32): RawPtr
+public @FFI.Extern { library: kira_metal, symbol: dlsym, abi: c }
+function metalDlsym(handle: RawPtr, name: CString): RawPtr
+public @FFI.Extern { library: kira_metal, symbol: usleep, abi: c }
+function metalUsleep(microseconds: U32): I32
+
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferPoolCreatePixelBuffer, abi: c }
+function metalPixelBufferPoolCreate(allocator: RawPtr, pool: RawPtr, out: RawPtr): I32
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferLockBaseAddress, abi: c }
+function metalPixelBufferLock(buffer: RawPtr, flags: U64): I32
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferUnlockBaseAddress, abi: c }
+function metalPixelBufferUnlock(buffer: RawPtr, flags: U64): I32
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferGetBaseAddress, abi: c }
+function metalPixelBufferBase(buffer: RawPtr): RawPtr
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferGetBytesPerRow, abi: c }
+function metalPixelBufferRowBytes(buffer: RawPtr): U64
+public @FFI.Extern { library: kira_metal, symbol: CVPixelBufferRelease, abi: c }
+function metalPixelBufferRelease(buffer: RawPtr): Void
+public @FFI.Extern { library: kira_metal, symbol: CVBufferSetAttachment, abi: c }
+function metalBufferSetAttachment(buffer: RawPtr, key: RawPtr, value: RawPtr, mode: U32): Void
+
+// (id, id) -> BOOL — -[AVAssetWriterInputPixelBufferAdaptor
+// appendPixelBuffer:withPresentationTime:], whose CMTime (24 bytes, not an
+// HFA) is passed by reference per AAPCS64, and -[NSFileManager
+// removeItemAtURL:error:].
+public @FFI.Extern { library: kira_metal, symbol: objc_msgSend, abi: c }
+function metalMsgSend(obj: RawPtr, op: RawPtr, a: RawPtr, b: RawPtr): Bool
+
+// CMTime: a count of `timescale`ths of a second.
+public @FFI.Struct { layout: c }
+struct MetalCMTime {
+    var value: U64 = U64(0)
+    var timescale: U32 = U32(0)
+    var flags: U32 = U32(0)
+    var epoch: U64 = U64(0)
+}
+
+namespace MetalVideo {
+    let avFoundationPath: String = "/System/Library/Frameworks/AVFoundation.framework/AVFoundation"
+    let rtldLazy: I32 = I32(1)
+    // `kCVPixelFormatType_32BGRA`, the layout of every Metal color target here.
+    let pixelFormatBGRA: U64 = 0x42475241
+    let cmTimeValid: U32 = U32(1)
+    // `AVAssetWriterStatusCompleted`.
+    let statusCompleted: U64 = 2
+    // Pixels per bit of the average bit rate, per frame: two keep a glass
+    // edge through the encode for a side-by-side with a device recording.
+    let pixelsPerBit: UNumber = 2
+    // `kCVAttachmentMode_ShouldPropagate`.
+    let attachmentPropagate: U32 = U32(1)
+    let readyPollMicroseconds: U32 = U32(1000)
+    let readyPollLimit: Number = 5000
+}
+
+// A video being written. `writer` null is a recording that could not start,
+// whose frames are dropped.
+struct MetalVideoRecorder {
+    var writer: RawPtr = nullPointer()
+    var input: RawPtr = nullPointer()
+    var adaptor: RawPtr = nullPointer()
+    var frameRate: UNumber = 60
+    var frames: UNumber = 0
+    var x: UNumber = 0
+    var y: UNumber = 0
+    var width: UNumber = 0
+    var height: UNumber = 0
+}
+
+// The AVFoundation or CoreVideo string constant `name`, which the framework
+// exports as a pointer to the `NSString` itself. Opening AVFoundation searches
+// the frameworks it loads too.
+function metalAVConstant(name: borrow String) -> RawPtr {
+    let framework = metalDlopen(MetalVideo.avFoundationPath, MetalVideo.rtldLazy)
+    if isNull(framework) {
+        return nullPointer()
+    }
+    let symbol = metalDlsym(framework, name)
+    if isNull(symbol) {
+        return nullPointer()
+    }
+    return metalMemReadPtr(symbol, 0)
+}
+
+// The region of a `targetWidth` x `targetHeight` frame `video` keeps, clamped
+// to the frame and evened, as H.264 keeps chroma at half size.
+function metalVideoRegion(
+    recorder: borrow mut MetalVideoRecorder,
+    video: borrow VideoCapture,
+    targetWidth: UNumber,
+    targetHeight: UNumber
+) {
+    let x = min(video.cropX, targetWidth)
+    let y = min(video.cropY, targetHeight)
+    let width = video.cropWidth > 0 ? min(video.cropWidth, targetWidth - x) : targetWidth - x
+    let height = video.cropHeight > 0 ? min(video.cropHeight, targetHeight - y) : targetHeight - y
+    recorder.x = x
+    recorder.y = y
+    recorder.width = width - width % 2
+    recorder.height = height - height % 2
+}
+
+function metalVideoSettings(width: UNumber, height: UNumber, frameRate: UNumber) -> RawPtr {
+    let compression: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMutableDictionary"),
+        metalSel("dictionary")
+    )
+    let bitRate = width * height * frameRate / MetalVideo.pixelsPerBit
+    metalMsgSend(
+        compression,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(bitRate)),
+        metalAVConstant("AVVideoAverageBitRateKey")
+    )
+    let settings: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMutableDictionary"),
+        metalSel("dictionary")
+    )
+    metalMsgSend(
+        settings,
+        metalSel("setObject:forKey:"),
+        metalAVConstant("AVVideoCodecTypeH264"),
+        metalAVConstant("AVVideoCodecKey")
+    )
+    metalMsgSend(
+        settings,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(width)),
+        metalAVConstant("AVVideoWidthKey")
+    )
+    metalMsgSend(
+        settings,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(height)),
+        metalAVConstant("AVVideoHeightKey")
+    )
+    metalMsgSend(
+        settings,
+        metalSel("setObject:forKey:"),
+        compression,
+        metalAVConstant("AVVideoCompressionPropertiesKey")
+    )
+    // Rec. 709 throughout, as a device's screen recording is tagged, so the
+    // target's values are encoded as they are and both recordings decode alike.
+    let color: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMutableDictionary"),
+        metalSel("dictionary")
+    )
+    metalMsgSend(
+        color,
+        metalSel("setObject:forKey:"),
+        metalAVConstant("AVVideoColorPrimaries_ITU_R_709_2"),
+        metalAVConstant("AVVideoColorPrimariesKey")
+    )
+    metalMsgSend(
+        color,
+        metalSel("setObject:forKey:"),
+        metalAVConstant("AVVideoTransferFunction_ITU_R_709_2"),
+        metalAVConstant("AVVideoTransferFunctionKey")
+    )
+    metalMsgSend(
+        color,
+        metalSel("setObject:forKey:"),
+        metalAVConstant("AVVideoYCbCrMatrix_ITU_R_709_2"),
+        metalAVConstant("AVVideoYCbCrMatrixKey")
+    )
+    metalMsgSend(
+        settings,
+        metalSel("setObject:forKey:"),
+        color,
+        metalAVConstant("AVVideoColorPropertiesKey")
+    )
+    return settings
+}
+
+// Writes the description of `writer`'s error, where it has one.
+function metalVideoReportError(writer: RawPtr) {
+    let error: RawPtr = metalMsgSend(writer, metalSel("error"))
+    if isNull(error) {
+        return
+    }
+    let description: RawPtr = metalMsgSend(error, metalSel("localizedDescription"))
+    metalPutsRaw(metalMsgSend(description, metalSel("UTF8String")))
+}
+
+// A recorder writing `video` from frames of the context's target, or one that
+// drops them where AVFoundation would not start.
+function metalVideoStart(ctx: RawPtr, video: borrow VideoCapture) -> MetalVideoRecorder {
+    var recorder = MetalVideoRecorder { frameRate: max(video.frameRate, 1) }
+    metalVideoRegion(
+        recorder,
+        video,
+        UNumber(metalContextPhysicalWidth(ctx)),
+        UNumber(metalContextPhysicalHeight(ctx))
+    )
+    if recorder.width == 0 || recorder.height == 0 {
+        log fault("the video's region holds no pixels", videoPath: video.path)
+        return move recorder
+    }
+    let codec = metalAVConstant("AVVideoCodecKey")
+    if isNull(codec) {
+        log fault("AVFoundation is not available to record the video", videoPath: video.path)
+        return move recorder
+    }
+    let url: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSURL"),
+        metalSel("fileURLWithPath:"),
+        metalNSString(video.path)
+    )
+    // The writer refuses a file that is there already.
+    let files: RawPtr = metalMsgSend(metalObjcGetClass("NSFileManager"), metalSel("defaultManager"))
+    let removed: Bool = metalMsgSend(files, metalSel("removeItemAtURL:error:"), url, nullPointer())
+    let allocated: RawPtr = metalMsgSend(metalObjcGetClass("AVAssetWriter"), metalSel("alloc"))
+    let writer: RawPtr = metalMsgSend(
+        allocated,
+        metalSel("initWithURL:fileType:error:"),
+        url,
+        metalAVConstant("AVFileTypeMPEG4"),
+        nullPointer()
+    )
+    if isNull(writer) {
+        log fault("could not open the video", videoPath: video.path, replacedFile: removed)
+        return move recorder
+    }
+    let input: RawPtr = metalMsgSend(
+        metalObjcGetClass("AVAssetWriterInput"),
+        metalSel("assetWriterInputWithMediaType:outputSettings:"),
+        metalAVConstant("AVMediaTypeVideo"),
+        metalVideoSettings(recorder.width, recorder.height, recorder.frameRate)
+    )
+    metalMsgSend(input, metalSel("setExpectsMediaDataInRealTime:"), false)
+    let attributes: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMutableDictionary"),
+        metalSel("dictionary")
+    )
+    metalMsgSend(
+        attributes,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(MetalVideo.pixelFormatBGRA),
+        metalAVConstant("kCVPixelBufferPixelFormatTypeKey")
+    )
+    metalMsgSend(
+        attributes,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(recorder.width)),
+        metalAVConstant("kCVPixelBufferWidthKey")
+    )
+    metalMsgSend(
+        attributes,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(recorder.height)),
+        metalAVConstant("kCVPixelBufferHeightKey")
+    )
+    let adaptor: RawPtr = metalMsgSend(
+        metalObjcGetClass("AVAssetWriterInputPixelBufferAdaptor"),
+        metalSel(
+            "assetWriterInputPixelBufferAdaptorWithAssetWriterInput:sourcePixelBufferAttributes:"
+        ),
+        input,
+        attributes
+    )
+    metalMsgSend(writer, metalSel("addInput:"), input)
+    let started: Bool = metalMsgSend(writer, metalSel("startWriting"))
+    if !started {
+        metalVideoReportError(writer)
+        log fault("could not start the video", videoPath: video.path)
+        metalMsgSend(writer, metalSel("release"))
+        return move recorder
+    }
+    let zero = boxed<MetalCMTime>(
+        MetalCMTime { timescale: U32(recorder.frameRate), flags: MetalVideo.cmTimeValid }
+    )
+    metalMsgSend(writer, metalSel("startSessionAtSourceTime:"), zero.pointer())
+    // Both come autoreleased, and the pool of the frame that started the
+    // recording drains before the next frame appends.
+    recorder.writer = writer
+    recorder.input = metalMsgSend(input, metalSel("retain"))
+    recorder.adaptor = metalMsgSend(adaptor, metalSel("retain"))
+    return move recorder
+}
+
+// Whether `input` took more frames before the poll gave up on it.
+function metalVideoInputReady(input: RawPtr) -> Bool {
+    for poll in 0..MetalVideo.readyPollLimit {
+        let ready: Bool = metalMsgSend(input, metalSel("isReadyForMoreMediaData"))
+        if ready {
+            return true
+        }
+        metalUsleep(MetalVideo.readyPollMicroseconds)
+    }
+    return false
+}
+
+// The frame the context's target holds, appended as the recording's next.
+function metalVideoAppend(ctx: RawPtr, recorder: borrow mut MetalVideoRecorder) {
+    if isNull(recorder.writer) || !metalVideoInputReady(recorder.input) {
+        return
+    }
+    let pool: RawPtr = metalMsgSend(recorder.adaptor, metalSel("pixelBufferPool"))
+    let slot = metalMemAlloc(U64(sizeOf<U64>()))
+    let created = metalPixelBufferPoolCreate(nullPointer(), pool, slot)
+    let buffer = metalMemReadPtr(slot, 0)
+    metalMemFree(slot)
+    if created != I32(0) || isNull(buffer) {
+        log fault("the video's pixel buffer pool gave no buffer", status: created)
+        return
+    }
+    let texture = metalCaptureReadableTexture(
+        ctx,
+        metalMemReadPtr(ctx, MetalContext.offsetColorTexture)
+    )
+    metalPixelBufferLock(buffer, 0)
+    let region = boxed<MetalRegion>(
+        MetalRegion {
+            x: U64(recorder.x),
+            y: U64(recorder.y),
+            width: U64(recorder.width),
+            height: U64(recorder.height)
+        }
+    )
+    metalMsgSend(
+        texture,
+        metalSel("getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
+        metalPixelBufferBase(buffer),
+        metalPixelBufferRowBytes(buffer),
+        region.pointer(),
+        0
+    )
+    metalPixelBufferUnlock(buffer, 0)
+    metalVideoTagRec709(buffer)
+    let time = boxed<MetalCMTime>(
+        MetalCMTime {
+            value: U64(recorder.frames),
+            timescale: U32(recorder.frameRate),
+            flags: MetalVideo.cmTimeValid
+        }
+    )
+    let appended: Bool = metalMsgSend(
+        recorder.adaptor,
+        metalSel("appendPixelBuffer:withPresentationTime:"),
+        buffer,
+        time.pointer()
+    )
+    metalPixelBufferRelease(buffer)
+    if !appended {
+        metalVideoReportError(recorder.writer)
+        log fault("the video refused a frame", frame: recorder.frames)
+        return
+    }
+    recorder.frames = recorder.frames + 1
+}
+
+// `buffer` marked as holding Rec. 709 values, the space the recording is
+// written in, so the writer converts nothing on the way in. Untagged, it
+// guesses a space of its own and moves every saturated color.
+function metalVideoTagRec709(buffer: RawPtr) {
+    let mode = MetalVideo.attachmentPropagate
+    metalBufferSetAttachment(
+        buffer,
+        metalAVConstant("kCVImageBufferColorPrimariesKey"),
+        metalAVConstant("kCVImageBufferColorPrimaries_ITU_R_709_2"),
+        mode
+    )
+    metalBufferSetAttachment(
+        buffer,
+        metalAVConstant("kCVImageBufferTransferFunctionKey"),
+        metalAVConstant("kCVImageBufferTransferFunction_ITU_R_709_2"),
+        mode
+    )
+    metalBufferSetAttachment(
+        buffer,
+        metalAVConstant("kCVImageBufferYCbCrMatrixKey"),
+        metalAVConstant("kCVImageBufferYCbCrMatrix_ITU_R_709_2"),
+        mode
+    )
+}
+
+// The recording closed and its file finished, waiting for the writer.
+function metalVideoFinish(recorder: borrow mut MetalVideoRecorder, path: borrow String) {
+    if isNull(recorder.writer) {
+        return
+    }
+    metalMsgSend(recorder.input, metalSel("markAsFinished"))
+    // The synchronous finish: the completion-handler form needs a block, and
+    // this run has nothing to do but wait for it anyway.
+    let finished: Bool = metalMsgSend(recorder.writer, metalSel("finishWriting"))
+    let status = metalMsgSendCount(recorder.writer, metalSel("status"))
+    if finished && status == MetalVideo.statusCompleted {
+        log fault("wrote the video", videoPath: path, frames: recorder.frames)
+    } else {
+        metalVideoReportError(recorder.writer)
+        log fault("could not finish the video", videoPath: path, status: status)
+    }
+    metalMsgSend(recorder.adaptor, metalSel("release"))
+    metalMsgSend(recorder.input, metalSel("release"))
+    metalMsgSend(recorder.writer, metalSel("release"))
+    recorder.writer = nullPointer()
+}

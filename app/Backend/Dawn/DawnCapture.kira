@@ -1,0 +1,275 @@
+import Foundation
+import Heap
+// Reading a presented frame back into a file.
+//
+// This is the instrument every claim about what a frame CONTAINS rests on.
+// Everything else a run can report — a pass that began, a draw that was counted,
+// a first-frame marker — is equally true of a frame that came out blank, and a
+// backend brought up without a way to look at its own output is a backend nobody
+// can tell from a clear screen.
+//
+// The path is WebGPU's only one: copy the texture into a buffer, map the buffer,
+// read the bytes. `CopySrc` is in the surface's configured usage for exactly
+// this. The copy's rows are padded to the 256-byte multiple WebGPU requires of
+// `bytesPerRow`, so the reader walks rows rather than one flat run.
+
+public namespace DawnCapture {
+    let copyRowAlignment: UNumber = 256
+}
+
+// The order a mapped 8-bit texture of `format` holds its channels in. A BGRA8
+// swapchain, which is what every Windows swapchain is, stores blue first.
+function dawnPixelOrder(format: I32) -> PixelOrder {
+    if format == DawnVocabulary.formatBgra8Unorm {
+        return .Bgra
+    }
+    return .Rgba
+}
+
+// The presented frame as a binary PPM at `path`, taken before the present so the
+// texture is still this frame's.
+public function dawnCaptureFrame(
+    context: RawPtr,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let width = state.dawn.surfaceWidth
+    let height = state.dawn.surfaceHeight
+    if width <= 0 || height <= 0 || isNull(state.dawn.frameTexture) {
+        return .Error(.NoImage)
+    }
+    return dawnCaptureTextureHandle(
+        context,
+        DawnCaptureSource {
+            texture: state.dawn.frameTexture,
+            width: width,
+            format: state.dawn.surfaceFormat,
+            top: 0,
+            rows: height
+        },
+        path
+    )
+}
+
+// An explicit texture as a binary PPM. Headless renderers have no swapchain, so
+// this is the same readback instrument pointed at the texture they own.
+public function dawnCaptureTexture(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    if !dawnHasDevice(context) {
+        return .Error(.NoDevice)
+    }
+    if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
+        return .Error(.NoTexture)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let handle = dawnObject(state, texture.id.raw)
+    if isNull(handle) {
+        return .Error(.NoTexture)
+    }
+    return dawnCaptureTextureHandle(
+        context,
+        DawnCaptureSource {
+            texture: handle,
+            width: texture.width,
+            format: dawnObjectFormat(state, texture.id.raw),
+            top: 0,
+            rows: texture.height
+        },
+        path
+    )
+}
+
+// A texture a capture reads, and what it needs to know to read it: `rows`
+// rows from row `top`.
+struct DawnCaptureSource {
+    let texture: RawPtr
+    let width: UNumber
+    let format: I32
+    let top: UNumber
+    let rows: UNumber
+}
+
+// The copy's rows of `format`'s texels, padded to the 256-byte multiple
+// WebGPU requires of `bytesPerRow`.
+function dawnCaptureRowBytes(width: UNumber, format: I32) -> UNumber {
+    return alignedUp(width * dawnTexelBytes(format), DawnCapture.copyRowAlignment)
+}
+
+function dawnCopyTextureToReadback(
+    state: borrow GraphicsRuntimeState,
+    source: borrow DawnCaptureSource,
+    readback: RawPtr,
+    bytesPerRow: UNumber
+) {
+    let encoder = wgpuDeviceCreateCommandEncoder(
+        state.dawn.device,
+        WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-capture-encoder") }
+    )
+    wgpuCommandEncoderCopyTextureToBuffer(
+        encoder,
+        WGPUTexelCopyTextureInfo {
+            texture: source.texture,
+            mipLevel: U32(0),
+            origin: WGPUOrigin3D { x: U32(0), y: U32(source.top), z: U32(0) },
+            aspect: DawnVocabulary.textureAspectAll
+        },
+        WGPUTexelCopyBufferInfo {
+            layout: WGPUTexelCopyBufferLayout {
+                offset: U64(0),
+                bytesPerRow: U32(bytesPerRow),
+                rowsPerImage: U32(source.rows)
+            },
+            buffer: readback
+        },
+        WGPUExtent3D {
+            width: U32(source.width),
+            height: U32(source.rows),
+            depthOrArrayLayers: U32(1)
+        },
+    )
+    let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
+    let submission: [RawPtr] = [commands]
+    wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
+    wgpuCommandBufferRelease(commands)
+    wgpuCommandEncoderRelease(encoder)
+}
+
+// The readback mapped for reading, waiting for the map to answer. The wait
+// is as long as the work before the copy, so its bound is the GPU's.
+function dawnMapReadback(
+    context: RawPtr,
+    state: borrow mut GraphicsRuntimeState,
+    readback: RawPtr,
+    byteCount: UNumber
+) -> Result<Void, CaptureFailure> {
+    state.dawn.mapResolved = false
+    state.dawn.mapSucceeded = false
+    let map = wgpuBufferMapAsync(
+        readback,
+        DawnVocabulary.mapModeRead,
+        U64(0),
+        U64(byteCount),
+        WGPUBufferMapCallbackInfo {
+            mode: DawnVocabulary.callbackWaitAnyOnly,
+            callback: dawnBufferMapped,
+            userdata1: context
+        }
+    )
+    let answered = dawnWaitFor(state, map, DawnWait.gpuNanoseconds) && state.dawn.mapResolved
+    if !answered || !state.dawn.mapSucceeded {
+        return .Error(.MapFailed)
+    }
+    return .Ok
+}
+
+function dawnReleaseReadback(readback: RawPtr) {
+    wgpuBufferDestroy(readback)
+    wgpuBufferRelease(readback)
+}
+
+// A readback buffer holding a copy of a texture's rows, mapped for reading.
+struct DawnMappedCopy {
+    let readback: RawPtr
+    let pixels: MappedPixels
+}
+
+// `source` copied into a buffer and mapped. The copy's rows are padded, so a
+// reader walks rows rather than one flat run. The caller unmaps and releases
+// the buffer with `dawnReleaseMappedCopy`.
+function dawnMappedCopy(
+    context: RawPtr,
+    source: borrow DawnCaptureSource
+) -> Result<DawnMappedCopy, CaptureFailure> {
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let bytesPerRow = dawnCaptureRowBytes(source.width, source.format)
+    let byteCount = bytesPerRow * source.rows
+    let readback = wgpuDeviceCreateBuffer(
+        state.dawn.device,
+        WGPUBufferDescriptor {
+            label: dawnText("kira-frame-capture"),
+            usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+            size: U64(byteCount)
+        }
+    )
+    if isNull(readback) {
+        return .Error(.StagingRefused)
+    }
+    dawnCopyTextureToReadback(state, source, readback, bytesPerRow)
+    match dawnMapReadback(context, state, readback, byteCount) {
+        Ok -> {}
+        Error(failure) -> {
+            dawnReleaseReadback(readback)
+            return .Error(failure)
+        }
+    }
+    let pixels = MappedPixels {
+        start: wgpuBufferGetConstMappedRange(readback, U64(0), U64(byteCount)),
+        width: source.width,
+        height: source.rows,
+        bytesPerRow: bytesPerRow,
+        order: dawnPixelOrder(source.format)
+    }
+    return .Ok(DawnMappedCopy { readback: readback, pixels: pixels })
+}
+
+function dawnReleaseMappedCopy(copy: borrow DawnMappedCopy) {
+    wgpuBufferUnmap(copy.readback)
+    dawnReleaseReadback(copy.readback)
+}
+
+// `source` written to `path` as a binary PPM.
+function dawnCaptureTextureHandle(
+    context: RawPtr,
+    source: borrow DawnCaptureSource,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    let mapped = match dawnMappedCopy(context, source) {
+        Ok(mapped) -> mapped
+        Error(failure) -> return .Error(failure)
+    }
+    let written = writeCapture(mapped.pixels, path)
+    dawnReleaseMappedCopy(mapped)
+    return written
+}
+
+// `rows` rows of `texture` from row `top` down, as red, green, blue and alpha
+// bytes, or a half-float texture's halves. It waits for the GPU.
+public function dawnReadTextureRows(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    top: UNumber,
+    rows: UNumber
+) -> Result<[UN8], CaptureFailure> {
+    if !dawnHasDevice(context) {
+        return .Error(.NoDevice)
+    }
+    if texture.id == 0 || rows == 0 || top + rows > texture.height {
+        return .Error(.NoTexture)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let handle = dawnObject(state, texture.id.raw)
+    if isNull(handle) {
+        return .Error(.NoTexture)
+    }
+    let source = DawnCaptureSource {
+        texture: handle,
+        width: texture.width,
+        format: dawnObjectFormat(state, texture.id.raw),
+        top: top,
+        rows: rows
+    }
+    let mapped = match dawnMappedCopy(context, source) {
+        Ok(mapped) -> mapped
+        Error(failure) -> return .Error(failure)
+    }
+    let texelBytes = dawnTexelBytes(source.format)
+    let bytes = texelBytes == DawnTexel.bytes ? mappedRgba(mapped.pixels) : mappedTexels(
+        mapped.pixels,
+        texelBytes
+    )
+    dawnReleaseMappedCopy(mapped)
+    return .Ok(bytes)
+}

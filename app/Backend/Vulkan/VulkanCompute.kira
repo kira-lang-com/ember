@@ -1,0 +1,466 @@
+import Foundation
+import Heap
+
+// Compute pipelines share the descriptor-layout machinery used by graphics
+// pipelines. Dispatches are recorded into the frame command buffer and therefore
+// remain ordered with the render passes around them.
+
+// Why a compute pipeline could not be made.
+enum VulkanComputePipelineFailure {
+    NoShader
+    ShaderNotComputable
+    Layout(VulkanLayoutFailure)
+    Refused(VulkanResult)
+}
+
+// The compute stage of `record`, entered at `entryName` or, where that is
+// empty, at the entry the shader declared.
+function vulkanComputeStage(
+    record: borrow VulkanShaderRecord,
+    entryName: borrow String
+) -> VkPipelineShaderStageCreateInfo {
+    let name = cStringKept(entryName.count > 0 ? entryName : record.computeEntry)
+    return VkPipelineShaderStageCreateInfo {
+        sType: VulkanVocabulary.structurePipelineShaderStageCreateInfo,
+        stage: I32(VK_SHADER_STAGE_COMPUTE_BIT),
+        module: record.computeModule,
+        pName: name.address
+    }
+}
+
+function vulkanBuildComputePipeline(
+    state: borrow VulkanState,
+    stage: borrow VkPipelineShaderStageCreateInfo,
+    layout: RawPtr
+) -> Result<RawPtr, VulkanComputePipelineFailure> {
+    let info = VkComputePipelineCreateInfo {
+        sType: VulkanVocabulary.structureComputePipelineCreateInfo,
+        stage: stage,
+        layout: layout,
+        basePipelineIndex: 0 - 1
+    }
+    let pipeline = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateComputePipelines(
+            state.device,
+            nullPointer(),
+            U32(1),
+            info,
+            nullPointer(),
+            pipeline.pointer()
+        )
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(pipeline))
+}
+
+// The live shader record `shader` names, where it has a compute stage.
+function vulkanComputableShader(
+    state: borrow VulkanState,
+    shader: borrow GraphicsShader
+) -> Result<VulkanShaderRecord, VulkanComputePipelineFailure> {
+    if shader.id == 0 {
+        return .Error(.NoShader)
+    }
+    let record = vulkanShaderRecord(state, shader.id.raw)
+    if !record.live || isNull(record.computeModule) {
+        return .Error(.ShaderNotComputable)
+    }
+    return .Ok(record)
+}
+
+function vulkanCreateComputePipelineState(
+    state: borrow mut VulkanState,
+    shader: borrow GraphicsShader,
+    entryName: borrow String
+) -> Result<UNumber, VulkanComputePipelineFailure> {
+    let record = match vulkanComputableShader(state, shader) {
+        Ok(record) -> record
+        Error(failure) -> return .Error(failure)
+    }
+    let layouts = match vulkanCreatePipelineLayouts(state, record.reflection) {
+        Ok(layouts) -> layouts
+        Error(failure) -> return .Error(.Layout(failure))
+    }
+    let stage = vulkanComputeStage(record, entryName)
+    let pipeline = match vulkanBuildComputePipeline(state, stage, layouts.layout) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> {
+            vulkanDestroyPipelineLayouts(state, layouts)
+            return .Error(failure)
+        }
+    }
+    return .Ok(
+        vulkanRecordPipeline(
+            state,
+            VulkanPipelineRecord {
+                pipeline: pipeline,
+                layout: layouts.layout,
+                groupLayouts: layouts.groupLayouts,
+                groupCount: layouts.groupLayouts.count,
+                reflection: record.reflection,
+                compute: true,
+                live: true
+            }
+        )
+    )
+}
+
+// The compute pipeline's id, or zero where it could not be made: the backend
+// contract still answers a bare id.
+public function vulkanCreateComputePipeline(
+    context: RawPtr,
+    label: borrow String,
+    shader: borrow GraphicsShader,
+    entryName: borrow String
+) -> UNumber {
+    if !vulkanRequireDevice(context, "vulkanCreateComputePipeline") {
+        return 0
+    }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    match vulkanCreateComputePipelineState(runtime.vulkan, shader, entryName) {
+        Ok(id) -> return id
+        Error(failure) -> {
+            log fault(
+                "could not create a compute pipeline",
+                failure,
+                label: label,
+                shader: shader.id
+            )
+            return 0
+        }
+    }
+}
+
+namespace VulkanComputeTile {
+    // The square of threads one workgroup of the paired texture kernels covers.
+    let size: UNumber = 16
+}
+
+// Why a dispatch was dropped.
+enum VulkanDispatchFailure {
+    PipelineNotLive(U32)
+    NotRecording(VulkanFrameFailure)
+    ExtentRefused(VulkanResourceFailure)
+}
+
+// How many workgroups a dispatch launches along each axis.
+struct VulkanGroupCount {
+    var x: U32 = U32(1)
+    var y: U32 = U32(1)
+}
+
+public function vulkanDispatchGroups(threadCount: UNumber, threadsPerGroup: UNumber) -> U32 {
+    let width = threadsPerGroup == 0 ? 1 : threadsPerGroup
+    let count = threadCount == 0 ? 1 : ceil(threadCount / width)
+    return U32(count)
+}
+
+// The live compute pipeline a dispatch names.
+function vulkanComputePipeline(
+    state: borrow VulkanState,
+    id: ComputePipelineId
+) -> Result<VulkanPipelineRecord, VulkanDispatchFailure> {
+    let record = vulkanPipelineRecord(state, UNumber(id.raw))
+    if !record.live || !record.compute {
+        return .Error(.PipelineNotLive(id.raw))
+    }
+    return .Ok(record)
+}
+
+// The buffers bound as storage from `firstSlot` on, in order.
+function vulkanComputeBufferGroup(bufferIds: borrow [BufferId], firstSlot: UNumber) -> BindGroup {
+    let group = vulkanNewBindGroup("kira-vulkan-compute")
+    var groupState = nativeRecover<BindGroupState>(group.storage)
+    for (index, bufferId) in bufferIds.enumerated() {
+        groupState.storageEntries.append(
+            StorageBindEntry { storageSlot: UN32(firstSlot + index), bufferId: bufferId }
+        )
+    }
+    groupState.revision = groupState.revision + 1
+    return group
+}
+
+// One kernel bound with `group` and dispatched. Answers false where the group
+// could not be bound, which `vulkanBoundComputeGroup` has already logged.
+function vulkanRecordDispatch(
+    state: borrow mut VulkanState,
+    pipeline: borrow VulkanPipelineRecord,
+    group: borrow BindGroup,
+    groups: borrow VulkanGroupCount
+) -> Bool {
+    vkCmdBindPipeline(state.commandBuffer, VulkanVocabulary.pipelineCompute, pipeline.pipeline)
+    if !vulkanBoundComputeGroup(state, pipeline, 0, group) {
+        return false
+    }
+    vkCmdDispatch(state.commandBuffer, groups.x, groups.y, U32(1))
+    return true
+}
+
+// A buffer dispatch recorded, with `depth` bound at slot 0 ahead of the
+// buffers where there is one.
+function vulkanRecordBufferDispatch(
+    state: borrow mut VulkanState,
+    dispatch: borrow BufferDispatch,
+    depth: borrow GraphicsTexture?
+) -> Result<Void, VulkanDispatchFailure> {
+    let pipeline = match vulkanComputePipeline(state, dispatch.pipeline) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanBeginComputeCommands(state) {
+        Ok -> {}
+        Error(failure) -> return .Error(.NotRecording(failure))
+    }
+    let group = vulkanComputeBufferGroup(dispatch.bufferIds, depth == .None ? 0 : 1)
+    match depth {
+        Some(texture) -> {
+            vulkanTransitionImage(
+                state,
+                texture.id.raw,
+                .ShaderRead,
+                VulkanVocabulary.aspectDepth | VulkanVocabulary.aspectStencil
+            )
+            vulkanBindGroupAddTexture(group, 0, texture)
+        }
+        None -> {}
+    }
+    let groups = VulkanGroupCount {
+        x: vulkanDispatchGroups(dispatch.threadCount, dispatch.threadsPerGroup)
+    }
+    vulkanRecordDispatch(state, pipeline, group, groups)
+    vulkanFinishComputeCommands(state)
+    return .Ok
+}
+
+public function vulkanDispatchComputeBuffers(context: RawPtr, dispatch: borrow BufferDispatch) {
+    if !vulkanRequireDevice(context, "vulkanDispatchComputeBuffers") { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .None) {
+        Ok -> {}
+        Error(failure) -> log fault("a dispatch was dropped", failure)
+    }
+}
+
+public function vulkanDispatchDepthComputeBuffers(
+    context: RawPtr,
+    depth: borrow GraphicsTexture,
+    dispatch: borrow BufferDispatch
+) {
+    if !vulkanRequireDevice(context, "vulkanDispatchDepthComputeBuffers") { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .Some(copy depth)) {
+        Ok -> {}
+        Error(failure) -> log fault("a depth dispatch was dropped", failure)
+    }
+}
+
+// The uniform both kernels of a pair read: the extent and the blend. Each
+// recorded pair owns its buffer until the submission completes.
+function vulkanPairExtent(
+    state: borrow mut VulkanState,
+    pair: borrow TextureComputePair,
+    region: borrow TextureComputeRegion
+) -> Result<GraphicsUniform, VulkanDispatchFailure> {
+    let request = VulkanBufferRequest {
+        label: "kira-vulkan-blur-extent",
+        usage: VulkanVocabulary.bufferUsageUniform,
+        byteSize: 32
+    }
+    var id = U32(0)
+    if state.blurExtentsUsed < state.blurExtents.count {
+        id = state.blurExtents[state.blurExtentsUsed]
+    } else {
+        id = match vulkanCreateBufferHandle(state, request) {
+            Ok(made) -> made
+            Error(failure) -> return .Error(.ExtentRefused(failure))
+        }
+        state.blurExtents.append(id)
+    }
+    state.blurExtentsUsed += 1
+    let values = textureComputeExtent(pair, region)
+    vulkanWriteFloats(state, id, narrowFloats(values), 0)
+    let uniform = UniformState {
+        label: "kira-vulkan-blur-extent",
+        expectedFloatCount: 8,
+        values: move values
+    }
+    return .Ok(GraphicsUniform { storage: nativeState(uniform), id: UniformId(id) })
+}
+
+// The horizontal kernel's bindings: it reads both sources and writes the temps.
+function vulkanHorizontalGroup(
+    extent: borrow GraphicsUniform,
+    pair: borrow TextureComputePair
+) -> BindGroup {
+    let group = vulkanNewBindGroup("kira-vulkan-blur-horizontal")
+    vulkanBindGroupAddUniform(group, 0, extent)
+    vulkanBindGroupAddSampler(group, 1, pair.sampler)
+    vulkanBindGroupAddTexture(group, 2, pair.source)
+    vulkanBindGroupAddTexture(group, 3, pair.secondSource)
+    vulkanBindGroupAddTexture(group, 4, pair.tempNear)
+    vulkanBindGroupAddTexture(group, 5, pair.tempFar)
+    return group
+}
+
+// The vertical kernel's bindings: it reads the temps and writes the outputs.
+function vulkanVerticalGroup(
+    extent: borrow GraphicsUniform,
+    pair: borrow TextureComputePair
+) -> BindGroup {
+    let group = vulkanNewBindGroup("kira-vulkan-blur-vertical")
+    vulkanBindGroupAddUniform(group, 0, extent)
+    vulkanBindGroupAddSampler(group, 1, pair.sampler)
+    vulkanBindGroupAddTexture(group, 2, pair.tempNear)
+    vulkanBindGroupAddTexture(group, 3, pair.tempFar)
+    vulkanBindGroupAddTexture(group, 4, pair.outputNear)
+    vulkanBindGroupAddTexture(group, 5, pair.outputFar)
+    return group
+}
+
+function vulkanTransitionPair(
+    state: borrow mut VulkanState,
+    near: borrow GraphicsTexture,
+    far: borrow GraphicsTexture,
+    layout: borrow VulkanImageLayout
+) {
+    vulkanTransitionImage(state, near.id.raw, layout, VulkanVocabulary.aspectColor)
+    vulkanTransitionImage(state, far.id.raw, layout, VulkanVocabulary.aspectColor)
+}
+
+function vulkanRecordTexturePair(
+    state: borrow mut VulkanState,
+    pair: borrow TextureComputePair
+) -> Result<Void, VulkanDispatchFailure> {
+    let horizontal = match vulkanComputePipeline(state, pair.horizontalPipeline) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> return .Error(failure)
+    }
+    let vertical = match vulkanComputePipeline(state, pair.verticalPipeline) {
+        Ok(pipeline) -> pipeline
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanBeginComputeCommands(state) {
+        Ok -> {}
+        Error(failure) -> return .Error(.NotRecording(failure))
+    }
+    for asked in textureComputeRegions(pair) {
+        let h = textureComputeRegion(pair, asked, true)
+        let v = textureComputeRegion(pair, asked, false)
+        if v.width == 0 || v.height == 0 { continue }
+        let horizontalExtent = match vulkanPairExtent(state, pair, h) {
+            Ok(extent) -> extent
+            Error(failure) -> { vulkanFinishComputeCommands(state) return .Error(failure) }
+        }
+        let verticalExtent = match vulkanPairExtent(state, pair, v) {
+            Ok(extent) -> extent
+            Error(failure) -> { vulkanFinishComputeCommands(state) return .Error(failure) }
+        }
+        let hGroups = VulkanGroupCount {
+            x: vulkanDispatchGroups(h.width, VulkanComputeTile.size),
+            y: vulkanDispatchGroups(h.height, VulkanComputeTile.size)
+        }
+        let vGroups = VulkanGroupCount {
+            x: vulkanDispatchGroups(v.width, VulkanComputeTile.size),
+            y: vulkanDispatchGroups(v.height, VulkanComputeTile.size)
+        }
+        vulkanTransitionPair(state, pair.tempNear, pair.tempFar, .General)
+        if vulkanRecordDispatch(state, horizontal, vulkanHorizontalGroup(horizontalExtent, pair), hGroups) {
+            vulkanTransitionPair(state, pair.tempNear, pair.tempFar, .ShaderRead)
+            vulkanTransitionPair(state, pair.outputNear, pair.outputFar, .General)
+            vulkanRecordDispatch(state, vertical, vulkanVerticalGroup(verticalExtent, pair), vGroups)
+            vulkanTransitionPair(state, pair.outputNear, pair.outputFar, .ShaderRead)
+        }
+    }
+    vulkanFinishComputeCommands(state)
+    return .Ok
+}
+
+public function vulkanDispatchTextureComputePair(context: RawPtr, pair: borrow TextureComputePair) {
+    if !vulkanRequireDevice(context, "vulkanDispatchTextureComputePair") { return }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    match vulkanRecordTexturePair(runtime.vulkan, pair) {
+        Ok -> {}
+        Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+    }
+}
+
+public function vulkanRetireComputeBuffer(state: borrow mut VulkanState, id: U32) {
+    if state.frameActive {
+        state.pendingUploadBuffers.append(id)
+    } else {
+        vulkanReleaseObject(state, id)
+    }
+}
+
+public function vulkanReadBufferU32(
+    context: RawPtr,
+    buffer: borrow GraphicsBuffer,
+    index: Number
+) -> BufferReadResult {
+    if !vulkanRequireDevice(context, "vulkanReadBufferU32") {
+        return .Error(.DeviceRefused)
+    }
+    if buffer.id == 0 || index < 0 {
+        return .Error(.NoSuchWord)
+    }
+    var runtime = nativeRecover<GraphicsRuntimeState>(context)
+    if runtime.vulkan.passActive {
+        return .Error(.PassOpen)
+    }
+    if index >= vulkanObjectStride(runtime.vulkan, buffer.id.raw) / sizeOf<U32>() {
+        return .Error(.NoSuchWord)
+    }
+    match vulkanSettleForRead(runtime.vulkan) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    let mapped = match vulkanObjectMapped(runtime.vulkan, buffer.id.raw) {
+        Some(mapped) -> mapped
+        None -> return .Error(.NoSuchWord)
+    }
+    return .Ok(
+        heapLoad<U32>(
+            mapped,
+            vulkanObjectOffset(runtime.vulkan, buffer.id.raw) + index * sizeOf<U32>()
+        )
+    )
+}
+
+// Waits for every command recorded so far to finish, so what it wrote can be
+// read. A frame in flight is flushed and resumed; a frame that cannot be is
+// a device that has stopped, and the run is asked to quit.
+function vulkanSettleForRead(state: borrow mut VulkanState) -> Result<Void, BufferReadFailure> {
+    if !state.frameActive {
+        if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
+            return .Error(.DeviceRefused)
+        }
+        return .Ok
+    }
+    match vulkanFlushAndResume(state) {
+        Ok -> return .Ok
+        Error(failure) -> {
+            log fault("flushing the frame's commands for a buffer read failed; quitting", failure)
+            state.quitRequested = true
+            return .Error(.DeviceRefused)
+        }
+    }
+}
+
+public function vulkanOptimizeTexture(context: RawPtr, textureId: Number) {
+// Vulkan textures are allocated in device-local memory from creation and
+// never need Metal's explicit post-upload private-storage blit. Keeping this
+// backend hook intentionally empty is the optimized path, not a missing one.
+}
+
+public function vulkanMonotonicNanoseconds() -> Number {
+    return nanosecondsFromSeconds(harnessClockSeconds())
+}
+
+public function vulkanFrameStatistics(context: RawPtr) -> FrameStatistics {
+    if isNull(context) { return FrameStatistics {} }
+    let runtime = nativeRecover<GraphicsRuntimeState>(context)
+    return runtime.vulkan.stats
+}

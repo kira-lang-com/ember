@@ -1,0 +1,158 @@
+import Heap
+
+// Records what one frame cost the renderer.
+//
+// Called by every backend's run loop with the span it measured, so the summary
+// below compares like with like across them.
+// The first frame is kept out of the mean and reported on its own. It is the
+// frame that decodes the assets, compiles the shaders and builds every pipeline,
+// so folding it in makes a 300-frame run's average say more about start-up than
+// about drawing — a 2.5 s first frame moves a 300-frame mean by 8 ms.
+public function noteFrameCost(
+    state: borrow mut GraphicsRuntimeState,
+    seconds: Number,
+    passes: UNumber,
+    draws: UNumber
+) {
+    if state.frameCostCount == 0 && state.frameCostFirstSeconds == 0 {
+        state.frameCostFirstSeconds = seconds
+        return
+    }
+    state.frameCostCount = state.frameCostCount + 1
+    state.frameCostTotalSeconds = state.frameCostTotalSeconds + seconds
+    if seconds > state.frameCostWorstSeconds {
+        state.frameCostWorstSeconds = seconds
+        state.frameCostWorstIndex = state.frameCostCount
+    }
+    // Every frame's cost, so the summary can say what the distribution is rather
+    // than only its two ends. A budget is written against the worst frame, and a
+    // single maximum cannot tell one hitch from a shape: p50 beside p99 beside
+    // the maximum says which of the two a run has.
+    state.frameCostSamples.append(seconds)
+    // The last frame's shape, so a frame time is read beside the amount of work
+    // it paid for. A mean with no denominator says a frame is slow; a mean with
+    // one says whether it is slow per draw or slow because there are thousands.
+    state.frameCostPasses = passes
+    state.frameCostDraws = draws
+}
+
+// A number to two decimal places. A frame time is read in milliseconds and the
+// interesting digits are the fractional ones — rounding 1.4 ms to 1 hides the
+// difference a comparison is being made for — so this rounds to a hundredth
+// rather than printing the exact decimal, which would be eighteen digits of it.
+public function graphicsHundredths(value: Number) -> String {
+    let hundredths = floor(value * 100 + 0.5)
+    let fraction = hundredths % 100
+    return String(floor(hundredths / 100)) + "." + (fraction < 10 ? "0" : "") + String(fraction)
+}
+
+// One frame budget in milliseconds: the 60 Hz interval a frame that misses
+// vsync misses by, and half of it, which is what a frame has left after the
+// compositor's own work. Reported as two separate lines because a run that
+// misses both is a different bug from one that misses only the second.
+public namespace FrameBudget {
+    let vsyncMilliseconds: UNumber = 8.3
+    let halfVsyncMilliseconds: UNumber = 4
+}
+
+// What the run's frames cost, printed once at shutdown when the run asked for
+// frame telemetry.
+//
+// Mean and worst rather than a rate, and in milliseconds because that is the
+// unit a frame budget is written in.
+public function reportFrameCost(state: borrow GraphicsRuntimeState) {
+    if !state.logFps || state.frameCostCount == 0 {
+        return
+    }
+    let mean = state.frameCostTotalSeconds / state.frameCostCount * 1000
+    let sorted = graphicsSortedCosts(state.frameCostSamples)
+    log info(
+        "measured the frame cost of a run",
+        frames: state.frameCostCount,
+        meanMilliseconds: mean,
+        p50Milliseconds: graphicsPercentile(sorted, 50) * 1000,
+        p95Milliseconds: graphicsPercentile(sorted, 95) * 1000,
+        p99Milliseconds: graphicsPercentile(sorted, 99) * 1000,
+        worstMilliseconds: state.frameCostWorstSeconds * 1000,
+        worstAt: state.frameCostWorstIndex,
+        firstMilliseconds: state.frameCostFirstSeconds * 1000,
+        passes: state.frameCostPasses,
+        draws: state.frameCostDraws
+    )
+    // Where the frames over a budget actually are. A count says how many missed;
+    // the indices say whether they are one hitch, a periodic flush, or a run
+    // that degrades — three different bugs a percentile cannot tell apart.
+    graphicsReportBudgetMisses(state, FrameBudget.vsyncMilliseconds)
+    graphicsReportBudgetMisses(state, FrameBudget.halfVsyncMilliseconds)
+}
+
+// The frames whose cost exceeded `budgetMs`, counted and located.
+public function graphicsReportBudgetMisses(state: borrow GraphicsRuntimeState, budgetMs: Number) {
+    // The first frames over budget are enough to tell a hitch from a pattern;
+    // the rest only lengthen the line.
+    let shownMisses: UNumber = 12
+    var count: UNumber = 0
+    var frames: [UNumber] = []
+    for (index, seconds) in state.frameCostSamples.enumerated() {
+        if seconds * 1000 > budgetMs {
+            count = count + 1
+            if count <= shownMisses { frames.append(index + 1) }
+        }
+    }
+    log info(
+        "counted the frames over a budget",
+        budgetMilliseconds: budgetMs,
+        over: count,
+        of: state.frameCostSamples.count,
+        firstFrames: frames
+    )
+}
+
+// The frame costs in ascending order.
+public function graphicsSortedCosts(samples: borrow[Number]) -> [Number] {
+    return samples.sorted({ a, b in return a < b })
+}
+
+// The `percent`th percentile of an ascending list, or zero when it is empty.
+public function graphicsPercentile(sorted: borrow[Number], percent: Number) -> Number {
+    if sorted.count == 0 {
+        return 0
+    }
+    var at = floor(sorted.count * percent / 100)
+    if at >= sorted.count {
+        at = sorted.count - 1
+    }
+    return sorted[at]
+}
+
+public function graphicsRuntimeRun(app: borrow GraphicsApplication, userData: RawPtr) {
+    var runtimeState = nativeState(
+        GraphicsRuntimeState {
+            tracing: traceGatesFromEnvironment(),
+            app: app,
+            userData: userData,
+            frameIndex: 0
+        }
+    )
+
+    match backendSupported(app.backend) {
+        Ok -> {
+            let opened = nativeRecover<GraphicsRuntimeState>(nativeUserDataBorrow(runtimeState))
+            // Which trace areas this run turned on, said once so that a log with
+            // no traces in it has an answer: the variable was not set, or the
+            // threshold is below `debug`, and those are different mistakes.
+            log debug("Ember trace areas", areas: traceGatesSummary(opened.tracing))
+        }
+        Error(failure) -> {
+            log fault("the requested backend cannot run on this platform", failure)
+            return
+        }
+    }
+
+    // The runtime state remains owned by this frame while the backend's
+    // synchronous application loop borrows its stable userdata token.
+    let runtimeUser = nativeUserDataBorrow(runtimeState)
+    // The one backend value built with a null context: the run loop is what
+    // creates the context every other member reads.
+    renderBackendFor(app.backend, nullPointer()).runApplication(app, runtimeUser)
+}

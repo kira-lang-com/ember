@@ -1,0 +1,82 @@
+import Foundation
+import Heap
+
+// Staging buffers for texture uploads, kept once the frame that read one is
+// waited out and handed to the next upload that fits, rather than made and
+// released each time: on a paravirtual GPU a new host-visible buffer is
+// created, backed and mapped across the guest boundary, a round trip each.
+
+namespace VulkanStagingLimits {
+    // Sizes go up in steps of this, so a slightly larger upload still fits.
+    let granule: Number = 262144
+    let kept: Number = 4
+}
+
+// A mapped staging buffer holding `pixels`, or nothing when one could not be
+// made.
+function vulkanStageUpload(
+    state: borrow mut VulkanState,
+    pixels: borrow UploadPixels,
+    byteCount: UNumber
+) -> U32? {
+    let staging = match vulkanStagingBuffer(state, byteCount) {
+        Some(id) -> id
+        None -> return .None
+    }
+    match vulkanObjectMapped(state, staging) {
+        Some(mapped) -> uploadCopy(pixels, mapped)
+        None -> {
+            log fault("an upload's staging buffer was not mapped", buffer: staging)
+            vulkanReleaseObject(state, staging)
+            return .None
+        }
+    }
+    return .Some(staging)
+}
+
+// The smallest kept buffer `byteCount` fits in, or a new one.
+function vulkanStagingBuffer(state: borrow mut VulkanState, byteCount: UNumber) -> U32? {
+    var best: U32? = .None
+    var bestSize = Number(0)
+    for id in state.freeStaging {
+        let size = Number(vulkanObjectSize(state, id))
+        if size >= Number(byteCount) && (best.isNone() || size < bestSize) {
+            best = .Some(id)
+            bestSize = size
+        }
+    }
+    match best {
+        Some(found) -> {
+            var rest: [U32] = []
+            for id in state.freeStaging {
+                if id != found { rest.append(id) }
+            }
+            state.freeStaging = rest
+            return .Some(found)
+        }
+        None -> {}
+    }
+    let request = VulkanBufferRequest {
+        label: "kira-texture-upload",
+        usage: VulkanVocabulary.bufferUsageTransferSource,
+        byteSize: UNumber(vulkanAligned(Number(byteCount), VulkanStagingLimits.granule))
+    }
+    return vulkanHostBuffer(state, request)
+}
+
+// Once no command reads `staging` any more. Past the kept count the smallest
+// goes, so the buffers kept are the ones the most uploads fit.
+function vulkanKeepStaging(state: borrow mut VulkanState, staging: U32) {
+    state.freeStaging.append(staging)
+    if state.freeStaging.count <= VulkanStagingLimits.kept { return }
+    var smallest = state.freeStaging[0]
+    for id in state.freeStaging {
+        if vulkanObjectSize(state, id) < vulkanObjectSize(state, smallest) { smallest = id }
+    }
+    var rest: [U32] = []
+    for id in state.freeStaging {
+        if id != smallest { rest.append(id) }
+    }
+    state.freeStaging = rest
+    vulkanReleaseObject(state, smallest)
+}

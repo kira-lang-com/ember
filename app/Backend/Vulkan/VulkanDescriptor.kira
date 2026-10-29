@@ -1,0 +1,12 @@
+import Foundation
+
+// Closes the dma-buf descriptor an exported texture's memory was handed out
+// as, through Foundation's `closeDescriptor`: a program closes what a driver
+// hands it through a service, never a system call of its own. A descriptor
+// that will not close is reported and left: it is the kernel's to reclaim
+// when the process ends.
+public function vulkanCloseFd(descriptor: I32) {
+    if !closeDescriptor(N32(descriptor)) {
+        log warn("could not close an exported texture's dma-buf", descriptor: Number(descriptor))
+    }
+}

@@ -1,0 +1,400 @@
+import Foundation
+import Heap
+
+// Opening a render pass: the color, depth and resolve targets a frame's
+// attachments name, checked against each other, moved to the layouts the pass
+// draws in, and handed to dynamic rendering.
+
+// Why a render pass could not begin.
+public enum VulkanPassFailure {
+    OutsideFrame
+    PassOpen
+    NoColor
+    UnsupportedSampleCount(Number)
+    NoImage(VulkanFrameFailure)
+    ImageOutsideSwapchain(U32)
+    ColorNotLive(U32)
+    ColorEmpty
+    DepthSamplesDiffer
+    DepthRefused(VulkanResourceFailure)
+    DepthNotLive
+    ResolveNotMultisampled
+    ResolveExtentDiffers
+    ResolveFormatDiffers
+}
+
+// The image a pass draws its color into.
+struct VulkanPassColor {
+    let image: RawPtr
+    let view: RawPtr
+    let width: Number
+    let height: Number
+    let format: I32
+}
+
+// The depth image a pass tests against.
+struct VulkanPassDepth {
+    let imageId: U32
+    let view: RawPtr
+}
+
+// The single-sampled image a multisampled pass resolves into.
+struct VulkanPassResolve {
+    let image: RawPtr
+    let view: RawPtr
+}
+
+// Everything a pass draws through, once every target has been checked.
+struct VulkanPassPlan {
+    let color: VulkanPassColor
+    let depth: VulkanPassDepth?
+    let resolve: VulkanPassResolve?
+    let sampleCount: Number
+    let swapchain: Bool
+}
+
+// A texture's sample count, with an unset count read as one.
+function vulkanSamplesOf(sampleCount: Number) -> Number {
+    if sampleCount <= 0 {
+        return 1
+    }
+    return sampleCount
+}
+
+function vulkanPassSampleCount(frame: borrow RenderFrame) -> Result<Number, VulkanPassFailure> {
+    if frame.attachments.color.target.kind == .Swapchain {
+        return .Ok(1)
+    }
+    let sampleCount = vulkanSamplesOf(frame.attachments.colorSampleCount())
+    if vulkanSampleCount(sampleCount) == .None {
+        return .Error(.UnsupportedSampleCount(sampleCount))
+    }
+    return .Ok(sampleCount)
+}
+
+// The acquired swapchain image, moved to the layout a pass draws in.
+function vulkanSwapchainColor(
+    state: borrow mut VulkanState
+) -> Result<VulkanPassColor, VulkanPassFailure> {
+    match vulkanAcquireSwapchainImage(state) {
+        Ok -> {}
+        Error(failure) -> return .Error(.NoImage(failure))
+    }
+    let index = state.currentImageIndex
+    let slot = Number(index)
+    if slot >= state.swapchainImages.count {
+        return .Error(.ImageOutsideSwapchain(index))
+    }
+    vulkanTransitionSwapchainImage(state, index, .ColorAttachment)
+    return .Ok(
+        VulkanPassColor {
+            image: state.swapchainImages[slot],
+            view: state.swapchainViews[slot],
+            width: state.swapchainWidth,
+            height: state.swapchainHeight,
+            format: state.swapchainFormat
+        }
+    )
+}
+
+// The pass's color texture, moved to the layout a pass draws in.
+function vulkanTextureColor(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame
+) -> Result<VulkanPassColor, VulkanPassFailure> {
+    let colorId = frame.attachments.color.target.texture.id.raw
+    let image = vulkanObject(state, colorId)
+    let view = vulkanObject(state, frame.attachments.colorViewId().raw)
+    if isNull(image) || isNull(view) {
+        return .Error(.ColorNotLive(colorId))
+    }
+    vulkanTransitionImage(state, colorId, .ColorAttachment, VulkanVocabulary.aspectColor)
+    return .Ok(
+        VulkanPassColor {
+            image: image,
+            view: view,
+            width: frame.attachments.colorWidth(),
+            height: frame.attachments.colorHeight(),
+            format: vulkanObjectFormat(state, colorId)
+        }
+    )
+}
+
+function vulkanPassColor(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame
+) -> Result<VulkanPassColor, VulkanPassFailure> {
+    let found = match frame.attachments.color.target.kind == .Swapchain {
+        true -> vulkanSwapchainColor(state)
+        false -> vulkanTextureColor(state, frame)
+    }
+    match found {
+        Ok(color) -> {
+            if color.width <= 0 || color.height <= 0 {
+                return .Error(.ColorEmpty)
+            }
+            return .Ok(color)
+        }
+        Error(failure) -> return .Error(failure)
+    }
+}
+
+// The depth texture the frame names, or a managed one sized to the color
+// target where it names none.
+function vulkanFindPassDepth(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame,
+    color: borrow VulkanPassColor,
+    sampleCount: Number
+) -> Result<VulkanPassDepth, VulkanPassFailure> {
+    let texture = frame.attachments.depth.texture
+    if texture.id != 0 {
+        if vulkanSamplesOf(texture.sampleCount) != sampleCount {
+            return .Error(.DepthSamplesDiffer)
+        }
+        return .Ok(
+            VulkanPassDepth {
+                imageId: texture.id.raw,
+                view: vulkanObject(state, frame.attachments.depthViewId().raw)
+            }
+        )
+    }
+    let extent = VulkanDepthExtent {
+        width: UN32(color.width),
+        height: UN32(color.height),
+        sampleCount: UN8(sampleCount)
+    }
+    match vulkanEnsureDepthTarget(state, extent) {
+        Ok(depth) -> return .Ok(
+            VulkanPassDepth { imageId: depth.image, view: vulkanObject(state, depth.view) }
+        )
+        Error(failure) -> return .Error(.DepthRefused(failure))
+    }
+}
+
+function vulkanPassDepth(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame,
+    color: borrow VulkanPassColor,
+    sampleCount: Number
+) -> Result<VulkanPassDepth?, VulkanPassFailure> {
+    if !frame.attachments.hasDepth {
+        return .Ok(.None)
+    }
+    let depth = match vulkanFindPassDepth(state, frame, color, sampleCount) {
+        Ok(depth) -> depth
+        Error(failure) -> return .Error(failure)
+    }
+    if isNull(depth.view) {
+        return .Error(.DepthNotLive)
+    }
+    vulkanTransitionImage(
+        state,
+        depth.imageId,
+        .DepthAttachment,
+        VulkanVocabulary.aspectDepth | VulkanVocabulary.aspectStencil
+    )
+    return .Ok(.Some(depth))
+}
+
+function vulkanPassResolve(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame,
+    color: borrow VulkanPassColor,
+    sampleCount: Number
+) -> Result<VulkanPassResolve?, VulkanPassFailure> {
+    if !frame.attachments.color.hasResolveTarget {
+        return .Ok(.None)
+    }
+    if sampleCount <= 1 {
+        return .Error(.ResolveNotMultisampled)
+    }
+    let texture = frame.attachments.color.resolveTarget.texture
+    if vulkanSamplesOf(
+        texture.sampleCount
+    ) != 1 || texture.width != color.width || texture.height != color.height {
+        return .Error(.ResolveExtentDiffers)
+    }
+    let view = vulkanObject(state, frame.attachments.resolveViewId().raw)
+    if texture.id == 0 || isNull(view) || vulkanObjectFormat(
+        state,
+        texture.id.raw
+    ) != color.format {
+        return .Error(.ResolveFormatDiffers)
+    }
+    vulkanTransitionImage(state, texture.id.raw, .ColorAttachment, VulkanVocabulary.aspectColor)
+    return .Ok(.Some(VulkanPassResolve { image: vulkanObject(state, texture.id.raw), view: view }))
+}
+
+function vulkanPlanPass(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame
+) -> Result<VulkanPassPlan, VulkanPassFailure> {
+    if !state.frameActive {
+        return .Error(.OutsideFrame)
+    }
+    if state.passActive {
+        return .Error(.PassOpen)
+    }
+    if !frame.attachments.hasColor {
+        return .Error(.NoColor)
+    }
+    let sampleCount = match vulkanPassSampleCount(frame) {
+        Ok(sampleCount) -> sampleCount
+        Error(failure) -> return .Error(failure)
+    }
+    let color = match vulkanPassColor(state, frame) {
+        Ok(color) -> color
+        Error(failure) -> return .Error(failure)
+    }
+    let depth = match vulkanPassDepth(state, frame, color, sampleCount) {
+        Ok(depth) -> depth
+        Error(failure) -> return .Error(failure)
+    }
+    let resolve = match vulkanPassResolve(state, frame, color, sampleCount) {
+        Ok(resolve) -> resolve
+        Error(failure) -> return .Error(failure)
+    }
+    return .Ok(
+        VulkanPassPlan {
+            color: move color,
+            depth: move depth,
+            resolve: move resolve,
+            sampleCount: sampleCount,
+            swapchain: frame.attachments.color.target.kind == .Swapchain
+        }
+    )
+}
+
+function vulkanColorAttachment(
+    frame: borrow RenderFrame,
+    plan: borrow VulkanPassPlan
+) -> VkRenderingAttachmentInfo {
+    let color = frame.attachments.color
+    var attachment = VkRenderingAttachmentInfo {
+        sType: VulkanVocabulary.structureRenderingAttachmentInfo,
+        imageView: plan.color.view,
+        imageLayout: vulkanLayoutCode(.ColorAttachment),
+        resolveMode: VulkanVocabulary.resolveNone,
+        loadOp: vulkanLoadOp(color.loadAction),
+        storeOp: vulkanStoreOp(color.storeAction),
+        clearValue: vulkanClearValue(color.clearColor)
+    }
+    match plan.resolve {
+        Some(resolve) -> {
+            attachment.resolveMode = VulkanVocabulary.resolveAverage
+            attachment.resolveImageView = resolve.view
+            attachment.resolveImageLayout = vulkanLayoutCode(.ColorAttachment)
+        }
+        None -> {}
+    }
+    return attachment
+}
+
+function vulkanDepthAttachment(
+    frame: borrow RenderFrame,
+    depth: borrow VulkanPassDepth
+) -> VkRenderingAttachmentInfo {
+    return VkRenderingAttachmentInfo {
+        sType: VulkanVocabulary.structureRenderingAttachmentInfo,
+        imageView: depth.view,
+        imageLayout: vulkanLayoutCode(.DepthAttachment),
+        resolveMode: VulkanVocabulary.resolveNone,
+        loadOp: vulkanLoadOp(frame.attachments.depth.loadAction),
+        storeOp: vulkanStoreOp(frame.attachments.depth.storeAction),
+        clearValue: vulkanDepthClearValue(
+            frame.attachments.depth.clearDepth,
+            frame.attachments.stencil.clearStencil
+        )
+    }
+}
+
+function vulkanRecordBeginRendering(
+    state: borrow VulkanState,
+    frame: borrow RenderFrame,
+    plan: borrow VulkanPassPlan
+) {
+    let area = VkRect2D {
+        extent: VkExtent2D { width: U32(plan.color.width), height: U32(plan.color.height) }
+    }
+    let colorAttachment = vulkanColorAttachment(frame, plan)
+    match plan.depth {
+        Some(depth) -> vulkanBeginRendering(
+            state.device,
+            state.commandBuffer,
+            VkRenderingInfo {
+                sType: VulkanVocabulary.structureRenderingInfo,
+                renderArea: area,
+                layerCount: U32(1),
+                colorAttachmentCount: U32(1),
+                pColorAttachments: colorAttachment,
+                pDepthAttachment: vulkanDepthAttachment(frame, depth)
+            }
+        )
+        None -> vulkanBeginRendering(
+            state.device,
+            state.commandBuffer,
+            VkRenderingInfo {
+                sType: VulkanVocabulary.structureRenderingInfo,
+                renderArea: area,
+                layerCount: U32(1),
+                colorAttachmentCount: U32(1),
+                pColorAttachments: colorAttachment
+            }
+        )
+    }
+}
+
+function vulkanOpenPass(state: borrow mut VulkanState, plan: borrow VulkanPassPlan) {
+    state.passActive = true
+    state.passWidth = UN32(plan.color.width)
+    state.passHeight = UN32(plan.color.height)
+    state.passColorImage = plan.color.image
+    state.passResolveImage = match plan.resolve {
+        Some(resolve) -> resolve.image
+        None -> nullPointer()
+    }
+    state.passSampleCount = plan.sampleCount
+    state.passIsSwapchain = plan.swapchain
+    state.framePassCount = state.framePassCount + 1
+}
+
+function vulkanTracePass(
+    state: borrow VulkanState,
+    frame: borrow RenderFrame,
+    plan: borrow VulkanPassPlan
+) {
+    if !state.tracing.pass {
+        return
+    }
+    log debug(
+        "Ember began a pass",
+        area: "pass",
+        index: state.framePassCount,
+        width: plan.color.width,
+        height: plan.color.height,
+        samples: plan.sampleCount,
+        swapchain: plan.swapchain,
+        hasDepth: plan.depth != .None,
+        hasStencil: frame.attachments.hasStencil,
+        resolve: plan.resolve != .None
+    )
+}
+
+public function vulkanBeginRenderPassState(
+    state: borrow mut VulkanState,
+    frame: borrow RenderFrame
+) -> Bool {
+    let plan = match vulkanPlanPass(state, frame) {
+        Ok(plan) -> plan
+        Error(failure) -> {
+            log fault("a render pass could not begin", failure)
+            return false
+        }
+    }
+    vulkanGpuTimingPassBegin(state, frame.passLabel)
+    vulkanRecordBeginRendering(state, frame, plan)
+    vulkanOpenPass(state, plan)
+    vulkanTracePass(state, frame, plan)
+    return true
+}

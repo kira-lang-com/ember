@@ -1,0 +1,475 @@
+import Heap
+
+// Metal rendering context, built entirely from Objective-C messages via FFI.
+//
+// The context owns the device and command queue, the current color target (an
+// offscreen texture today; a CAMetalLayer drawable once the host surface lands),
+// and the in-flight command buffer + render-command encoder for the active pass.
+//
+// The context is a small raw heap block whose handle (RawPtr) is threaded across
+// the begin/end seam. We deliberately store it as raw memory rather than a Kira
+// struct behind `nativeState`: a render pass begins in one `@Native` call and ends
+// in another (the public RenderFrame splits beginRenderPass/endPass across the
+// VM in hybrid mode), and the in-flight encoder/command-buffer pointers must
+// survive between those calls identically on the native and hybrid backends. A
+// raw block read/written through the kira_runtime pointer helpers gives that
+// persistence unconditionally.
+//
+// Layout (byte offsets into the block):
+//   0  device           (id<MTLDevice>)
+//   8  queue            (id<MTLCommandQueue>)
+//  16  colorTexture     (id<MTLTexture>)
+//  24  commandBuffer    (id<MTLCommandBuffer>, per pass)
+//  32  encoder          (id<MTLRenderCommandEncoder>, per pass)
+//  40  width            (U64)
+//  48  height           (U64)
+//  56  layer            (CAMetalLayer, null in offscreen mode)
+//  64  drawable         (id<CAMetalDrawable>, per pass in layer mode)
+//  72  registry         (raw block of resource pointers indexed by handle id)
+//  80  nextId           (U64, next resource handle id; id 0 is reserved/invalid)
+//  88  depthTexture     (id<MTLTexture>, Depth32Float; null until attached)
+//  96  depthState       (id<MTLDepthStencilState>, less + write)
+// 104  hostView         (NSView/UIView the layer is attached to; null in offscreen)
+// 112  lastFrameNs      (U64 nanoseconds; the previous frame's monotonic clock)
+// 120  frameDurationNs  (U64 nanoseconds; the most recent inter-frame delta, for FPS)
+// 128  physicalWidth    (U64 backing pixels; width/height stay in points, so
+//                        scale = physicalWidth / width — the Retina backing factor)
+// 136  registryKinds    (raw block of per-id U8 kind tags parallel to `registry`:
+//                        1 = Objective-C object (teardown releases it), 2 = raw
+//                        metalMemAlloc block such as a bind group (teardown frees it))
+// 144  lockSeeded       (U64; 1 once the locked pointer has an anchor to walk from)
+// 152  lockedX          (Float bits; the virtual pointer's window-space x while locked)
+// 160  lockedY          (Float bits; the virtual pointer's window-space y while locked)
+// 168  registryCap      (U64; how many ids the registry blocks currently hold)
+// 176  freeId           (U64; head of the freed-id list, 0 when empty — id 0 is
+//                        the reserved sentinel, so it can never be a real entry)
+// 184  raceProbe        (U64; 1 when KIRA_METAL_RACE_PROBE was set at alloc time)
+// 192  raceOverlaps     (U64; uniform writes this frame that landed while the
+//                        previous frame was still running on the GPU)
+// 200  raceWrites       (U64; uniform writes this frame, overlapping or not)
+// 208  slotRing         (per-id table of packed slot stride + current offset for
+//                        CPU-rewritten buffers, parallel to `registry`; 0 for a
+//                        resource that has no ring — see MetalPacing.kira)
+// 216  frameRing        (raw block of MetalPacing.framesInFlight retained command
+//                        buffers; the CPU waits on one before recording a pass)
+// 224  frameIndex       (U64; commits so far, i.e. which frameRing slot is next)
+// 232  cpuFrameStartNs  (U64; CPU encoding start for the current app frame)
+// 240  cpuFrameNs       (U64; CPU time of the most recently completed app frame)
+// 248  frameSerial      (U64; logical app frame, shared by all of its Metal passes)
+// 256  gpuAccumSerial   (U64; logical frame whose completed GPU passes are accumulating)
+// 264  gpuAccumNs       (U64; summed GPU execution time for that logical frame)
+// 272  gpuFrameNs       (U64; GPU time of the latest fully collected logical frame)
+// 280  currentPasses    (U64; render passes encoded by the current app frame)
+// 288  currentDraws     (U64; draw calls encoded by the current app frame)
+// 296  currentTriangles (U64; explicit triangle work encoded by the current app frame)
+// 304  lastPasses       (U64; completed CPU frame's pass count)
+// 312  lastDraws        (U64; completed CPU frame's draw count)
+// 320  lastTriangles    (U64; completed CPU frame's triangle count)
+// 328  windowState      (U64; 1 focused-visible, 2 unfocused-visible, 3 hidden/occluded)
+// 336  hiddenTexture    (id<MTLTexture>; private fallback while no drawable is visible)
+// 344  hiddenTextureW   (U64; backing-pixel width of hiddenTexture)
+// 352  hiddenTextureH   (U64; backing-pixel height of hiddenTexture)
+// 360  activeCommandBuffer (current logical frame; all render encoders share it)
+// 368  highDpi          (U64; 1 uses backing pixels, 0 uses logical pixels)
+// 376  machTimeNumer    (U64; mach tick -> nanosecond numerator)
+// 384  machTimeDenom    (U64; mach tick -> nanosecond denominator)
+
+// Null the surface/depth slots so offscreen mode (no layer/drawable) and the
+// no-depth path are detectable, and start every counter at zero.
+function metalContextClearSlots(ctx: RawPtr) {
+    metalMemWritePtr(ctx, MetalContext.offsetLayer, nullPointer())
+    metalMemWritePtr(ctx, MetalContext.offsetDrawable, nullPointer())
+    metalMemWritePtr(ctx, MetalContext.offsetDepthTexture, nullPointer())
+    metalMemWritePtr(ctx, MetalContext.offsetDepthState, nullPointer())
+    metalMemWritePtr(ctx, MetalContext.offsetHostView, nullPointer())
+    metalMemWriteU64(ctx, MetalContext.offsetLastFrameNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetFrameDurationNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetPhysicalWidth, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetCpuFrameStartNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetCpuFrameDurationNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetLogicalFrameSerial, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetGpuAccumSerial, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetGpuAccumDurationNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetGpuFrameDurationNs, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetCurrentPasses, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetCurrentDraws, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetCurrentTriangles, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetLastPasses, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetLastDraws, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetLastTriangles, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetWindowState, U64(MetalWindowStateCode.focused))
+    metalMemWritePtr(ctx, MetalContext.offsetHiddenTexture, nullPointer())
+    metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureWidth, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetHiddenTextureHeight, 0)
+    metalMemWritePtr(ctx, MetalContext.offsetActiveCommandBuffer, nullPointer())
+    metalMemWriteU64(ctx, MetalContext.offsetHighDpi, 1)
+}
+
+// The ratio mach ticks convert to nanoseconds by, for every frame timing.
+function metalContextReadTimebase(ctx: RawPtr) {
+    let timebase = metalMemAlloc(8)
+    if metalMachTimebaseInfo(timebase) != U32(0) {
+        log fault("mach_timebase_info refused the timebase")
+    }
+    metalMemWriteU64(ctx, MetalContext.offsetMachTimeNumer, U64(metalMemReadU32(timebase, 0)))
+    metalMemWriteU64(ctx, MetalContext.offsetMachTimeDenom, U64(metalMemReadU32(timebase, 4)))
+    metalMemFree(timebase)
+}
+
+// Resource registry: capacity pointers, ids starting at 1. The parallel kinds
+// table (one U8 per id) records whether each entry is an Objective-C object or a
+// raw block so teardown can release vs free it correctly.
+function metalContextAllocRegistry(ctx: RawPtr) {
+    let registry = metalMemAlloc(MetalRegistry.registryInitialCapacity * MetalRegistry.slotBytes)
+    metalMemWritePtr(ctx, MetalContext.offsetRegistry, registry)
+    let kinds = metalMemAlloc(MetalRegistry.registryInitialCapacity)
+    metalMemWritePtr(ctx, MetalContext.offsetRegistryKinds, kinds)
+    metalMemWriteU64(ctx, MetalContext.offsetRegistryCap, MetalRegistry.registryInitialCapacity)
+    metalMemWriteU64(ctx, MetalContext.offsetFreeId, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetNextId, 1)
+}
+
+// Read the probe switch once, here: the check runs on every uniform write of
+// every frame, and a scene with a few thousand entities would otherwise scan
+// the environment a few thousand times a frame to learn the same answer.
+function metalContextReadRaceProbe(ctx: RawPtr) {
+    if !metalEnvIsSet("KIRA_METAL_RACE_PROBE") {
+        metalMemWriteU64(ctx, MetalContext.offsetRaceProbe, 0)
+    } else {
+        metalMemWriteU64(ctx, MetalContext.offsetRaceProbe, 1)
+    }
+    metalMemWriteU64(ctx, MetalContext.offsetRaceOverlaps, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetRaceWrites, 0)
+}
+
+// Allocate the context block and create the device + command queue.
+public function metalContextAlloc() -> RawPtr {
+    let ctx = metalMemAlloc(MetalContext.contextSize)
+    let device = metalCreateSystemDefaultDevice()
+    let queue: RawPtr = metalMsgSend(device, metalSel("newCommandQueue"))
+    metalMemWritePtr(ctx, MetalContext.offsetDevice, device)
+    metalMemWritePtr(ctx, MetalContext.offsetQueue, queue)
+    metalContextClearSlots(ctx)
+    metalContextReadTimebase(ctx)
+    metalContextAllocRegistry(ctx)
+    metalContextReadRaceProbe(ctx)
+    // The uniform ring table is parallel to the registry and grows with it, so it
+    // starts at the same capacity.
+    metalPacingInit(ctx)
+    return ctx
+}
+
+// Attach a CAMetalLayer surface (the real on-screen path, replacing the legacy
+// OpenGL layer). Today the layer is created standalone and verified by reading
+// the presented drawable back; the host runner attaches it to its NSView/UIView
+// in the on-screen integration. Switching a context to layer mode makes each pass
+// acquire and present a CAMetalLayer drawable instead of rendering to a fixed
+// offscreen texture.
+public function metalContextAttachLayer(ctx: RawPtr, width: Number, height: Number) {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let layerClass = metalObjcGetClass("CAMetalLayer")
+    let layerAlloc: RawPtr = metalMsgSend(layerClass, metalSel("alloc"))
+    let layer: RawPtr = metalMsgSend(layerAlloc, metalSel("init"))
+    metalMsgSend(layer, metalSel("setDevice:"), device)
+    metalMsgSend(layer, metalSel("setPixelFormat:"), MetalRegistry.pixelFormatBGRA8Unorm)
+    metalMsgSend(layer, metalSel("setFramebufferOnly:"), false)
+    if !metalUsesUIKit!() { metalMsgSend(layer, metalSel("setDisplaySyncEnabled:"), false) }
+    metalMsgSend(layer, metalSel("setDrawableSize:"), Float(width), Float(height))
+    metalMemWritePtr(ctx, MetalContext.offsetLayer, layer)
+    metalMemWriteU64(ctx, MetalContext.offsetWidth, width)
+    metalMemWriteU64(ctx, MetalContext.offsetHeight, height)
+}
+
+// Release/free every registered resource (ids 1..nextId-1; id 0 is the reserved
+// sentinel), then free the registry and its parallel kinds table. Object entries
+// are +1-owned `new*` results (library / buffer / pipeline / texture / sampler)
+// and are released; raw-block entries (bind groups) are freed with metalMemFree —
+// sending them an Objective-C `release` would crash on a non-object.
+function metalContextFreeRegistry(ctx: RawPtr) {
+    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+    let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+    if !isNull(registry) {
+        let nextId = metalMemReadU64(ctx, MetalContext.offsetNextId)
+        for id in 1..nextId {
+            let kind = metalMemReadU8(kinds, id)
+            let entry = metalMemReadPtr(registry, id * MetalRegistry.slotBytes)
+            // A freed slot's word is a free-list link, not a resource: releasing
+            // it would send `release` to a small integer.
+            if kind != MetalRegistry.registryKindFree && !isNull(entry) {
+                if kind == MetalRegistry.registryKindRawBlock {
+                    metalMemFree(entry)
+                } else {
+                    metalMsgSend(entry, metalSel("release"))
+                }
+            }
+        }
+        metalMemFree(registry)
+    }
+    if !isNull(kinds) {
+        metalMemFree(kinds)
+    }
+}
+
+// The depth target and state, and the color target where the context owns it.
+function metalContextReleaseTargets(ctx: RawPtr) {
+    // Release the context-owned depth target/state (null unless depth was attached).
+    let depthState = metalMemReadPtr(ctx, MetalContext.offsetDepthState)
+    if !isNull(depthState) {
+        metalMsgSend(depthState, metalSel("release"))
+    }
+    let depthTexture = metalMemReadPtr(ctx, MetalContext.offsetDepthTexture)
+    if !isNull(depthTexture) {
+        metalMsgSend(depthTexture, metalSel("release"))
+    }
+    // The color target is +1-owned ONLY in offscreen mode (newTextureWithDescriptor:).
+    // In layer mode it is the drawable's texture, which we do not own — releasing it
+    // would over-release — so skip it whenever a layer is present.
+    let layer = metalMemReadPtr(ctx, MetalContext.offsetLayer)
+    if isNull(layer) {
+        let colorTexture = metalMemReadPtr(ctx, MetalContext.offsetColorTexture)
+        if !isNull(colorTexture) {
+            metalMsgSend(colorTexture, metalSel("release"))
+        }
+    } else {
+        // The CAMetalLayer is a +1-owned alloc/init we created for the on-screen path.
+        metalMsgSend(layer, metalSel("release"))
+    }
+}
+
+// Destroy the context: release every Objective-C object it owns (each backend
+// resource is created through a +1-owned `new*`/`alloc`+`init` message and never
+// released elsewhere), free the registry and handle blocks. Wired to run at app
+// shutdown (metalRunApplication) so these process-lifetime objects — the render/
+// compute pipelines, shader libraries, buffers, textures, samplers, the command
+// queue and its dispatch sources, and the device — do not survive to `leaks --atExit`.
+public function metalContextFree(ctx: RawPtr) {
+    // First: wait out every frame still in flight and drop the pacing state. Nothing
+    // below may release a buffer or texture a running frame is reading.
+    metalPacingFree(ctx)
+    metalContextReleaseHiddenTarget(ctx)
+    // Release the last command buffer we retained for the deferred readback wait.
+    let pending = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
+    if !isNull(pending) {
+        metalMsgSend(pending, metalSel("release"))
+    }
+    metalContextFreeRegistry(ctx)
+    metalContextReleaseTargets(ctx)
+    // Release the command queue, breaking its dispatch-source retain cycles.
+    let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
+    if !isNull(queue) {
+        metalMsgSend(queue, metalSel("release"))
+    }
+    // The device is NOT released: MTLCreateSystemDefaultDevice returns a cached
+    // process-lifetime singleton (the same object every call), which Metal retains
+    // internally. Releasing our reference per-context over-releases the shared device
+    // and crashes the next context that recreates it. It is process-lifetime and does
+    // not appear in the per-run leak buckets, so we intentionally leave it reachable.
+    metalMemFree(ctx)
+}
+
+// Map a Ember texture format (Constants.kira) to an MTLPixelFormat.
+public function metalPixelFormatForTexture(kiraFormat: Number) -> U64 {
+    if kiraFormat == 10 { return MetalContext.pixelFormatR32Uint } // textureFormatR32Uint
+    return MetalRegistry.pixelFormatBGRA8Unorm // swapchain / default
+}
+
+// Allocate an offscreen BGRA8 render target and make it the context's color target.
+public function metalContextAttachOffscreen(
+    ctx: RawPtr,
+    width: Number,
+    height: Number,
+    scale: Number
+) {
+    metalContextAttachOffscreenFormat(
+        ctx,
+        width,
+        height,
+        MetalRegistry.pixelFormatBGRA8Unorm,
+        scale
+    )
+}
+
+// As above but with an explicit MTLPixelFormat (e.g. R32Uint for a visibility
+// buffer). The readback path reads the raw 32-bit texel, which is the uint value
+// directly for R32Uint targets.
+//
+// `scale` is the backing factor the target emulates headlessly: width/height
+// stay in points, the color target is points x scale physical pixels, and
+// physicalWidth records the factor — the same shape the on-screen layer path
+// produces, so scale-dependent rendering bugs reproduce offscreen.
+public function metalContextAttachOffscreenFormat(
+    ctx: RawPtr,
+    width: Number,
+    height: Number,
+    pixelFormat: U64,
+    scale: Number
+) {
+    let scaleFactor = max(scale, 1)
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let descClass = metalObjcGetClass("MTLTextureDescriptor")
+    let desc: RawPtr = metalMsgSend(
+        descClass,
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        pixelFormat,
+        width * scaleFactor,
+        height * scaleFactor,
+        false
+    )
+    metalMsgSend(desc, metalSel("setUsage:"), MetalRegistry.textureUsageRenderTarget)
+    // Benchmark the same GPU-only storage used by an on-screen CAMetalLayer
+    // drawable. Verification/dump modes stay shared because the CPU reads them.
+    var targetStorageMode = MetalRegistry.storageModeShared
+    if metalEnvIsSet("KIRA_METAL_BENCH") {
+        targetStorageMode = MetalRegistry.storageModePrivate
+    }
+    metalMsgSend(desc, metalSel("setStorageMode:"), targetStorageMode)
+    let texture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+    metalMemWritePtr(ctx, MetalContext.offsetColorTexture, texture)
+    metalMemWriteU64(ctx, MetalContext.offsetWidth, width)
+    metalMemWriteU64(ctx, MetalContext.offsetHeight, height)
+    metalMemWriteU64(ctx, MetalContext.offsetPhysicalWidth, width * scaleFactor)
+}
+
+// Create a color texture usable as BOTH a render target and a sampled input
+// (usage = RenderTarget | ShaderRead), registered so it can be targeted by a pass
+// and bound to a later pass. Enables multi-pass rendering (e.g. deferred resolve:
+// pass 1 -> visibility texture, pass 2 samples it -> final color).
+public function metalCreateColorTargetTexture(
+    ctx: RawPtr,
+    descriptor: borrow TextureDescriptor
+) -> Number? {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let descClass = metalObjcGetClass("MTLTextureDescriptor")
+    let desc: RawPtr = metalMsgSend(
+        descClass,
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        metalPixelFormatForTexture(textureFormatCode(descriptor.format)),
+        descriptor.width,
+        descriptor.height,
+        false
+    )
+    // Render targets may also be consumed by a compute effect (Liquid Glass uses
+    // private, GPU-only ping-pong textures). ShaderWrite is harmless for ordinary
+    // targets and avoids allocating a second texture class just for that fast path.
+    metalMsgSend(
+        desc,
+        metalSel("setUsage:"),
+        MetalRegistry.textureUsageRenderTarget | MetalTexture.textureUsageShaderRead | MetalTexture.textureUsageShaderWrite
+    )
+    // A transient target is the GPU's alone; every other one stays where the
+    // CPU can read it back.
+    let nativeStorageMode = match descriptor.storage {
+        Transient -> MetalRegistry.storageModePrivate
+        Persistent -> MetalRegistry.storageModeShared
+        Memoryless -> MetalRegistry.storageModeShared
+    }
+    metalMsgSend(desc, metalSel("setStorageMode:"), nativeStorageMode)
+    let texture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+    return metalRegisterNew(ctx, texture)
+}
+
+// Create a Depth32Float depth target and a less/write depth-stencil state for the
+// context (sized to the current color target, in physical pixels, like the
+// offscreen target it pairs with — sizing it in points left Retina depth at
+// half resolution under a full-resolution color buffer).
+public function metalContextAttachDepth(ctx: RawPtr) {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    var width = metalContextPhysicalWidth(ctx)
+    var height = metalContextPhysicalHeight(ctx)
+    if width <= 0 || height <= 0 {
+        width = metalContextWidth(ctx)
+        height = metalContextHeight(ctx)
+    }
+    let descClass = metalObjcGetClass("MTLTextureDescriptor")
+    let desc: RawPtr = metalMsgSend(
+        descClass,
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        MetalRegistry.pixelFormatDepth32Float,
+        width,
+        height,
+        false
+    )
+    metalMsgSend(
+        desc,
+        metalSel("setUsage:"),
+        MetalRegistry.textureUsageRenderTarget | MetalTexture.textureUsageShaderRead
+    )
+    metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModePrivate)
+    let depthTexture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+    metalMemWritePtr(ctx, MetalContext.offsetDepthTexture, depthTexture)
+    metalMemWritePtr(ctx, MetalContext.offsetDepthState, metalNewDepthState(device))
+}
+
+// A less-than, depth-writing depth-stencil state, +1-owned.
+function metalNewDepthState(device: RawPtr) -> RawPtr {
+    let dsDescClass = metalObjcGetClass("MTLDepthStencilDescriptor")
+    let dsDesc: RawPtr = metalMsgSend(
+        metalMsgSend(dsDescClass, metalSel("alloc")),
+        metalSel("init")
+    )
+    metalMsgSend(dsDesc, metalSel("setDepthCompareFunction:"), MetalRegistry.compareFunctionLess)
+    metalMsgSend(dsDesc, metalSel("setDepthWriteEnabled:"), true)
+    let depthState: RawPtr = metalMsgSend(
+        device,
+        metalSel("newDepthStencilStateWithDescriptor:"),
+        dsDesc
+    )
+    // The descriptor is a +1-owned alloc/init temporary; the depth-stencil state does
+    // not retain it, so release it here rather than leaking one per attach.
+    metalMsgSend(dsDesc, metalSel("release"))
+    return depthState
+}
+
+public namespace MetalContext {
+    let contextSize: U64 = 392
+    let offsetDevice: U64 = 0
+    let offsetQueue: U64 = 8
+    let offsetColorTexture: U64 = 16
+    let offsetCommandBuffer: U64 = 24
+    let offsetEncoder: U64 = 32
+    let offsetWidth: U64 = 40
+    let offsetHeight: U64 = 48
+    let offsetLayer: U64 = 56
+    let offsetDrawable: U64 = 64
+    let offsetRegistry: U64 = 72
+    let offsetNextId: U64 = 80
+    let offsetDepthTexture: U64 = 88
+    let offsetDepthState: U64 = 96
+    let offsetHostView: U64 = 104
+    let offsetLastFrameNs: U64 = 112
+    let offsetFrameDurationNs: U64 = 120
+    let offsetPhysicalWidth: U64 = 128
+    let offsetRegistryKinds: U64 = 136
+    let offsetLockSeeded: U64 = 144
+    let offsetLockedX: U64 = 152
+    let offsetLockedY: U64 = 160
+    let offsetRegistryCap: U64 = 168
+    let offsetFreeId: U64 = 176
+    let offsetRaceProbe: U64 = 184
+    let offsetRaceOverlaps: U64 = 192
+    let offsetRaceWrites: U64 = 200
+    let offsetSlotRing: U64 = 208
+    let offsetFrameRing: U64 = 216
+    let offsetFrameIndex: U64 = 224
+    let offsetCpuFrameStartNs: U64 = 232
+    let offsetCpuFrameDurationNs: U64 = 240
+    let offsetLogicalFrameSerial: U64 = 248
+    let offsetGpuAccumSerial: U64 = 256
+    let offsetGpuAccumDurationNs: U64 = 264
+    let offsetGpuFrameDurationNs: U64 = 272
+    let offsetCurrentPasses: U64 = 280
+    let offsetCurrentDraws: U64 = 288
+    let offsetCurrentTriangles: U64 = 296
+    let offsetLastPasses: U64 = 304
+    let offsetLastDraws: U64 = 312
+    let offsetLastTriangles: U64 = 320
+    let offsetWindowState: U64 = 328
+    let offsetHiddenTexture: U64 = 336
+    let offsetHiddenTextureWidth: U64 = 344
+    let offsetHiddenTextureHeight: U64 = 352
+    let offsetActiveCommandBuffer: U64 = 360
+    let offsetHighDpi: U64 = 368
+    let offsetMachTimeNumer: U64 = 376
+    let offsetMachTimeDenom: U64 = 384
+    let pixelFormatR32Uint: U64 = 53
+}

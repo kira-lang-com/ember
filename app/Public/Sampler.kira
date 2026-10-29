@@ -1,0 +1,7 @@
+public struct GraphicsSampler {
+    var id: SamplerId = NoSamplerId
+}
+
+public function emptyGraphicsSampler() -> GraphicsSampler {
+    return GraphicsSampler { id: NoSamplerId }
+}

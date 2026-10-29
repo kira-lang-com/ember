@@ -1,0 +1,74 @@
+public struct VertexAttribute {
+    var name: String = ""
+    var location: UN32 = 0
+    var format: VertexFormat = .Float4
+    var offset: UN32 = 0
+}
+
+public struct VertexLayout {
+    var stride: UN32 = 0
+    var attributes: [VertexAttribute] = []
+}
+
+public struct BlendState {
+    var enabled: Bool = false
+    var preset: BlendPreset = .PremultipliedAlpha
+    // A blend no preset names; when set, it is used instead of `preset`.
+    var custom: BlendFunction? = .None
+
+    // The factors and operations this state blends with.
+    function resolved() -> BlendFunction {
+        match custom {
+            Some(written) -> return copy written
+            None -> return blendPresetFunction(preset)
+        }
+    }
+}
+
+public struct ColorTargetDescriptor {
+    var format: TextureFormat = .Swapchain
+    var blend: BlendState = BlendState()
+}
+
+public struct DepthStencilDescriptor {
+    var depthEnabled: Bool = false
+    var depthWriteEnabled: Bool = false
+    var depthCompare: CompareFunction = .Less
+    // No depth buffer unless a pipeline asks for one.
+    //
+    // A backend may bake this into the pipeline object and check it against the
+    // pass being drawn into — a backend may enforce this — so a pipeline naming a depth format
+    // is a pipeline that can only be used in a pass carrying that attachment.
+    // Defaulting to a real format made every pipeline claim one, and a pipeline
+    // drawn into an offscreen color target with no depth was then refused at
+    // the draw with nothing in its descriptor to say why.
+    var format: TextureFormat = .None
+}
+
+public struct RasterizationDescriptor {
+    var cullMode: CullMode = .None
+    var frontFace: FrontFace = .CounterClockwise
+}
+
+public struct PrimitiveDescriptor {
+    var topology: PrimitiveTopology = .TriangleList
+}
+
+public struct RenderPipelineDescriptor {
+    var label: String = ""
+    var shader: GraphicsShader = GraphicsShader()
+    var vertexLayout: VertexLayout = VertexLayout()
+    var colorTargets: [ColorTargetDescriptor] = []
+    var depthStencil: DepthStencilDescriptor = DepthStencilDescriptor()
+    var rasterization: RasterizationDescriptor = RasterizationDescriptor()
+    var primitive: PrimitiveDescriptor = PrimitiveDescriptor()
+    // Must match the attachments used by the render pass. Defaults to the
+    // historical single-sample path so existing pipeline descriptors remain
+    // source-compatible while backends can create real multisample pipelines.
+    var sampleCount: UN8 = 1
+    // Metal shader-library entry-point names (default v_main/f_main; KSL-compiled
+    // libraries use `{shader}__vertex__main` / `__fragment__main`). Transient — this
+    // descriptor is not stored in native state, so String fields are safe here.
+    var vertexEntry: String = "v_main"
+    var fragmentEntry: String = "f_main"
+}

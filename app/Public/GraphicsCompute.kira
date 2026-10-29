@@ -1,0 +1,86 @@
+// GPU compute, as methods on `Graphics`.
+//
+// Written as `extend Graphics` rather than inside the class body: a class's
+// methods may be declared across files, and compute is a bounded job path with
+// its own vocabulary — a pipeline id rather than the render-graph resource
+// structs — so it reads better beside itself than buried in the middle of the
+// rendering surface.
+
+extend Graphics {
+    // Whether this backend can build and encode a compute pipeline at all.
+    //
+    // Asked instead of naming a backend: a caller with a compute shader and a
+    // render-pass fallback chooses between them on the capability, so a backend
+    // that grows compute starts running the compute path without every caller
+    // being edited to add its name to a list.
+    function supportsCompute() -> Bool {
+        return self.renderBackend().supportsCompute()
+    }
+
+    // Build a pipeline that runs `shader`'s compute stage.
+    function createComputePipeline(
+        label: borrow String,
+        shader: borrow GraphicsShader,
+        entryName: borrow String
+    ) -> ComputePipelineId {
+        return self.renderBackend().createComputePipeline(label, shader, entryName)
+    }
+
+    // Run `pipeline` over `threadCount` threads, binding each id in order at
+    // `buffer(0)`, `buffer(1)`, … — the shape a simulation step has, where what
+    // the kernel reads and writes is a buffer of state rather than an image.
+    //
+    // Encoded on the frame that is already open, so a step called before a draw
+    // is ordered before it.
+    function dispatchComputeBuffers(
+        pipeline: ComputePipelineId,
+        bufferIds: borrow[BufferId],
+        threadCount: UN32,
+        threadsPerGroup: UN32
+    ) {
+        self.renderBackend().dispatchComputeBuffers(
+            BufferDispatch {
+                pipeline: pipeline,
+                bufferIds: bufferIds,
+                threadCount: threadCount,
+                threadsPerGroup: threadsPerGroup
+            }
+        )
+    }
+
+    // A storage buffer holding `data`.
+    //
+    // `createBuffer` with the storage usage, named: what a kernel binds is a
+    // buffer of floats often enough that spelling the descriptor at every site
+    // buried the one thing that differed between them.
+    function createStorageBufferFloats(label: borrow String, data: borrow[Number]) -> BufferResult {
+        return self.createBuffer(BufferDescriptor { label: label, usage: .Storage, data: data })
+    }
+
+    // A storage buffer of `floatCount` zeroed slots — what a kernel WRITES,
+    // where the contents come from the dispatch rather than from the CPU.
+    //
+    // Zero-filled rather than uninitialized because a kernel that writes only
+    // some of its slots leaves the rest readable, and a device buffer's
+    // untouched bytes are whatever the allocator last had there.
+    function createEmptyStorageBuffer(label: borrow String, floatCount: Number) -> BufferResult {
+        var zeros: [Number] = []
+        for _ in 0..floatCount { zeros.append(0) }
+        return self.createStorageBufferFloats(label, zeros)
+    }
+
+    // A storage buffer of 32-bit words — a kernel's parameter block, where a
+    // count is a count. Floats would reach the shader as different numbers.
+    function createStorageBufferWords(label: borrow String, data: borrow[UN32]) -> BufferResult {
+        return self.renderBackend().createStorageBufferWords(label, data)
+    }
+
+    // One 32-bit word out of a buffer a kernel has written.
+    //
+    // For a headless gate that dispatches and then checks the answer. A read the
+    // backend could not make answers why, so a gate never mistakes a failed
+    // read for a kernel that wrote zero.
+    function readStorageU32(buffer: borrow GraphicsBuffer, index: UN32) -> BufferReadResult {
+        return self.renderBackend().readBufferU32(buffer, index)
+    }
+}

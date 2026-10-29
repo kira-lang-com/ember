@@ -1,0 +1,215 @@
+import Foundation
+
+// Turn a Ember frame capture (binary PPM, `P6`) into a PNG so it can be
+// looked at. Stored deflate blocks only: this exists to view a capture, not to
+// compress it. Lives here rather than in a throwaway script so every tool that
+// captures a frame shares one encoder.
+
+// CRC-32 as PNG defines it (ISO 3309): the reflected polynomial, a register
+// that starts all ones and is inverted at the end.
+namespace Crc {
+    let polynomial: UNumber = 0xedb88320
+    let allOnes: UNumber = 0xffffffff
+    let tableSize: UNumber = 256
+    let bitsPerByte: UNumber = 8
+    let byteMask: UNumber = 0xff
+}
+
+// Adler-32 as zlib defines it (RFC 1950): two sums modulo the largest prime
+// below 65536, the second in the high half.
+namespace Adler {
+    let modulus: UNumber = 65521
+    let highHalf: UNumber = 65536
+}
+
+// A zlib stream of stored (uncompressed) deflate blocks (RFC 1950, RFC 1951).
+namespace Zlib {
+    // CMF and FLG: deflate with a 256-byte window, no dictionary, and a check
+    // value that makes the pair divisible by 31.
+    let compressionMethod: UN8 = 0x78
+    let flags: UN8 = 0x01
+    // A stored block's length field is sixteen bits.
+    let maxStoredBlock: UNumber = 0xffff
+    let finalBlock: UN8 = 1
+    let moreBlocks: UN8 = 0
+}
+
+// The fixed parts of a PNG (ISO 15948).
+namespace PngFormat {
+    let bitDepth: UN8 = 8
+    // Truecolour: three samples per pixel, no alpha.
+    let colourTypeRgb: UN8 = 2
+    let compressionDeflate: UN8 = 0
+    let filterAdaptive: UN8 = 0
+    let interlaceNone: UN8 = 0
+    // Each scanline opens with the filter it was written with.
+    let filterNone: UN8 = 0
+}
+
+function crcTable() -> [UNumber] {
+    var table: [UNumber] = []
+    for entry in 0..Crc.tableSize {
+        var register: UNumber = entry
+        for _ in 0..Crc.bitsPerByte {
+            if register % 2 == 1 {
+                register = Crc.polynomial ^ (register >> 1)
+            } else {
+                register = register >> 1
+            }
+        }
+        table.append(register)
+    }
+    return table
+}
+
+function crc32(bytes: borrow[UN8], table: borrow[UNumber]) -> UNumber {
+    var register = Crc.allOnes
+    for byte in bytes {
+        register = table[(register ^ Number(byte)) & Crc.byteMask] ^ (register >> 8)
+    }
+    return register ^ Crc.allOnes
+}
+
+function adler32(bytes: borrow[UN8]) -> UNumber {
+    var low: UNumber = 1
+    var high: UNumber = 0
+    for byte in bytes {
+        low = (low + Number(byte)) % Adler.modulus
+        high = (high + low) % Adler.modulus
+    }
+    return high * Adler.highHalf + low
+}
+
+// A chunk: its payload's length, its four-letter kind, the payload, and a CRC
+// over the kind and payload together.
+function appendChunk(
+    png: borrow mut ByteWriter,
+    kind: borrow String,
+    payload: borrow[UN8],
+    table: borrow[UNumber]
+) {
+    png.writeU32(U32(payload.count))
+    var checked = kind.utf8()
+    for byte in payload { checked.append(byte) }
+    for byte in checked { png.writeU8(U8(byte)) }
+    png.writeU32(U32(crc32(checked, table)))
+}
+
+function deflateStored(raw: borrow[UN8]) -> [UN8] {
+    var out = ByteWriter { order: .Little }
+    out.writeU8(U8(Zlib.compressionMethod))
+    out.writeU8(U8(Zlib.flags))
+    var offset: UNumber = 0
+    while offset < raw.count {
+        let length = min(raw.count - offset, Zlib.maxStoredBlock)
+        out.writeU8(U8(offset + length >= raw.count ? Zlib.finalBlock : Zlib.moreBlocks))
+        out.writeU16(U16(length))
+        out.writeU16(U16(Zlib.maxStoredBlock - length))
+        for index in 0..length { out.writeU8(U8(raw[offset + index])) }
+        offset = offset + length
+    }
+    var trailer = ByteWriter { order: .Big }
+    trailer.writeU32(U32(adler32(raw)))
+    for byte in trailer.bytes { out.writeU8(byte) }
+    return out.bytes
+}
+
+// The header of a binary PPM: "P6", width, height and maximum value, each
+// separated by whitespace, then one byte of whitespace before the pixels.
+struct PpmHeader {
+    var width: UNumber = 0
+    var height: UNumber = 0
+    var pixelOffset: UNumber = 0
+}
+
+namespace PpmText {
+    // The two-byte "P6" magic the dimensions follow.
+    let magicBytes: UNumber = 2
+    // Every byte at or below the space is a separator.
+    let lastWhitespace: UNumber = 32
+    let digitZero: UNumber = 48
+    let fieldCount: UNumber = 3
+    let bytesPerPixel: UNumber = 3
+}
+
+function ppmHeader(bytes: borrow[UN8]) -> PpmHeader {
+    var values: [UNumber] = []
+    var at: UNumber = PpmText.magicBytes
+    while values.count < PpmText.fieldCount && at < bytes.count {
+        while at < bytes.count && Number(bytes[at]) <= PpmText.lastWhitespace {
+            at = at + 1
+        }
+        var value: UNumber = 0
+        while at < bytes.count && Number(bytes[at]) > PpmText.lastWhitespace {
+            value = value * 10 + (Number(bytes[at]) - PpmText.digitZero)
+            at = at + 1
+        }
+        values.append(value)
+    }
+    return PpmHeader { width: values[0], height: values[1], pixelOffset: at + 1 }
+}
+
+// A PNG (8-bit RGB, no filtering) encoding the pixels of a binary PPM.
+function encodePpmToPng(bytes: borrow[UN8]) -> [UN8] {
+    let header = ppmHeader(bytes)
+    let width = header.width
+    let height = header.height
+    let rowBytes = width * PpmText.bytesPerPixel
+
+    var raw: [UN8] = []
+    for y in 0..height {
+        raw.append(PngFormat.filterNone)
+        for x in 0..rowBytes {
+            raw.append(bytes[header.pixelOffset + y * rowBytes + x])
+        }
+    }
+
+    let table = crcTable()
+    // The signature: a high byte, "PNG", CR LF, EOF, LF — each catching a
+    // different way a transfer can mangle a binary file.
+    let signature: [UN8] = [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]
+    var png = ByteWriter { order: .Big }
+    for byte in signature { png.writeU8(U8(byte)) }
+
+    var ihdr = ByteWriter { order: .Big }
+    ihdr.writeU32(U32(width))
+    ihdr.writeU32(U32(height))
+    ihdr.writeU8(U8(PngFormat.bitDepth))
+    ihdr.writeU8(U8(PngFormat.colourTypeRgb))
+    ihdr.writeU8(U8(PngFormat.compressionDeflate))
+    ihdr.writeU8(U8(PngFormat.filterAdaptive))
+    ihdr.writeU8(U8(PngFormat.interlaceNone))
+    let empty: [UN8] = []
+    appendChunk(png, "IHDR", ihdr.bytes, table)
+    appendChunk(png, "IDAT", deflateStored(raw), table)
+    appendChunk(png, "IEND", empty, table)
+    return png.bytes
+}
+
+// Why a PPM could not become a PNG.
+enum ConvertFailure {
+    File(FileFailure)
+    NoPixels(String)
+}
+
+// Reads a binary PPM at `source` and writes its PNG to `target`.
+function convertPpmFileToPng(
+    source: borrow String,
+    target: borrow String
+) -> Result<Void, ConvertFailure> {
+    let size = match fileSize(source) {
+        Ok(size) -> size
+        Error(failure) -> return .Error(.File(failure))
+    }
+    let bytes = match readFileRange(source, 0, size) {
+        Ok(bytes) -> bytes
+        Error(failure) -> return .Error(.File(failure))
+    }
+    if bytes.count == 0 {
+        return .Error(.NoPixels(copy source))
+    }
+    return match writeFileBytes(target, encodePpmToPng(bytes)) {
+        Ok -> .Ok
+        Error(failure) -> .Error(.File(failure))
+    }
+}

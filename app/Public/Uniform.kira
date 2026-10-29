@@ -1,0 +1,40 @@
+// A uniform buffer, and the CPU-side floats a draw call reads directly off it.
+//
+// The floats live behind `storage`, recovered through `nativeState` exactly
+// as `RenderEncoder`'s and `UiBatch`'s own state is: a caller almost always
+// holds a `GraphicsUniform` through a `let`, and `nativeRecover` mutates what
+// `storage` points to regardless of whether the binding that read it was a
+// `let` or a `var`. A bind group's `UniformBindEntry` copies this same
+// `GraphicsUniform` value — same `storage` pointer — so `setUniformValues`
+// reaches every bind group that ever captured it, exactly as it did when a
+// C-side table held the values behind an id. There is no such table anymore:
+// uniforms were never a resource the backend tracked, and the values now live in
+// the one place everyone already shares.
+//
+// The values are `Number`s, as everywhere on the public surface. A uniform
+// block is still a byte layout the GPU indexes — std140 packs these as 32-bit
+// floats — so a backend narrows them once, when it writes the block, and the
+// public count is a count of those floats rather than a count of numbers.
+public struct UniformState {
+    var label: String = ""
+    var expectedFloatCount: UN32 = 0
+    var values: [Number] = []
+}
+
+public class GraphicsUniform {
+    // Typed affine owner of the CPU-side uniform state. Copying this owner is
+    // only possible through the explicit `nativeUserData(owner)` clone
+    // operation, and ordinary structural drop releases it automatically.
+    var storage: NativeState<UniformState>
+    var id: UniformId = NoUniformId
+}
+
+public function emptyUniform() -> GraphicsUniform {
+    return GraphicsUniform { storage: nativeState(UniformState {}), id: NoUniformId }
+}
+
+// Replaces a uniform's current values in place.
+public function setUniformValues(uniform: borrow GraphicsUniform, data: borrow[Number]) {
+    var state = nativeRecover<UniformState>(uniform.storage)
+    state.values = data
+}

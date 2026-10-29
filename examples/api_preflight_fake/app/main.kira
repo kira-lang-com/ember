@@ -1,0 +1,17 @@
+import Ember
+
+// The fake backend's declarations live one concern per file beside this one
+// (`Fake*.kira`), and every `.kira` under `app/` is a member of the package —
+// so a copy kept here would be a second declaration of each, not a fallback.
+// This file is the entry point and nothing else.
+//
+// `fakeDrawCubeTrailingAlias` used to sit here too. It is a rejected
+// experiment, parked as `Fake/Rejected/TrailingBlockRenderPassCapture.kira.txt`
+// so the compiler skips it; the live copy here was the half that never got
+// deleted, and it had drifted — string literals where the modules now use
+// `FakeLoadAction` and friends.
+
+@Main
+function main() {
+    print("api_preflight_fake")
+}

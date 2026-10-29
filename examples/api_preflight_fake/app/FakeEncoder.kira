@@ -1,0 +1,77 @@
+class FakeRenderEncoder {
+    var pipeline: FakeRenderPipeline = FakeRenderPipeline {}
+    var vertexBuffer: FakeGraphicsBuffer = FakeGraphicsBuffer {}
+    var hasVertexBuffer: Bool = false
+    var indexBuffer: FakeGraphicsBuffer = FakeGraphicsBuffer {}
+    var hasIndexBuffer: Bool = false
+    var indexFormat: FakeIndexFormat = FakeIndexFormat.uint32
+    var bindGroup0: FakeBindGroup = FakeBindGroup {}
+    var hasBindGroup0: Bool = false
+    var bindGroup1: FakeBindGroup = FakeBindGroup {}
+    var hasBindGroup1: Bool = false
+    var bindGroup2: FakeBindGroup = FakeBindGroup {}
+    var hasBindGroup2: Bool = false
+    var bindGroup3: FakeBindGroup = FakeBindGroup {}
+    var hasBindGroup3: Bool = false
+    var vertexCount: Number = 0
+    var indexCount: Number = 0
+    var instanceCount: Number = 1
+
+    function setPipeline(pipeline: borrow FakeRenderPipeline) {
+        self.pipeline = pipeline
+    }
+
+    function setVertexBuffer(buffer: borrow FakeGraphicsBuffer) {
+        self.vertexBuffer = buffer
+        self.hasVertexBuffer = true
+    }
+
+    function setIndexBuffer(buffer: borrow FakeGraphicsBuffer, format: FakeIndexFormat) {
+        self.indexBuffer = buffer
+        self.indexFormat = format
+        self.hasIndexBuffer = true
+    }
+
+    function setBindGroup(slot: Number, bindGroup: borrow FakeBindGroup) {
+        if (slot == 0) {
+            self.bindGroup0 = bindGroup
+            self.hasBindGroup0 = true
+        }
+        if (slot == 1) {
+            self.bindGroup1 = bindGroup
+            self.hasBindGroup1 = true
+        }
+        if (slot == 2) {
+            self.bindGroup2 = bindGroup
+            self.hasBindGroup2 = true
+        }
+        if (slot == 3) {
+            self.bindGroup3 = bindGroup
+            self.hasBindGroup3 = true
+        }
+    }
+
+    function draw(vertexCount: Number) {
+        self.vertexCount = vertexCount
+        self.indexCount = 0
+        self.instanceCount = 1
+    }
+
+    function drawIndexed(indexCount: Number) {
+        self.indexCount = indexCount
+        self.vertexCount = 0
+        self.instanceCount = 1
+    }
+
+    function drawInstanced(vertexCount: Number, instanceCount: Number) {
+        self.vertexCount = vertexCount
+        self.indexCount = 0
+        self.instanceCount = instanceCount
+    }
+
+    function drawIndexedInstanced(indexCount: Number, instanceCount: Number) {
+        self.indexCount = indexCount
+        self.vertexCount = 0
+        self.instanceCount = instanceCount
+    }
+}

@@ -1,0 +1,175 @@
+import Foundation
+import Heap
+
+// A render target whose memory leaves the process as an IOSurface.
+//
+// The surface is allocated first and the texture made over it, so the texture
+// draws into exactly the bytes another process maps. What crosses is a Mach
+// port naming the surface; the peer looks the surface up from it. Rows are
+// padded to what the device needs of a linear texture, and the stride reported
+// is the one the surface was given.
+//
+// Every color target here is BGRA8 — `metalPixelFormatForTexture` maps both
+// `.Swapchain` and `.Rgba8Unorm` to it — so that is what the memory holds.
+
+namespace MetalExport {
+    // 'BGRA', the IOSurface pixel format code of `MTLPixelFormatBGRA8Unorm`.
+    let surfacePixelFormat: U64 = 0x42475241
+    let bytesPerElement: U64 = 4
+    // `NSMachPortDeallocateSendRight`: invalidating the port releases the
+    // send right it wraps.
+    let deallocateSendRight: U64 = 1
+}
+
+function metalNSString(text: borrow String) -> RawPtr {
+    return metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), text)
+}
+
+function metalNSNumber(value: U64) -> RawPtr {
+    return metalMsgSend(metalObjcGetClass("NSNumber"), metalSel("numberWithUnsignedLong:"), value)
+}
+
+// The bytes one row of a `width`-wide BGRA8 surface spans: the packed row,
+// rounded up to the alignment the device needs to draw into linear memory.
+function metalExportRowBytes(device: RawPtr, width: UNumber) -> UNumber {
+    let alignment: U64 = metalMsgSend(
+        device,
+        metalSel("minimumLinearTextureAlignmentForPixelFormat:"),
+        MetalRegistry.pixelFormatBGRA8Unorm
+    )
+    return alignedUp(width * MetalExport.bytesPerElement, max(Number(alignment), 1))
+}
+
+// A new IOSurface of `width` by `height` BGRA8 pixels, +1-owned, or null.
+function metalNewSurface(width: UNumber, height: UNumber, rowBytes: UNumber) -> RawPtr {
+    let properties: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMutableDictionary"),
+        metalSel("dictionary")
+    )
+    metalSetSurfaceProperty(properties, "IOSurfaceWidth", width)
+    metalSetSurfaceProperty(properties, "IOSurfaceHeight", height)
+    metalSetSurfaceProperty(properties, "IOSurfaceBytesPerElement", MetalExport.bytesPerElement)
+    metalSetSurfaceProperty(properties, "IOSurfaceBytesPerRow", rowBytes)
+    metalSetSurfaceProperty(properties, "IOSurfacePixelFormat", MetalExport.surfacePixelFormat)
+    let surface: RawPtr = metalMsgSend(metalObjcGetClass("IOSurface"), metalSel("alloc"))
+    return metalMsgSend(surface, metalSel("initWithProperties:"), properties)
+}
+
+function metalSetSurfaceProperty(properties: RawPtr, key: borrow String, value: UNumber) {
+    metalMsgSend(
+        properties,
+        metalSel("setObject:forKey:"),
+        metalNSNumber(U64(value)),
+        metalNSString(key)
+    )
+}
+
+// A BGRA8 render target over `surface`, registered, or nothing.
+function metalSurfaceTexture(
+    ctx: RawPtr,
+    surface: RawPtr,
+    descriptor: borrow ExportedTextureDescriptor
+) -> Number? {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let desc: RawPtr = metalMsgSend(
+        metalObjcGetClass("MTLTextureDescriptor"),
+        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+        MetalRegistry.pixelFormatBGRA8Unorm,
+        descriptor.width,
+        descriptor.height,
+        false
+    )
+    metalMsgSend(
+        desc,
+        metalSel("setUsage:"),
+        MetalRegistry.textureUsageRenderTarget | MetalTexture.textureUsageShaderRead
+    )
+    metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModeShared)
+    let texture: RawPtr = metalMsgSend(
+        device,
+        metalSel("newTextureWithDescriptor:iosurface:plane:"),
+        desc,
+        surface,
+        U64(0)
+    )
+    return metalRegisterNew(ctx, texture)
+}
+
+public function metalCreateExportedTexture(
+    ctx: RawPtr,
+    descriptor: borrow ExportedTextureDescriptor
+) -> ExportedTextureResult {
+    let fourByteColor = descriptor.format == .Swapchain || descriptor.format == .Rgba8Unorm
+    if descriptor.width <= 0 || descriptor.height <= 0 || !fourByteColor {
+        return .Error(.InvalidDescriptor)
+    }
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let rowBytes = metalExportRowBytes(device, descriptor.width)
+    let surface = metalNewSurface(descriptor.width, descriptor.height, rowBytes)
+    if isNull(surface) {
+        return .Error(.DeviceRefused)
+    }
+    let textureId = metalSurfaceTexture(ctx, surface, descriptor)
+    // The texture holds the surface from here; the port is a separate right.
+    let port = metalIOSurfaceCreateMachPort(surface)
+    let stride: U64 = metalMsgSend(surface, metalSel("bytesPerRow"))
+    metalMsgSend(surface, metalSel("release"))
+    let id = match textureId {
+        Some(id) -> id
+        None -> {
+            metalReleaseMachPort(UN32(port))
+            return .Error(.DeviceRefused)
+        }
+    }
+    // Mach's null port: the surface would not export.
+    if UNumber(port) == 0 {
+        metalUnregister(ctx, id)
+        return .Error(.DeviceRefused)
+    }
+    return .Ok(metalExportedTexture(descriptor, id, UN32(port), UN32(stride)))
+}
+
+// What the caller gets: the texture a pass draws into, and the surface as a
+// peer needs it described.
+function metalExportedTexture(
+    descriptor: borrow ExportedTextureDescriptor,
+    textureId: Number,
+    port: UN32,
+    stride: UN32
+) -> ExportedTexture {
+    let texture = TextureDescriptor {
+        label: descriptor.label,
+        width: descriptor.width,
+        height: descriptor.height,
+        usage: .RenderTargetSampled
+    }
+    let memory = ExportedMemory {
+        kind: .IOSurface,
+        handle: port,
+        width: descriptor.width,
+        height: descriptor.height,
+        stride: stride,
+        format: .Bgra8Unorm
+    }
+    return ExportedTexture { texture: metalGraphicsTexture(textureId, texture), memory: memory }
+}
+
+// Releases this process's send right to `port`, through the one Foundation
+// call that does it without reading `mach_task_self_`.
+function metalReleaseMachPort(port: UN32) {
+    if port == 0 {
+        return
+    }
+    let wrapper: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSMachPort"),
+        metalSel("portWithMachPort:options:"),
+        U64(port),
+        MetalExport.deallocateSendRight
+    )
+    metalMsgSend(wrapper, metalSel("invalidate"))
+}
+
+public function metalDestroyExportedTexture(ctx: RawPtr, exported: borrow ExportedTexture) {
+    metalUnregister(ctx, exported.texture.id.raw)
+    metalReleaseMachPort(exported.memory.handle)
+}

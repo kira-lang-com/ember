@@ -1,0 +1,374 @@
+import Heap
+
+// macOS host window + run loop for self-contained Metal apps, created from Kira via
+// FFI (no shim). The backend creates an NSApplication, an NSWindow, and returns the
+// window's content view; the Metal context attaches a CAMetalLayer to that view and
+// drives draw/present each frame while the run loop is pumped between frames.
+//
+// (When the platform runner provides its own NSView/UIView, the backend skips this
+// and attaches to the provided view instead — see metalContextAttachLayerToView.)
+
+// Transform the process into a foreground GUI app (NSApplication, Regular
+// activation policy, finishLaunching) WITHOUT creating a window yet. Hoisted
+// ahead of Metal device creation: a spawned live-runner process that has not
+// yet become a foreground app can hang in MTLCreateSystemDefaultDevice (its
+// GPU/WindowServer XPC never gets serviced under App Nap / background status).
+// Idempotent — sharedApplication is a singleton.
+public function metalActivateApp(): Void {
+    if metalUsesUIKit!() { return }
+    let app: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSApplication"),
+        metalSel("sharedApplication")
+    )
+    metalMsgSend(app, metalSel("setActivationPolicy:"), MetalWindow.activationPolicyRegular)
+    metalMsgSend(app, metalSel("activateIgnoringOtherApps:"), true)
+    metalMsgSend(app, metalSel("finishLaunching"))
+}
+
+// Create the application + window `app` asks for and return the content view
+// to render into.
+public function metalCreateWindow(app: borrow GraphicsApplication) -> RawPtr {
+    if metalUsesUIKit!() { return metalUIKitContentView() }
+    metalActivateApp()
+    let windowAlloc: RawPtr = metalMsgSend(metalObjcGetClass("NSWindow"), metalSel("alloc"))
+    let window: RawPtr = metalMsgSend(
+        windowAlloc,
+        metalSel("initWithContentRect:styleMask:backing:defer:"),
+        MetalWindow.initialOrigin,
+        MetalWindow.initialOrigin,
+        Float(app.width),
+        Float(app.height),
+        MetalWindow.windowStyleMask,
+        MetalWindow.windowBackingBuffered,
+        false
+    )
+    let nsTitle: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSString"),
+        metalSel("stringWithUTF8String:"),
+        app.title
+    )
+    metalMsgSend(window, metalSel("setTitle:"), nsTitle)
+    metalWindowApplyTitlebar(window, app.titlebar)
+    metalMsgSend(window, metalSel("makeKeyAndOrderFront:"), metalObjcGetClass("NSObject"))
+    metalWindowApplyStartMode(window, app.windowMode)
+    let view: RawPtr = metalMsgSend(window, metalSel("contentView"))
+    metalViewKeepPresses(view)
+    return view
+}
+
+// Every press on the content view is the application's. The content runs
+// under the title bar, and in a window laid out that way AppKit moves the
+// window from a press anywhere on the bar unless the view under it claims the
+// bar as its own: the view's rectangle that is opaque to a window move there.
+// The private `-_opaqueRectForWindowMoveWhenInTitlebar` asks for it, and
+// NSView answers an empty one. The content view answers its bounds — the
+// whole view is the application's — by taking NSView's own `-bounds`, which
+// has the same signature. A press on a control drawn on the bar is then the
+// control's, and the part the application draws as bare title bar still moves
+// the window, through the drag region the event pump hands the window.
+public function metalViewKeepPresses(view: RawPtr): Void {
+    var cls = metalObjcGetClass("KiraMetalContentView")
+    if isNull(cls) {
+        cls = metalObjcAllocateClassPair(metalObjectGetClass(view), "KiraMetalContentView", 0)
+        let bounds = metalClassGetMethodImplementation(
+            metalObjcGetClass("NSView"),
+            metalSel("bounds")
+        )
+        let added = metalClassAddMethodImplementation(
+            cls,
+            metalSel("_opaqueRectForWindowMoveWhenInTitlebar"),
+            bounds,
+            "{CGRect={CGPoint=dd}{CGSize=dd}}@:"
+        )
+        if !added {
+            log fault("the runtime refused the content view's titlebar rect")
+        }
+        metalObjcRegisterClassPair(cls)
+    }
+    // The class it had is not needed back: the view keeps this one for life.
+    metalObjectSetClass(view, cls)
+}
+
+// Pump the main run loop for `seconds` so Core Animation / timers run between frames.
+public function metalSpinRunLoop(seconds: Number) {
+    let runloop: RawPtr = metalMsgSend(metalObjcGetClass("NSRunLoop"), metalSel("currentRunLoop"))
+    let until: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSDate"),
+        metalSel("dateWithTimeIntervalSinceNow:"),
+        Float(seconds)
+    )
+    metalMsgSend(runloop, metalSel("runUntilDate:"), until)
+}
+
+// The shared NSApplication (singleton), used to dispatch the event queue each frame.
+public function metalSharedApp() -> RawPtr {
+    if metalUsesUIKit!() {
+        return metalMsgSend(metalObjcGetClass("UIApplication"), metalSel("sharedApplication"))
+    }
+    return metalMsgSend(metalObjcGetClass("NSApplication"), metalSel("sharedApplication"))
+}
+
+// Cursor visibility on the native Metal window path (Sokol's sapp_show_mouse is a
+// no-op here). `[NSCursor hide]`/`[NSCursor unhide]` are counted, so calls must be
+// balanced — one hide per one unhide.
+public function metalSetCursorHidden(hidden: Bool) {
+    let cls = metalObjcGetClass("NSCursor")
+    if hidden {
+        metalMsgSend(cls, metalSel("hide"))
+    } else {
+        metalMsgSend(cls, metalSel("unhide"))
+        // Manual hide/unhide leaves the window's AUTOMATIC cursor rectangles
+        // stale, so AppKit stops re-asserting the edge resize cursors (the frame
+        // just shows the arrow). Invalidating them forces a rebuild on the next
+        // pointer move, restoring the resize arrows at the window border.
+        let app = metalSharedApp()
+        let window: RawPtr = metalMsgSend(app, metalSel("keyWindow"))
+        if !isNull(window) {
+            let view: RawPtr = metalMsgSend(window, metalSel("contentView"))
+            metalMsgSend(window, metalSel("invalidateCursorRectsForView:"), view)
+        }
+    }
+}
+
+// The virtual pointer's coordinates, stored in the context as fixed point.
+//
+// A locked pointer walks off the window by design, so its coordinates go
+// negative — and the context stores `U64`. A +100000 point bias covers any
+// screen this runs on in either direction, and a thousandth of a point is far
+// finer than the pixel the value ends up addressing.
+//
+// The resolution is thousandths of a point.
+public namespace LockCoord {
+    let resolution: UNumber = 1000
+}
+
+public function metalLockCoordStore(value: Number) -> U64 {
+    return U64(Int((value + MetalWindow.lockCoordBias) * LockCoord.resolution))
+}
+public function metalLockCoordLoad(raw: U64) -> Number {
+    return Number(metalU64ToInt(raw)) / LockCoord.resolution - MetalWindow.lockCoordBias
+}
+
+// Lock the pointer in place for a look/pan drag on the native Metal window path.
+//
+// Hiding the cursor is not locking it: an invisible cursor still tracks the
+// hardware, so it walks out of the window, lands on another app, and stops
+// producing movement once it reaches a screen edge — which reads as the camera
+// jamming against an invisible wall. Disassociating freezes it where it stands
+// while deltas keep flowing.
+//
+// Idempotent at the OS level (unlike `[NSCursor hide]`, this is a flag rather
+// than a count), but callers should still pair lock with unlock so the pointer
+// never stays frozen after a drag ends.
+public function metalSetMouseLocked(locked: Bool) {
+    if metalPlatformAssociateMouseAndCursor!(!locked) != MetalWindow.coreGraphicsSuccess {
+        log fault("Core Graphics refused to change whether the mouse moves the cursor")
+    }
+}
+
+// State the live-resize delegate needs. It contains only opaque handles, so the
+// Objective-C callback crosses no native-backed Kira struct.
+public struct MetalLiveState {
+    var ctx: RawPtr
+    var userData: RawPtr
+    var runtimeUserData: RawPtr
+    var closed: Bool = false
+}
+
+// Keep frame construction and the application's frame-handler call behind a
+// native-to-native RawPtr-only seam. In a hybrid build the Objective-C callback
+// must not make RenderFrame cross through the bytecode half.
+public function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: RawPtr) {
+    let pool = metalAutoreleasePoolPush()
+    metalContextBeginFrameTiming(ctx)
+    metalContextSyncViewportFromView(ctx)
+    let graphics = Graphics { userData: userData, backend: .Metal, backendContext: ctx }
+    var frame = graphics.frame()
+    var runtimeState = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    runtimeState.app.frameHandler(frame)
+    graphicsSubmitFrame(frame)
+    metalContextEndFrameTiming(ctx)
+    metalAutoreleasePoolPop(pool)
+}
+
+// The -windowDidResize: IMP. AppKit posts this repeatedly while the user drags
+// the window edge — inside its modal resize-tracking loop, where the manual
+// Kira frame loop is blocked. Submit a complete app frame here so layout and
+// rendering follow every intermediate window size instead of stretching the
+// last texture until mouse-up.
+public function metalResizeImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
+    let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
+    if isNull(value) {
+        return
+    }
+    let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
+    if isNull(statePtr) {
+        return
+    }
+    var state = nativeRecover<MetalLiveState>(statePtr)
+    metalRenderLiveFrame(state.ctx, state.userData, state.runtimeUserData)
+}
+
+// Closing is distinct from hiding or minimizing: hidden windows deliberately keep
+// rendering at half display cadence, while a real close terminates the app loop.
+public function metalWindowCloseImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
+    let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
+    if isNull(value) {
+        return
+    }
+    let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
+    if isNull(statePtr) {
+        return
+    }
+    var state = nativeRecover<MetalLiveState>(statePtr)
+    state.closed = true
+}
+
+public function metalLiveStateClosed(statePtr: RawPtr) -> Bool {
+    let state = nativeRecover<MetalLiveState>(statePtr)
+    return state.closed
+}
+
+// Build (once) an NSWindowDelegate class whose -windowDidResize: is the Kira IMP
+// above, instantiate it, associate the live state with it, and set it as the window's
+// delegate. OBJC_ASSOCIATION_RETAIN_NONATOMIC = 1 keeps the NSValue carrying the
+// state pointer alive until `metalRemoveResizeDelegate` tears the callback down.
+public function metalInstallResizeDelegate(window: RawPtr, statePtr: RawPtr) -> RawPtr? {
+    // A UIKit view is resized by its scene, with no window delegate to install.
+    if metalUsesUIKit!() { return .None }
+    var cls = metalObjcGetClass("KiraMetalResizeDelegate")
+    if isNull(cls) {
+        cls = metalObjcAllocateClassPair(
+            metalObjcGetClass("NSObject"),
+            "KiraMetalResizeDelegate",
+            0
+        )
+        if !metalClassAddMethod(cls, metalSel("windowDidResize:"), metalResizeImp, "v@:@") {
+            log fault("the runtime refused the resize delegate's windowDidResize:")
+        }
+        if !metalClassAddMethod(cls, metalSel("windowWillClose:"), metalWindowCloseImp, "v@:@") {
+            log fault("the runtime refused the resize delegate's windowWillClose:")
+        }
+        metalObjcRegisterClassPair(cls)
+    }
+    let delegate: RawPtr = metalMsgSend(metalMsgSend(cls, metalSel("alloc")), metalSel("init"))
+    let value: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSValue"),
+        metalSel("valueWithPointer:"),
+        statePtr
+    )
+    metalObjcSetAssociatedObject(delegate, metalSel("kiraLiveState"), value, 1)
+    metalMsgSend(window, metalSel("setDelegate:"), delegate)
+    return .Some(delegate)
+}
+
+// Detach the callback before its native state is destroyed. The delegate was
+// created with `alloc`, so clearing the association and releasing it here also
+// balances the Objective-C ownership established by installation.
+public function metalRemoveResizeDelegate(window: RawPtr, installed: RawPtr?) {
+    let delegate = match installed {
+        Some(delegate) -> delegate
+        // Nothing was installed, so there is nothing to detach.
+        None -> return
+    }
+    metalMsgSend(window, metalSel("setDelegate:"), nullPointer())
+    metalObjcSetAssociatedObject(delegate, metalSel("kiraLiveState"), nullPointer(), 1)
+    metalMsgSend(delegate, metalSel("release"))
+}
+
+// Whether the content view's window is still on screen (false once closed).
+public function metalViewWindowVisible(view: RawPtr) -> Bool {
+    if metalUsesUIKit!() { return metalViewWindowState(view) != .Hidden }
+    let window: RawPtr = metalMsgSend(view, metalSel("window"))
+    if isNull(window) {
+        return false
+    }
+    return metalMsgSend(window, metalSel("isVisible"))
+}
+
+// How much of the window is on screen, as AppKit and UIKit report it. Both
+// visible states run at full display cadence; only `.Hidden` is throttled.
+public function metalViewWindowState(view: RawPtr) -> WindowState {
+    let window: RawPtr = metalMsgSend(view, metalSel("window"))
+    if isNull(window) {
+        return .Hidden
+    }
+    if metalUsesUIKit!() {
+        if metalMsgSend(window, metalSel("isHidden")) { return .Hidden }
+        return metalViewFocusState(window)
+    }
+    let visible: Bool = metalMsgSend(window, metalSel("isVisible"))
+    let miniaturized: Bool = metalMsgSend(window, metalSel("isMiniaturized"))
+    let occlusion: U64 = metalMsgSend(window, metalSel("occlusionState"))
+    let occlusionVisible = (occlusion & MetalWindow.occlusionStateVisible) != 0
+    if !visible || miniaturized || !occlusionVisible {
+        return .Hidden
+    }
+    return metalViewFocusState(window)
+}
+
+// Focus alone, for a window already known to be on screen.
+public function metalViewFocusState(window: RawPtr) -> WindowState {
+    if metalMsgSend(window, metalSel("isKeyWindow")) {
+        return .FocusedVisible
+    }
+    return .VisibleUnfocused
+}
+
+public function metalViewMaximumFramesPerSecond(view: RawPtr) -> Number {
+    let window: RawPtr = metalMsgSend(view, metalSel("window"))
+    if isNull(window) {
+        return 60
+    }
+    let screen: RawPtr = metalMsgSend(window, metalSel("screen"))
+    if isNull(screen) {
+        return 60
+    }
+    let refresh = Number(metalMsgSendCount(screen, metalSel("maximumFramesPerSecond")))
+    if refresh > 0 {
+        return refresh
+    }
+    return 60
+}
+
+// The frame interval a hidden window paces itself to: half of what the display
+// refreshes at, so a window nobody is looking at costs half as much without ever
+// waking up to full rate.
+public function metalWindowTargetInterval(maximumFramesPerSecond: Number) -> Number {
+    if maximumFramesPerSecond <= 0 {
+        return 0
+    }
+    return 2 / maximumFramesPerSecond
+}
+
+// Return only the unspent part of the hidden-window frame budget. Sleeping for a
+// full 1/30 s after 14 ms of GPU work would produce ~21 FPS, not half-vsync.
+public function metalWindowRemainingInterval(
+    frameStartNs: U64,
+    maximumFramesPerSecond: Number
+) -> Number {
+    let target = metalWindowTargetInterval(maximumFramesPerSecond)
+    let now = metalClockNs(MetalForeign.clockUptimeRaw)
+    var elapsed: UNumber = 0
+    if now > frameStartNs {
+        elapsed = secondsFromNanoseconds(Number(now - frameStartNs))
+    }
+    if elapsed >= target {
+        return 0
+    }
+    return target - elapsed
+}
+
+public namespace MetalWindow {
+    // NSWindowOcclusionStateVisible: set while any part of the window is on screen.
+    let occlusionStateVisible: U64 = 1 << 1
+    let windowStyleMask: U64 = 15
+    let windowBackingBuffered: U64 = 2
+    let activationPolicyRegular: U64 = 0
+    // Where a new window's content starts, in points from the screen's
+    // bottom-left corner, before its start mode places it.
+    let initialOrigin: Float = 120.0
+    let lockCoordBias: UNumber = 100000
+    // `kCGErrorSuccess`, what every Core Graphics display call answers on success.
+    let coreGraphicsSuccess: I32 = 0
+}

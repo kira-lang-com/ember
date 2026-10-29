@@ -1,0 +1,171 @@
+# Architecture
+
+Ember is organized around a stable public facade, explicit descriptor data, a runtime/validation core, and backend implementations for Metal, Dawn, and Vulkan.
+
+## Layers
+
+`app/Public/`
+
+- user-facing API objects and handles such as `GraphicsApplication`, `Graphics`, `RenderFrame`, `RenderEncoder`, `GraphicsBuffer`, `GraphicsTexture`, `GraphicsShader`, and `RenderPipeline`
+- typed enum values for formats, usage, topology, blending, and depth
+- lifecycle callback surface that examples import directly through `Ember`
+
+`app/Core/`
+
+- runtime flow from lifecycle callbacks to frame submission
+- diagnostics and bookkeeping that should stay backend-agnostic
+
+`app/Resources/` and `app/Shader/`
+
+- descriptor-first value data for buffers, textures, pipelines, and render passes
+- KSL path helper descriptors without exposing raw backend asset APIs
+
+`app/Backend/`
+
+- opaque backend handle types
+- Metal, Dawn, and Vulkan translation and submission logic in their backend
+  directories
+- platform-native window seams stay beside the backend that owns them
+
+## Why The Pass Model Is Descriptor-First
+
+A render pass is not just a clear color. It owns attachment targets, load/store actions, resolve intent, and depth/stencil participation. That matters for both 3D rendering and advanced UI/effects foundations.
+
+Because of that, the public API is built around `RenderPassDescriptor` with explicit `ColorAttachment`, `DepthAttachment`, and `StencilAttachment` data. The older clear-color-only compatibility helpers still exist, but they map into the descriptor-first pass model instead of replacing it.
+
+## Why The Core Encoder Stays Generic
+
+Kira UI Foundation is expected to be a client of Ember, not the definition of Ember. The core encoder therefore exposes generic pipeline/buffer/indexed draw operations instead of UI-specific methods like panel draws or glow passes.
+
+That preserves room for:
+
+- 3D scenes and engine rendering
+- depth-enabled geometry
+- post-processing and offscreen pipelines
+- UI/effects renderers built on the same buffer/pipeline/pass foundation
+
+## Current Compiler Constraints
+
+The implementation pass follows `docs/api-preflight-report.md` directly. The important current constraints are:
+
+- descriptor values are typed enums; backend wire codes stay at the FFI edge
+- typed empty array defaults are not reliable, so descriptor arrays are always explicitly populated
+- array-of-struct literals require commas between elements
+- the public surface uses `Number`, `UNumber` and the sized aliases: vertex and
+  uniform data are `[Number]`, index and storage words are `[UN32]`, pixels are
+  `[UN8]`, and each backend narrows them to the device's width when it writes
+  the bytes
+- trailing render-pass callbacks are viable only when captured state members are first hoisted into local aliases
+
+The local-alias rule is the public guidance today:
+
+```kira
+let pipeline = state.pipeline
+let vertices = state.vertices
+
+frame.renderPass(pass) { encoder in
+    encoder.setPipeline(pipeline)
+    encoder.setVertexBuffer(vertices)
+    encoder.draw(3)
+}
+```
+
+Direct `state.pipeline`-style capture inside the render-pass callback body is still not safe.
+
+## Current Backend Scope
+
+Metal is the Apple backend. Dawn owns the WebGPU path and remains available on
+Windows, Linux, and Web. Vulkan is the direct desktop backend on x86_64 and
+aarch64 Linux plus x86_64 Windows:
+
+- the core API is generated from the vendored Vulkan-Headers
+- Win32 and Wayland surface creation lives in one small C ABI seam
+- device memory, host-visible ring buffers, images, samplers, SPIR-V shader
+  modules, descriptor sets, dynamic-rendering pipelines, compute dispatch, and
+  swapchain presentation are owned by `app/Backend/Vulkan/`
+- the Vulkan harness can capture a presented BGRA/RGBA frame as a PPM for pixel
+  inspection
+
+The Vulkan path deliberately has no macOS target; Metal owns Apple and avoids a
+second MoltenVK distribution path.
+
+## Future Migration Path
+
+The public descriptor shapes are meant to survive the next compiler step. The planned migration is:
+
+1. replace Int-returning constant helpers with enum-backed descriptor values once `kirac` supports them reliably
+2. remove the local-alias callback rule once direct outer-member capture is sound
+    3. expand backend coverage for multiple color attachments, richer resolve
+       targets, and additional Vulkan device features
+
+That path keeps today’s compiler-safe API honest while preserving the intended long-term graphics architecture.
+
+## The Metal Backend (no shim)
+
+`RenderBackendKind.Metal` is a from-scratch Metal backend for Apple platforms,
+selected per-platform alongside Dawn and Vulkan. It
+replaces the legacy cross-platform path on Apple with a real `CAMetalLayer`
+surface.
+
+Crucially it uses **no C or Objective-C shim**. The backend drives Metal,
+QuartzCore and AppKit/UIKit *directly* from Kira through FFI to the Objective-C
+runtime — `objc_getClass`, `sel_registerName`, and typed `objc_msgSend` aliases —
+plus the single Metal C entry point `MTLCreateSystemDefaultDevice`. `app/Backend/
+Metal/MetalForeign.kira` is the entire foreign surface; everything else
+(`MetalContext`, `MetalResources`, `MetalTexture`, `MetalBindGroup`, `MetalFrame`,
+`MetalApplication`) is ordinary Kira. `NativeLibs/Metal.toml` is a source-less
+descriptor that only links the system frameworks.
+
+Because the Metal API is Objective-C *messages* rather than C functions, the
+foreign surface is hand-authored (one typed `objc_msgSend` alias per call shape);
+there is no C header to autobind, which is what autobinding (used for Dawn/Vulkan)
+requires.
+
+The context is a small raw heap block threaded as a `RawPtr` handle. It owns the
+`MTLDevice`/`MTLCommandQueue`, the current color target (an offscreen `MTLTexture`
+for headless tests, or a `CAMetalLayer` drawable on screen), the in-flight command
+buffer + encoder, an optional `Depth32Float` target + depth-stencil state, and a
+small id→pointer registry that maps the public `UN32` resource ids to live Metal
+objects. Resource creation and draw encoding are dispatched by backend from the
+public `Graphics`/`RenderEncoder` facade; the encoder selects Metal mode by the
+presence of a non-null context handle.
+
+Implemented and verified (via the `tests/metal_kik` Test harness, which renders
+real frames offscreen and asserts the produced pixels):
+
+- color clear and `CAMetalLayer` drawable present
+- runtime MSL shader compilation, render pipeline state, vertex + index buffers
+- non-indexed and indexed draws
+- uniform buffers bound to the vertex and fragment stages
+- depth buffer + depth-tested passes (`Depth24Stencil8` requests map to
+  `Depth32Float`, which is what Apple GPUs support)
+- textures + samplers, and bind groups mapping uniforms/textures/samplers to slots
+- premultiplied-alpha blended pipelines, dynamic vertex-stream buffers (write
+  straight into the buffer's shared `contents`), and glyph-atlas sub-region uploads —
+  the primitives the UI Foundation batched compositor draws through
+- an on-screen `NSWindow` + `CAMetalLayer` with a live monotonic frame clock (for an
+  FPS readout) and per-frame view-bounds tracking, so the drawable and the consuming
+  UI layout reflow during an interactive window resize
+- the launch harness (`HarnessConfig`, or the `KIRA_GRAPHICS_CAPTURE_FRAME` /
+  `KIRA_GRAPHICS_CAPTURE_AT` / `KIRA_GRAPHICS_QUIT_AFTER_FRAMES` environment
+  spelling): a run captures the frame the window was handed as a binary PPM and
+  quits after a stated number of frames. The capture reads the DRAWABLE, taken
+  before the frame is submitted and read back after its command buffer completes,
+  so it is what the screen received rather than whatever texture the context
+  happened to end the frame pointing at. A capture run opts the layer out of
+  `framebufferOnly`; every other run keeps it.
+
+Run the suite with:
+
+```
+KIRA_PURE_TEST=1 kira test --backend hybrid tests/metal_kik
+```
+
+UI Foundation renders **entirely through this abstraction** on Metal (no immediate-mode
+helpers, no shim): `basic-foundation-app` and a `kira_ui` widget app run on screen as a
+single batched SDF-surface + glyph-atlas draw per frame, resizable, at interactive
+frame rates.
+
+The remaining platform boundary is iOS UIKit and on-device verification. Vulkan
+verification belongs on its Linux and Windows target runners; the macOS host
+only proves that the optional Vulkan library is excluded and Metal still links.

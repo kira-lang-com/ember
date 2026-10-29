@@ -1,0 +1,246 @@
+import Heap
+
+// Ember Metal backend — compute pipelines + dispatch.
+//
+// A KSL compute shader lowers to an MSL `kernel`; this compiles one into an
+// MTLComputePipelineState and encodes the one dispatch shape the engine has —
+// the separable texture blur behind Liquid Glass.
+
+// Build an MTLComputePipelineState from a compiled shader library + kernel entry name.
+public function metalCreateComputePipeline(
+    ctx: RawPtr,
+    shaderId: Number,
+    entryName: borrow String
+) -> Number {
+    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+    let library = metalLookup(ctx, shaderId)
+    let fnName: RawPtr = metalMsgSend(
+        metalObjcGetClass("NSString"),
+        metalSel("stringWithUTF8String:"),
+        entryName
+    )
+    let fn: RawPtr = metalMsgSend(library, metalSel("newFunctionWithName:"), fnName)
+    let errSlot = metalMemAlloc(8)
+    metalMemWriteU64(errSlot, 0, 0)
+    let pipeline: RawPtr = metalMsgSend(
+        device,
+        metalSel("newComputePipelineStateWithFunction:error:"),
+        fn,
+        errSlot
+    )
+    // fn (newFunctionWithName:) is a +1-owned transient; the compute pipeline state
+    // retains what it needs, so release it here rather than leaking one per pipeline.
+    metalMsgSend(fn, metalSel("release"))
+    metalMemFree(errSlot)
+    return metalRegister(ctx, pipeline)
+}
+
+namespace MetalComputeTile {
+    // The square of threads one threadgroup of the blur pair covers.
+    let size: UNumber = 16
+    // `MTLSize`: three NSUIntegers.
+    let sizeBytes: U64 = U64(24)
+    // The pair's uniform, rounded up to 16 bytes the way `std140` rounds a struct.
+    let extentBytes: U64 = U64(32)
+}
+
+// The threads a dispatch covers and how many share a threadgroup.
+struct MetalGrid {
+    var width: UNumber = 1
+    var height: UNumber = 1
+    var groupWidth: UNumber = 1
+    var groupHeight: UNumber = 1
+}
+
+// An `MTLSize` built in memory, because arm64 passes a 24-byte struct by
+// pointer. The caller frees it.
+function metalSize(width: UNumber, height: UNumber) -> RawPtr {
+    let size = metalMemAlloc(MetalComputeTile.sizeBytes)
+    metalMemWriteU64(size, U64(0), U64(width))
+    metalMemWriteU64(size, U64(8), U64(height))
+    metalMemWriteU64(size, U64(16), U64(1))
+    return size
+}
+
+// A compute encoder on the frame's command buffer with `pipeline` set.
+function metalComputeEncoder(ctx: RawPtr, pipeline: ComputePipelineId) -> RawPtr {
+    let commandBuffer = metalContextActiveCommandBuffer(ctx)
+    let encoder: RawPtr = metalMsgSend(commandBuffer, metalSel("computeCommandEncoder"))
+    metalMsgSend(
+        encoder,
+        metalSel("setComputePipelineState:"),
+        metalLookup(ctx, Number(pipeline.raw))
+    )
+    return encoder
+}
+
+// The encoder's kernel run over `grid`, and the encoder ended.
+function metalEncodeDispatch(encoder: RawPtr, grid: borrow MetalGrid) {
+    let threads = metalSize(grid.width, grid.height)
+    let perGroup = metalSize(grid.groupWidth, grid.groupHeight)
+    metalMsgSend(encoder, metalSel("dispatchThreads:threadsPerThreadgroup:"), threads, perGroup)
+    metalMsgSend(encoder, metalSel("endEncoding"))
+    metalMemFree(threads)
+    metalMemFree(perGroup)
+}
+
+// One half of the pair: the extent uniform at 0, the sampler at 1, then
+// `textures` — the two it reads and the two it writes — at 2 to 5.
+//
+// Both kernels take their target extent and the crossfade weight in a uniform
+// and their filtering from a bound sampler: a compute stage written in KSL can
+// neither query a texture's size nor declare a sampler inline, and the caller
+// knows the size it allocated. The padding word is written rather than left
+// holding whatever the allocation had.
+function metalEncodePairHalf(
+    ctx: RawPtr,
+    pipeline: ComputePipelineId,
+    pair: borrow TextureComputePair,
+    textures: borrow [GraphicsTexture],
+    region: borrow TextureComputeRegion
+) {
+    let encoder = metalComputeEncoder(ctx, pipeline)
+    let extent = metalMemAlloc(MetalComputeTile.extentBytes)
+    metalMemWriteF32(extent, U64(0), F32(pair.width))
+    metalMemWriteF32(extent, U64(4), F32(pair.height))
+    metalMemWriteF32(extent, U64(8), F32(pair.blend))
+    metalMemWriteF32(extent, U64(12), F32(0))
+    metalMemWriteF32(extent, U64(16), F32(region.x))
+    metalMemWriteF32(extent, U64(20), F32(region.y))
+    metalMemWriteF32(extent, U64(24), F32(region.width))
+    metalMemWriteF32(extent, U64(28), F32(region.height))
+    metalMsgSend(encoder, metalSel("setBytes:length:atIndex:"), extent, 32, 0)
+    // `setBytes:` copies into the encoder's own storage, so the extent may go
+    // back as soon as the encoder has taken it.
+    metalMemFree(extent)
+    metalMsgSend(
+        encoder,
+        metalSel("setSamplerState:atIndex:"),
+        metalLookup(ctx, Number(pair.sampler.id.raw)),
+        1
+    )
+    for (index, texture) in textures.enumerated() {
+        metalMsgSend(
+            encoder,
+            metalSel("setTexture:atIndex:"),
+            metalLookup(ctx, Number(texture.id.raw)),
+            U64(2 + index)
+        )
+    }
+    metalEncodeDispatch(
+        encoder,
+        MetalGrid {
+            width: region.width,
+            height: region.height,
+            groupWidth: MetalComputeTile.size,
+            groupHeight: MetalComputeTile.size
+        }
+    )
+}
+
+// Two-stage texture compute inside the active logical frame command buffer.
+// Stage H reads the two crossfade sources, blends them as it filters, and writes
+// two horizontal blur radii; stage V reads those intermediates and writes the
+// corresponding final textures. Keeping both stages on the frame command buffer
+// preserves render -> compute -> render order without a commit or CPU wait.
+public function metalDispatchTextureComputePair(ctx: RawPtr, pair: borrow TextureComputePair) {
+    if !pair.horizontalPipeline.isPresent() || !pair.verticalPipeline.isPresent() || pair.width == 0 || pair.height == 0 {
+        log fault(
+            "a two-pass texture dispatch needs two pipelines and a nonempty extent; it was dropped"
+        )
+        return
+    }
+    for asked in textureComputeRegions(pair) {
+        let horizontal = textureComputeRegion(pair, asked, true)
+        let vertical = textureComputeRegion(pair, asked, false)
+        if vertical.width == 0 || vertical.height == 0 { continue }
+        metalEncodePairHalf(ctx, pair.horizontalPipeline, pair,
+            [pair.source, pair.secondSource, pair.tempNear, pair.tempFar], horizontal)
+        metalEncodePairHalf(ctx, pair.verticalPipeline, pair,
+            [pair.tempNear, pair.tempFar, pair.outputNear, pair.outputFar], vertical)
+    }
+}
+
+// One 32-bit word out of a buffer a kernel has written.
+//
+// Metal's storage is shared, so what a dispatch wrote is readable as soon as the
+// command buffer it rode on has completed — which is what a headless gate waits
+// on before it asks. There is no staging copy to make and no fence to take.
+public function metalReadBufferU32(
+    ctx: RawPtr,
+    bufferId: Number,
+    index: Number
+) -> BufferReadResult {
+    if bufferId == 0 || index < 0 {
+        return .Error(.NoSuchWord)
+    }
+    let buffer = metalLookup(ctx, bufferId)
+    if isNull(buffer) {
+        return .Error(.NoSuchWord)
+    }
+    let length = Number(metalMsgSendCount(buffer, metalSel("length")))
+    if (index + 1) * sizeOf<U32>() > length {
+        return .Error(.NoSuchWord)
+    }
+    let contents: RawPtr = metalMsgSend(buffer, metalSel("contents"))
+    if isNull(contents) {
+        return .Error(.DeviceRefused)
+    }
+    return .Ok(metalMemReadU32(contents, U64(index * sizeOf<U32>())))
+}
+
+// One dispatch over BUFFERS: the shape a simulation kernel has, next to the
+// texture pair above that an image filter has.
+//
+// `bufferIds` are bound in order at `buffer(0)`, `buffer(1)`, … which is how a
+// KSL kernel numbers its own storage arguments, so a particle step reading its
+// state at 0 and its parameters at 1 passes them in that order and writes no
+// slot numbers down anywhere else.
+//
+// A kernel that reads the depth a pass just wrote declares the texture ahead of
+// its buffers, so `depth` takes the texture table's slot 0 and the buffers keep
+// buffer slots 0, 1, … — two tables, each numbered from zero, which is how MSL
+// binds them.
+//
+// Encoded on the frame's command buffer like the pair above, so a step that
+// runs before a draw is ordered before it without a commit or a CPU wait.
+function metalEncodeBufferDispatch(
+    ctx: RawPtr,
+    dispatch: borrow BufferDispatch,
+    depth: borrow GraphicsTexture?
+) {
+    if !dispatch.pipeline.isPresent() || dispatch.threadCount == 0 || dispatch.threadsPerGroup == 0 {
+        log fault("a dispatch needs a pipeline and a nonzero thread count; it was dropped")
+        return
+    }
+    let encoder = metalComputeEncoder(ctx, dispatch.pipeline)
+    match depth {
+        Some(texture) -> metalMsgSend(
+            encoder,
+            metalSel("setTexture:atIndex:"),
+            metalLookup(ctx, Number(texture.id.raw)),
+            0
+        )
+        None -> {}
+    }
+    for (slot, bufferId) in dispatch.bufferIds.enumerated() {
+        let buffer = metalLookup(ctx, Number(bufferId.raw))
+        metalMsgSend(encoder, metalSel("setBuffer:offset:atIndex:"), buffer, 0, U64(slot))
+    }
+    metalEncodeDispatch(
+        encoder,
+        MetalGrid { width: dispatch.threadCount, groupWidth: dispatch.threadsPerGroup }
+    )
+}
+
+public function metalDispatchComputeBuffers(ctx: RawPtr, dispatch: borrow BufferDispatch) {
+    metalEncodeBufferDispatch(ctx, dispatch, .None)
+}
+
+public function metalDispatchDepthComputeBuffers(
+    ctx: RawPtr,
+    depth: borrow GraphicsTexture,
+    dispatch: borrow BufferDispatch
+) {
+    metalEncodeBufferDispatch(ctx, dispatch, .Some(copy depth))
+}

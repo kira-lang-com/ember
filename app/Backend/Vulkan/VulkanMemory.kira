@@ -1,0 +1,318 @@
+import Foundation
+import Heap
+
+// Host-visible buffer allocation and the mapped writes shared by vertex,
+// uniform, storage and staging resources.
+
+// Why a buffer or image could not be made.
+public enum VulkanResourceFailure {
+    NoDevice
+    Empty
+    Refused(VulkanResult)
+    NoMemoryType
+    MemoryRefused(VulkanResult)
+    BindRefused(VulkanResult)
+    MapRefused(VulkanResult)
+    UnsupportedSampleCount(UNumber)
+    ImageNotLive
+}
+
+// The most memory types `VkPhysicalDeviceMemoryProperties` carries.
+public namespace VulkanMemoryType {
+    let limit: UNumber = 32
+}
+
+// A memory type index, or nothing where the device has none that satisfies the
+// request.
+public function vulkanFindMemoryType(
+    state: borrow VulkanState,
+    typeBits: U32,
+    required: U32
+) -> U32? {
+    return vulkanFindMemoryTypeWithout(state, typeBits, required, U32(0))
+}
+
+// The same, of a type with none of the bits of `excluded`.
+public function vulkanFindMemoryTypeWithout(
+    state: borrow VulkanState,
+    typeBits: U32,
+    required: U32,
+    excluded: U32
+) -> U32? {
+    let properties = boxed<VkPhysicalDeviceMemoryProperties>(VkPhysicalDeviceMemoryProperties())
+    vkGetPhysicalDeviceMemoryProperties(state.physicalDevice, properties.pointer())
+    let count = min(
+        Number(boxedValue<VkPhysicalDeviceMemoryProperties>(properties).memoryTypeCount),
+        VulkanMemoryType.limit
+    )
+    for index in 0..count {
+        // The types follow the count, end to end.
+        let memoryType = heapLoad<VkMemoryType>(
+            properties.pointer(),
+            sizeOf<U32>() + index * sizeOf<VkMemoryType>()
+        )
+        let allowed = (typeBits & (U32(1) << U32(index))) != U32(0)
+        if allowed && (memoryType.propertyFlags & required) == required && (
+            memoryType.propertyFlags & excluded
+        ) == U32(0) {
+            return .Some(U32(index))
+        }
+    }
+    return .None
+}
+
+function vulkanBufferRequirements(
+    state: borrow VulkanState,
+    buffer: RawPtr
+) -> VkMemoryRequirements {
+    let requirements = boxed<VkMemoryRequirements>(VkMemoryRequirements())
+    vkGetBufferMemoryRequirements(state.device, buffer, requirements.pointer())
+    return boxedValue<VkMemoryRequirements>(requirements)
+}
+
+// What a buffer is for, and where its memory lives.
+public struct VulkanBufferRequest {
+    let label: String
+    let usage: U32
+    let byteSize: UNumber
+    let memoryFlags: U32 = VulkanVocabulary.memoryHostVisible | VulkanVocabulary.memoryHostCoherent
+}
+
+// Memory of a type that satisfies a resource's requirements, and how much of it
+// the driver allocated.
+public struct VulkanAllocation {
+    let memory: RawPtr
+    let memoryType: U32
+    let size: UNumber
+}
+
+// Finds a memory type for `requirements` with every bit of `memoryFlags`, and
+// allocates from it.
+public function vulkanAllocateMatching(
+    state: borrow VulkanState,
+    requirements: borrow VkMemoryRequirements,
+    memoryFlags: U32
+) -> Result<VulkanAllocation, VulkanResourceFailure> {
+    let memoryType = match vulkanFindMemoryType(state, requirements.memoryTypeBits, memoryFlags) {
+        Some(memoryType) -> memoryType
+        None -> return .Error(.NoMemoryType)
+    }
+    return vulkanAllocateOfType(state, requirements, memoryType)
+}
+
+function vulkanAllocateOfType(
+    state: borrow VulkanState,
+    requirements: borrow VkMemoryRequirements,
+    memoryType: U32
+) -> Result<VulkanAllocation, VulkanResourceFailure> {
+    let size = Number(requirements.size)
+    return match vulkanAllocateMemory(state, memoryType, size) {
+        Ok(memory) -> .Ok(VulkanAllocation { memory: memory, memoryType: memoryType, size: size })
+        Error(failure) -> .Error(failure)
+    }
+}
+
+// A buffer's memory, bound, and mapped where it is host-visible.
+struct VulkanBufferMemory {
+    let allocation: VulkanAllocation
+    let mapped: RawPtr?
+}
+
+function vulkanNewBuffer(
+    state: borrow VulkanState,
+    request: borrow VulkanBufferRequest
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let bufferInfo = VkBufferCreateInfo {
+        sType: VulkanVocabulary.structureBufferCreateInfo,
+        size: U64(request.byteSize),
+        usage: request.usage,
+        sharingMode: VulkanVocabulary.sharingExclusive
+    }
+    let bufferSlot = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateBuffer(state.device, bufferInfo, nullPointer(), bufferSlot.pointer())
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(bufferSlot))
+}
+
+// Allocates, binds and maps the memory behind `buffer`. Frees that memory, but
+// not the buffer, when a step is refused.
+function vulkanBackBuffer(
+    state: borrow VulkanState,
+    buffer: RawPtr,
+    memoryFlags: U32
+) -> Result<VulkanBufferMemory, VulkanResourceFailure> {
+    let requirements = vulkanBufferRequirements(state, buffer)
+    let allocation = match vulkanAllocateMatching(state, requirements, memoryFlags) {
+        Ok(allocation) -> allocation
+        Error(failure) -> return .Error(failure)
+    }
+    let bindResult = vulkanResultOf(
+        vkBindBufferMemory(state.device, buffer, allocation.memory, U64(0))
+    )
+    if bindResult != .Success {
+        vkFreeMemory(state.device, allocation.memory, nullPointer())
+        return .Error(.BindRefused(bindResult))
+    }
+    let mapped = match vulkanMapIfHostVisible(state, allocation.memory, memoryFlags) {
+        Ok(mapped) -> mapped
+        Error(failure) -> {
+            vkFreeMemory(state.device, allocation.memory, nullPointer())
+            return .Error(failure)
+        }
+    }
+    return .Ok(VulkanBufferMemory { allocation: allocation, mapped: mapped })
+}
+
+function vulkanTraceBuffer(
+    state: borrow VulkanState,
+    request: borrow VulkanBufferRequest,
+    id: U32,
+    allocation: borrow VulkanAllocation
+) {
+    log debug(
+        "allocated a buffer",
+        area: "memory",
+        label: request.label,
+        buffer: id,
+        requestedBytes: request.byteSize,
+        allocatedBytes: allocation.size,
+        memoryType: allocation.memoryType,
+        runningBytes: state.allocatedBytes
+    )
+}
+
+public function vulkanCreateBufferHandle(
+    state: borrow mut VulkanState,
+    request: borrow VulkanBufferRequest
+) -> Result<U32, VulkanResourceFailure> {
+    if isNull(state.device) {
+        return .Error(.NoDevice)
+    }
+    if request.byteSize == 0 {
+        return .Error(.Empty)
+    }
+    let buffer = match vulkanNewBuffer(state, request) {
+        Ok(buffer) -> buffer
+        Error(failure) -> return .Error(failure)
+    }
+    let backing = match vulkanBackBuffer(state, buffer, request.memoryFlags) {
+        Ok(backing) -> backing
+        Error(failure) -> {
+            vkDestroyBuffer(state.device, buffer, nullPointer())
+            return .Error(failure)
+        }
+    }
+    let id = vulkanRegisterObject(
+        state,
+        VulkanObject {
+            kind: .Buffer,
+            handle: buffer,
+            memory: .Some(backing.allocation.memory),
+            mapped: backing.mapped,
+            size: request.byteSize,
+            allocationSize: backing.allocation.size,
+            stride: request.byteSize
+        }
+    )
+    if state.tracing.memory {
+        vulkanTraceBuffer(state, request, id, backing.allocation)
+    }
+    return .Ok(id)
+}
+
+public function vulkanAllocateMemory(
+    state: borrow VulkanState,
+    memoryType: U32,
+    allocationSize: UNumber
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let allocation = VkMemoryAllocateInfo {
+        sType: VulkanVocabulary.structureMemoryAllocateInfo,
+        allocationSize: U64(allocationSize),
+        memoryTypeIndex: memoryType
+    }
+    let memory = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkAllocateMemory(state.device, allocation, nullPointer(), memory.pointer())
+    )
+    if result != .Success {
+        return .Error(.MemoryRefused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(memory))
+}
+
+// Where host-visible memory is mapped, for the whole of it; device-local
+// memory is not mapped.
+function vulkanMapIfHostVisible(
+    state: borrow VulkanState,
+    memory: RawPtr,
+    memoryFlags: U32
+) -> Result<RawPtr?, VulkanResourceFailure> {
+    if (memoryFlags & VulkanVocabulary.memoryHostVisible) != VulkanVocabulary.memoryHostVisible {
+        return .Ok(.None)
+    }
+    let mapped = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkMapMemory(
+            state.device,
+            memory,
+            U64(0),
+            VulkanVocabulary.wholeSize,
+            U32(0),
+            mapped.pointer()
+        )
+    )
+    if result != .Success {
+        return .Error(.MapRefused(result))
+    }
+    return .Ok(.Some(boxedValue<RawPtr>(mapped)))
+}
+
+public function vulkanWriteFloats(
+    state: borrow VulkanState,
+    bufferId: U32,
+    data: borrow[F32],
+    offset: UNumber
+) {
+    let mapped = match vulkanObjectMapped(state, bufferId) {
+        Some(mapped) -> mapped
+        None -> {
+            log fault("floats were written to a buffer that is not mapped", buffer: bufferId)
+            return
+        }
+    }
+    let size = vulkanObjectSize(state, bufferId)
+    if offset + data.count * sizeOf<F32>() > size {
+        log fault(
+            "a buffer write runs past the buffer's end",
+            buffer: bufferId,
+            offset: offset,
+            floats: data.count,
+            size: size
+        )
+        return
+    }
+    for index in 0..data.count {
+        heapStore<F32>(mapped, offset + index * sizeOf<F32>(), data[index])
+    }
+}
+
+public function vulkanWriteWords(state: borrow VulkanState, bufferId: U32, data: borrow[U32]) {
+    let mapped = match vulkanObjectMapped(state, bufferId) {
+        Some(mapped) -> mapped
+        None -> {
+            log fault("words were written to a buffer that is not mapped", buffer: bufferId)
+            return
+        }
+    }
+    if data.count * sizeOf<U32>() > vulkanObjectSize(state, bufferId) {
+        log fault("a buffer write runs past the buffer's end", buffer: bufferId, words: data.count)
+        return
+    }
+    for index in 0..data.count {
+        heapStore<U32>(mapped, index * sizeOf<U32>(), data[index])
+    }
+}

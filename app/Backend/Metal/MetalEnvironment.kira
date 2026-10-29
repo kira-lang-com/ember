@@ -1,0 +1,51 @@
+// Reading configuration out of the environment, for the Metal backend.
+//
+// The backend is driven headlessly by environment variables — one frame
+// offscreen, a click script, a pixel dump — so a GUI app can be verified
+// deterministically without a display.
+//
+// Foundation already reads the environment (`environmentValue`) and already
+// parses numbers out of text (`toNumber`), so nothing here re-decodes either.
+// What is left is the one question this backend asks that the harness does not:
+// which variables are set at all, which is `environmentIsSet`.
+
+// Whether `name` is set at all, which is most of what a harness knob asks:
+// `KIRA_METAL_BENCH` is a flag, and its value is not read.
+public function metalEnvIsSet(name: borrow String) -> Bool {
+    return environmentIsSet(name)
+}
+
+// The value of `name`, or nothing where it is unset.
+public function metalEnv(name: borrow String) -> String? {
+    if !environmentIsSet(name) {
+        return .None
+    }
+    return .Some(environmentValue(name))
+}
+
+// The value of `name` as a number, or `fallback` where it is unset or spells
+// none. `KIRA_METAL_RENDER_SCALE=abc` is a run that renders at its own size,
+// not a crash in the run that set it.
+public function metalEnvNumber(name: borrow String, fallback: Number) -> Number {
+    match metalEnv(name) {
+        Some(text) -> {
+            match text.toNumber() {
+                Some(value) -> return value
+                None -> return fallback
+            }
+        }
+        None -> return fallback
+    }
+}
+
+// Every number in `name`, in order.
+//
+// The same reading as the rest of the harness — see `harnessEnvInts` — because
+// a Metal click script and a Dawn one are the same format and there is no
+// reason for two of them to disagree about a `-`.
+public function metalEnvNumbers(name: borrow String) -> [Number] {
+    match metalEnv(name) {
+        Some(text) -> return harnessEnvInts(text)
+        None -> return[]
+    }
+}

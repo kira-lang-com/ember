@@ -1,0 +1,51 @@
+import Foundation
+import Heap
+
+// Waiting on Dawn: the instance is made with timed `wgpuInstanceWaitAny`, and
+// every operation Ember waits for registers its callback `WaitAnyOnly` and is
+// waited for by its future. The thread sleeps in Dawn until the GPU answers,
+// where spinning `wgpuDeviceTick` kept a core busy for the whole wait, and a
+// wait that never ends fails after its bound instead of hanging.
+
+namespace DawnWait {
+    // How long the instance and the adapter may take to answer. A driver that
+    // does not answer in this time never will, and the run fails before it
+    // draws instead of hanging.
+    let setupNanoseconds: UNumber = 10000000000
+    // How long a readback or a queue drain may wait for the GPU: as long as
+    // the largest render's work, and a bound past which the device has stopped.
+    let gpuNanoseconds: UNumber = 600000000000
+}
+
+// The instance, able to wait on a future with a timeout.
+function dawnWaitingInstance() -> RawPtr {
+    let features: [I32] = [DawnVocabulary.instanceFeatureTimedWaitAny]
+    return wgpuCreateInstance(
+        WGPUInstanceDescriptor {
+            requiredFeatureCount: U64(features.count),
+            requiredFeatures: features
+        }
+    )
+}
+
+// Waits for `future` to complete, at most `nanoseconds`; whether it did. Its
+// callback has run when this answers true.
+function dawnWaitFor(
+    state: borrow GraphicsRuntimeState,
+    future: borrow WGPUFuture,
+    nanoseconds: UNumber
+) -> Bool {
+    // One `WGPUFutureWaitInfo`: the future's id, then whether it completed.
+    let block = allocateZeroed(
+        memoryLayout(sizeOf<WGPUFutureWaitInfo>(), alignOf<WGPUFutureWaitInfo>())
+    )
+    writeDoubleWord(block, U64(0), future.id)
+    let waits: WGPUFutureWaitInfo_ptr = block
+    let status = wgpuInstanceWaitAny(state.dawn.instance, U64(1), waits, U64(nanoseconds))
+    deallocate(block)
+    if status != DawnVocabulary.waitSucceeded {
+        log warn("Dawn did not answer a wait", status: Number(status))
+        return false
+    }
+    return true
+}

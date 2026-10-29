@@ -1,0 +1,125 @@
+import Foundation
+// Which renderer a program asks for, and whether the platform it is built for
+// can run it.
+//
+// `RenderBackendKind` is the *selection* vocabulary — what a `GraphicsApplication`
+// names and what `backendSupported` checks against the target, both before any
+// device context exists. `Any RenderBackend` (see `app/Public/RenderBackend.kira`)
+// is the *dispatch* vocabulary, and everything past `renderBackendFor` asks the
+// backend rather than asking which one it is.
+public enum RenderBackendKind {
+    Metal
+    Dawn
+    Vulkan
+}
+
+// A backend asked for on a platform it has no window or device on.
+public struct UnsupportedPlatform {
+    var backend: RenderBackendKind = .Dawn
+    var platform: TargetPlatform = .Unknown
+}
+
+public enum BackendFailure {
+    NotOnPlatform(UnsupportedPlatform)
+}
+
+// The default backend for a program that does not pick one: Metal owns Apple
+// targets, Vulkan is the direct desktop path on Windows and Linux, and Dawn is
+// the only backend that exists on wasm32-emscripten, through emscripten's WebGPU
+// port.
+public function graphicsDefaultBackend() -> RenderBackendKind {
+    return graphicsBackendFromEnvironment(platformDefaultBackend(targetPlatform!()))
+}
+
+function platformDefaultBackend(platform: TargetPlatform) -> RenderBackendKind {
+    match platform {
+        MacOS -> return .Metal
+        Ios -> return .Metal
+        Windows -> return .Vulkan
+        Linux -> return .Vulkan
+        // Tessera has no window system: a program draws headless into a
+        // texture the display server composites, which Vulkan does directly.
+        Tessera -> return .Vulkan
+        // Vulkan is the graphics API Android itself ships.
+        Android -> return .Vulkan
+        Wasm -> return .Dawn
+        Unknown -> return .Dawn
+    }
+}
+
+// KiraUI supplies window furniture for the undecorated Wayland window. Cocoa and
+// Win32 keep the controls supplied by their native window implementation.
+public function graphicsUsesWaylandClientWindowControls() -> Bool {
+    match targetPlatform!() {
+        Linux -> {
+            match graphicsDefaultBackend() {
+                Dawn -> return true
+                Vulkan -> return true
+                Metal -> return false
+            }
+        }
+        MacOS -> return false
+        Ios -> return false
+        Windows -> return false
+        // No window at all: a Tessera program draws headless.
+        Tessera -> return false
+        // The system draws an Android window's furniture.
+        Android -> return false
+        Wasm -> return false
+        Unknown -> return false
+    }
+}
+
+// The renderer a run was asked for through `KIRA_GRAPHICS_BACKEND`, or
+// `fallback` when it was not asked.
+//
+// The variable lets one program run on several backends without being edited
+// between the runs, which is what makes a pixel comparison between them mean
+// anything. A name that is none of them is reported rather than ignored: a typo
+// that silently selects the default is a run that proves nothing about the
+// backend it was supposed to exercise.
+public function graphicsBackendFromEnvironment(fallback: RenderBackendKind) -> RenderBackendKind {
+    let requested = environmentValue("KIRA_GRAPHICS_BACKEND")
+    if requested.count == 0 {
+        return fallback
+    }
+    match backendNamed(requested) {
+        Some(backend) -> return backend
+        None -> {
+            log fault(
+                "KIRA_GRAPHICS_BACKEND names a backend other than `metal`, `dawn` or `vulkan`",
+                requested: requested
+            )
+            return fallback
+        }
+    }
+}
+
+function backendNamed(name: borrow String) -> RenderBackendKind? {
+    match name {
+        "metal" -> return .Some(.Metal)
+        "dawn" -> return .Some(.Dawn)
+        "vulkan" -> return .Some(.Vulkan)
+        else -> return .None
+    }
+}
+
+// Whether `backend` can run on the platform this program is built for.
+//
+// Vulkan and Dawn open a Win32 or Wayland window, and Metal exists only on
+// Apple's platforms.
+public function backendSupported(backend: RenderBackendKind) -> Result<Void, BackendFailure> {
+    let platform = targetPlatform!()
+    if backendRunsOn(backend, platform) {
+        return .Ok
+    }
+    return .Error(.NotOnPlatform(UnsupportedPlatform { backend: backend, platform: platform }))
+}
+
+function backendRunsOn(backend: borrow RenderBackendKind, platform: borrow TargetPlatform) -> Bool {
+    match backend {
+        Metal -> return platform == .MacOS || platform == .Ios
+        Dawn -> return platform == .Windows || platform == .Linux || platform == .Tessera
+        Vulkan -> return platform == .Windows || platform == .Linux || platform == .Tessera
+    }
+}

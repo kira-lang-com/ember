@@ -1,0 +1,369 @@
+import Foundation
+import Heap
+// Compute on WebGPU.
+//
+// A compute pipeline is one module and one entry, so `createComputePipeline`
+// takes the shader a `ksl!` compute artifact produced and builds it. Its layout
+// is derived from the module, exactly as a render pipeline's is, so
+// `wgpuComputePipelineGetBindGroupLayout` answers for the group a dispatch
+// binds.
+//
+// The two dispatch shapes the surface asks for are the two a real renderer has:
+// a separable image filter over textures, and a kernel over buffers. Both record
+// onto the FRAME's command encoder, in the order the caller asked for, alongside
+// the render passes around them — see `DawnPass.kira` for why the frame is one
+// command buffer and not one per pass.
+
+public @FFI.Array { element: WGPUBindGroupEntry, count: 12 }
+struct WGPUBindGroupEntryArray12 {}
+
+public function dawnCreateComputePipeline(
+    context: RawPtr,
+    label: borrow String,
+    shader: borrow GraphicsShader,
+    entryName: borrow String
+) -> Number {
+    if !dawnHasDevice(context) {
+        return 0
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let record = dawnShaderRecord(state, shader.id.raw)
+    if !record.live || isNull(record.computeModule) {
+        log fault("a compute pipeline names no compiled compute shader", label: label)
+        return 0
+    }
+    let entry = entryName.count > 0 ? entryName : record.computeEntry
+    let pipeline = wgpuDeviceCreateComputePipeline(
+        state.dawn.device,
+        WGPUComputePipelineDescriptor {
+            label: dawnText(label),
+            compute: WGPUComputeState { module: record.computeModule, entryPoint: dawnText(entry) }
+        }
+    )
+    if isNull(pipeline) {
+        return 0
+    }
+    return Int(dawnRegisterObject(state, pipeline, DawnVocabulary.formatUndefined))
+}
+
+namespace DawnComputeTile {
+    // The square of threads one workgroup of the blur pair covers, which is the
+    // threadgroup both halves declare. A dispatch that rounded to another size
+    // would leave a strip of the target unwritten or run threads the kernel's
+    // own bounds check has to discard.
+    let size: UNumber = 16
+}
+
+// Why a dispatch was dropped.
+enum DawnDispatchFailure {
+    PipelineNotLive(U32)
+    NothingBound
+    NoLayout
+    GroupRefused
+    PassOpen
+    NoExtent
+    DepthHasNoView
+}
+
+// How many workgroups a dispatch launches along each axis.
+struct DawnGroupCount {
+    var x: UNumber = 1
+    var y: UNumber = 1
+}
+
+// How many workgroups cover `extent` threads at `perGroup` threads each.
+public function dawnWorkgroupCount(extent: UNumber, perGroup: UNumber) -> UNumber {
+    let size = perGroup == 0 ? 1 : perGroup
+    if extent == 0 {
+        return 1
+    }
+    return ceil(extent / size)
+}
+
+// The bind group for `entries`, built against the pipeline's own layout.
+//
+// It is released as soon as it is recorded: a WebGPU command encoder retains
+// what it references, so the group stays alive as long as the command buffer
+// needs it, and the entries differ per call by construction so there is
+// nothing to cache.
+function dawnComputeGroup(
+    state: borrow GraphicsRuntimeState,
+    pipeline: RawPtr,
+    entries: borrow [WGPUBindGroupEntry]
+) -> Result<RawPtr, DawnDispatchFailure> {
+    if entries.count == 0 {
+        return .Error(.NothingBound)
+    }
+    let layout = wgpuComputePipelineGetBindGroupLayout(pipeline, U32(0))
+    if isNull(layout) {
+        return .Error(.NoLayout)
+    }
+    let group = wgpuDeviceCreateBindGroup(
+        state.dawn.device,
+        WGPUBindGroupDescriptor {
+            label: dawnText("kira-compute-bindings"),
+            layout: layout,
+            entryCount: U64(entries.count),
+            entries: WGPUBindGroupEntryArray12 { elements: entries }
+        }
+    )
+    wgpuBindGroupLayoutRelease(layout)
+    if isNull(group) {
+        return .Error(.GroupRefused)
+    }
+    return .Ok(group)
+}
+
+// A compute pass on the frame's encoder, timed where the GPU clock is on.
+function dawnBeginComputePass(state: borrow mut GraphicsRuntimeState) -> RawPtr {
+    let encoder = dawnFrameEncoder(state)
+    // A frame that is not being timed opens no pair, and the descriptor then
+    // leaves the timestamp pointer out rather than naming an index of -1.
+    return match dawnClockOpenPair(state, false) {
+        None -> wgpuCommandEncoderBeginComputePass(
+            encoder,
+            WGPUComputePassDescriptor { label: dawnText("kira-compute-pass") }
+        )
+        Some(pair) -> wgpuCommandEncoderBeginComputePass(
+            encoder,
+            WGPUComputePassDescriptor {
+                label: dawnText("kira-compute-pass"),
+                timestampWrites: dawnClockWrites(pair)
+            }
+        )
+    }
+}
+
+// One dispatch, with the entries already assembled, recorded on the frame's
+// encoder.
+function dawnRecordDispatch(
+    state: borrow mut GraphicsRuntimeState,
+    pipelineId: ComputePipelineId,
+    entries: borrow [WGPUBindGroupEntry],
+    groups: borrow DawnGroupCount
+) -> Result<Void, DawnDispatchFailure> {
+    dawnTraceOpenSegment(state)
+    if state.dawn.passActive {
+        return .Error(.PassOpen)
+    }
+    let pipeline = dawnObject(state, pipelineId.raw)
+    if isNull(pipeline) {
+        return .Error(.PipelineNotLive(pipelineId.raw))
+    }
+    let group = match dawnComputeGroup(state, pipeline, entries) {
+        Ok(group) -> group
+        Error(failure) -> return .Error(failure)
+    }
+    let pass = dawnBeginComputePass(state)
+    wgpuComputePassEncoderSetPipeline(pass, pipeline)
+    wgpuComputePassEncoderSetBindGroup(pass, U32(0), group, U64(0), nullPointer())
+    wgpuComputePassEncoderDispatchWorkgroups(pass, U32(groups.x), U32(groups.y), U32(1))
+    wgpuComputePassEncoderEnd(pass)
+    wgpuComputePassEncoderRelease(pass)
+    wgpuBindGroupRelease(group)
+    return .Ok
+}
+
+// The separable blur pair. Each axis is one dispatch: the sources are read
+// through sampled views, the two levels are written through storage views, and
+// the sampler is bound because a compute stage cannot declare one inline.
+//
+// Bindings are numbered the way a KSL kernel numbers its own resources: the
+// extent uniform, the sampler, the two input textures, then the near and far
+// outputs. Both halves read two — the horizontal one blends a crossfade as it
+// filters, the vertical one reads the two levels the horizontal one wrote — so
+// one layout serves the pair.
+function dawnRecordTexturePair(
+    context: RawPtr,
+    state: borrow mut GraphicsRuntimeState,
+    pair: borrow TextureComputePair
+) -> Result<Void, DawnDispatchFailure> {
+    dawnFrameEncoder(state)
+    for asked in textureComputeRegions(pair) {
+        let h = textureComputeRegion(pair, asked, true)
+        let v = textureComputeRegion(pair, asked, false)
+        if v.width == 0 || v.height == 0 { continue }
+        let horizontalExtent = match dawnBlurExtentBuffer(state, pair, h) {
+            Some(extent) -> extent
+            None -> return .Error(.NoExtent)
+        }
+        let verticalExtent = match dawnBlurExtentBuffer(state, pair, v) {
+            Some(extent) -> extent
+            None -> return .Error(.NoExtent)
+        }
+        let horizontal = dawnBlurEntries(state, horizontalExtent, pair.sampler,
+            [pair.source, pair.secondSource, pair.tempNear, pair.tempFar])
+        let vertical = dawnBlurEntries(state, verticalExtent, pair.sampler,
+            [pair.tempNear, pair.tempFar, pair.outputNear, pair.outputFar])
+        match dawnRecordDispatch(state, pair.horizontalPipeline, horizontal, DawnGroupCount {
+            x: dawnWorkgroupCount(h.width, DawnComputeTile.size),
+            y: dawnWorkgroupCount(h.height, DawnComputeTile.size)
+        }) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        dawnTraceSegment(context, state, "blurH", false)
+        match dawnRecordDispatch(state, pair.verticalPipeline, vertical, DawnGroupCount {
+            x: dawnWorkgroupCount(v.width, DawnComputeTile.size),
+            y: dawnWorkgroupCount(v.height, DawnComputeTile.size)
+        }) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        dawnTraceSegment(context, state, "blurV", false)
+    }
+    return .Ok
+}
+
+public function dawnDispatchTextureComputePair(context: RawPtr, pair: borrow TextureComputePair) {
+    if !dawnHasDevice(context) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    match dawnRecordTexturePair(context, state, pair) {
+        Ok -> {}
+        Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+    }
+}
+
+// The extent uniform both halves of the blur read, kept for the run rather than
+// built per dispatch: it is four words, it is rewritten twice a frame, and a
+// buffer created and destroyed at that rate is a resource churn with nothing to
+// show for it.
+//
+// Floats throughout, including the extent: the kernel's only uses of it are the
+// tail-thread bounds test and the texel step it divides out of it, both exact in
+// a float at any extent a texture can have.
+function dawnBlurExtentBuffer(
+    state: borrow mut GraphicsRuntimeState,
+    pair: borrow TextureComputePair,
+    region: borrow TextureComputeRegion
+) -> RawPtr? {
+    let extent = narrowFloats(textureComputeExtent(pair, region))
+    let bytes = extent.count * sizeOf<F32>()
+    var id: U32 = U32(0)
+    if state.dawn.blurExtentsUsed < state.dawn.blurExtentBuffers.count {
+        id = state.dawn.blurExtentBuffers[state.dawn.blurExtentsUsed]
+    } else {
+        id = match dawnMakeBuffer(state, "kira-blur-extent", dawnBufferUsage(.Uniform), bytes) {
+            Some(made) -> made
+            None -> return .None
+        }
+        state.dawn.blurExtentBuffers.append(id)
+    }
+    state.dawn.blurExtentsUsed += 1
+    let buffer = dawnObject(state, id)
+    if isNull(buffer) { return .None }
+    wgpuQueueWriteBuffer(state.dawn.queue, buffer, U64(0), extent, U64(bytes))
+    return .Some(buffer)
+}
+
+// One half's bindings: the target extent, the sampler the filter reads through,
+// then `textures` — the two it reads through their sampled views, and the two
+// levels it writes through their storage views.
+function dawnBlurEntries(
+    state: borrow GraphicsRuntimeState,
+    extent: RawPtr,
+    sampler: borrow GraphicsSampler,
+    textures: borrow [GraphicsTexture]
+) -> [WGPUBindGroupEntry] {
+    var entries: [WGPUBindGroupEntry] = [WGPUBindGroupEntry {
+        binding: U32(0),
+        buffer: extent,
+        offset: U64(0),
+        size: U64(32)
+    }, WGPUBindGroupEntry { binding: U32(1), sampler: dawnObject(state, sampler.id.raw) }]
+    for (index, texture) in textures.enumerated() {
+        let view = index < 2 ? texture.viewId.raw : texture.storageViewId.raw
+        entries.append(
+            WGPUBindGroupEntry { binding: U32(2 + index), textureView: dawnObject(state, view) }
+        )
+    }
+    return entries
+}
+
+// The buffers bound in order from `firstBinding`, which is how a KSL kernel
+// numbers its own storage arguments.
+function dawnBufferEntries(
+    state: borrow GraphicsRuntimeState,
+    bufferIds: borrow [BufferId],
+    firstBinding: UNumber
+) -> [WGPUBindGroupEntry] {
+    var entries: [WGPUBindGroupEntry] = []
+    // The binding each buffer takes is its position past the first, so the
+    // index is part of the value rather than a counter.
+    for (index, bufferId) in bufferIds.enumerated() {
+        let buffer = dawnObject(state, bufferId.raw)
+        if !isNull(buffer) {
+            entries.append(
+                WGPUBindGroupEntry {
+                    binding: U32(firstBinding + index),
+                    buffer: buffer,
+                    offset: U64(0),
+                    size: wgpuBufferGetSize(buffer)
+                }
+            )
+        }
+    }
+    return entries
+}
+
+// The depth texture at binding 0 and the buffers after it.
+function dawnDepthEntries(
+    state: borrow GraphicsRuntimeState,
+    depth: borrow GraphicsTexture,
+    bufferIds: borrow [BufferId]
+) -> Result<[WGPUBindGroupEntry], DawnDispatchFailure> {
+    let viewId = depth.depthViewId.isPresent() ? depth.depthViewId.raw : depth.viewId.raw
+    let view = dawnObject(state, viewId)
+    if isNull(view) {
+        return .Error(.DepthHasNoView)
+    }
+    var entries: [WGPUBindGroupEntry] = [WGPUBindGroupEntry { binding: U32(0), textureView: view }]
+    for entry in dawnBufferEntries(state, bufferIds, 1) {
+        entries.append(entry)
+    }
+    return .Ok(entries)
+}
+
+public function dawnDispatchComputeBuffers(context: RawPtr, dispatch: borrow BufferDispatch) {
+    if !dawnHasDevice(context) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let entries = dawnBufferEntries(state, dispatch.bufferIds, 0)
+    let groups = DawnGroupCount {
+        x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
+    }
+    match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
+        Ok -> {}
+        Error(failure) -> log fault("a dispatch was dropped", failure)
+    }
+}
+
+// The same dispatch with a depth texture bound ahead of the buffers, for a
+// kernel that reads the depth a pass just rasterized.
+public function dawnDispatchDepthComputeBuffers(
+    context: RawPtr,
+    depth: borrow GraphicsTexture,
+    dispatch: borrow BufferDispatch
+) {
+    if !dawnHasDevice(context) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let entries = match dawnDepthEntries(state, depth, dispatch.bufferIds) {
+        Ok(entries) -> entries
+        Error(failure) -> {
+            log fault("a depth dispatch was dropped", failure)
+            return
+        }
+    }
+    let groups = DawnGroupCount {
+        x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
+    }
+    match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
+        Ok -> {}
+        Error(failure) -> log fault("a depth dispatch was dropped", failure)
+    }
+}

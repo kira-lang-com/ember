@@ -1,0 +1,165 @@
+// Metal frame bridge: the seam the public RenderFrame dispatches to when its
+// backend is Metal. Mirrors the Sokol begin/end/submit contract but submits work
+// through the Metal context built from Objective-C messages.
+
+// Metal's MTLLoadAction for the public load action.
+public function metalMapLoadAction(action: LoadAction) -> U64 {
+    return match action {
+        Clear -> MetalRegistry.loadActionClear
+        Load -> MetalRegistry.loadActionLoad
+        // A pass whose first draw covers every pixel opaquely has nothing to
+        // keep and nothing to clear: a clear writes the color into every tile so
+        // the next draw can overwrite all of it.
+        DontCare -> MetalRegistry.loadActionDontCare
+    }
+}
+
+// Begin the frame's render pass on the Metal context. Today this drives the
+// color clear; pipeline/buffer/draw encoding lands in later phases.
+public function metalBeginRenderPassFromFrame(frame: borrow RenderFrame, ctxPtr: RawPtr) -> Bool {
+    let color = frame.attachments.color
+    let start = MetalPassStart {
+        loadAction: metalMapLoadAction(color.loadAction),
+        clearColor: color.clearColor,
+        depthEnabled: frame.attachments.hasDepth
+    }
+    // A custom texture target (multi-pass rendering) begins a targeted pass; the
+    // default swapchain/offscreen target uses the context color texture.
+    if frame.attachments.isOffscreen() {
+        metalContextBeginClearTarget(ctxPtr, Int(frame.attachments.colorViewId().raw), start)
+    } else {
+        metalContextBeginClear(ctxPtr, start)
+    }
+    return true
+}
+
+// End this pass's encoder. The frame hook commits all pass encoders together.
+public function metalEndPassAndCommit(ctxPtr: RawPtr) {
+    metalContextEndPass(ctxPtr)
+}
+
+// Submit the complete logical frame as one Metal command buffer.
+public function metalSubmitFrame(frame: borrow RenderFrame) {
+    metalContextSubmitActiveFrame(frame.backendContext)
+}
+
+// Headless verification: report the center pixel the GPU actually produced for
+// the frame, so an offscreen run proves real Kira-owned rendering (not a marker).
+// The pixel is packed little-endian BGRA: (A<<24)|(R<<16)|(G<<8)|B. Coordinates
+// are floored: `/` divides exactly, and an odd extent has no half pixel.
+public function metalReportCenterPixel(ctxPtr: RawPtr, width: Number, height: Number) {
+    let packed = metalContextReadPixel(ctxPtr, floor(width / 2), floor(height / 2))
+    metalProbe(ProbeSentinel.centerPixel, [packed])
+}
+
+// Headless verification for spatially-varying output: report two probe pixels at
+// the left-quarter and right-quarter columns (screen mid-height). Used to prove a
+// pass produces DIFFERENT values in different regions (e.g. a visibility buffer
+// carrying distinct per-primitive ids that resolve to distinct materials). Printed
+// in addition to the center pixel, so single-value readback assertions are
+// unaffected; only callers that opt in (KIRA_METAL_READBACK_POINTS) read these.
+public function metalReportProbePixels(ctxPtr: RawPtr, width: Number, height: Number) {
+    let my = floor(height / 2)
+    let left = metalContextReadPixel(ctxPtr, floor(width / 4), my)
+    let right = metalContextReadPixel(ctxPtr, floor(width * 3 / 4), my)
+    metalProbe(ProbeSentinel.probePixels, [left, right])
+}
+
+// Golden-image report: prints a sentinel (313131) then a deterministic digest of the
+// whole framebuffer, so a shell harness can assert pixel-exact stability of the entire
+// rendered image. Opt-in (KIRA_METAL_IMAGE_DIGEST); does not affect other readback.
+public function metalReportImageDigest(ctxPtr: RawPtr, width: Number, height: Number) {
+    match metalContextImageDigest(ctxPtr, width, height) {
+        Some(digest) -> metalProbe(ProbeSentinel.imageDigest, [digest])
+        None -> log fault("there is no color target to digest")
+    }
+}
+
+// Frame-time benchmark report: prints a sentinel then nanoseconds-per-frame, so a
+// shell harness can derive ms/FPS without on-screen present/vsync. Integer-only to
+// avoid float/FFI marshalling edge cases.
+public function metalReportBench(totalNs: Number, frames: Number) {
+    metalProbe(ProbeSentinel.benchMean, [totalNs / frames])
+}
+
+// Opt-in per-frame benchmark trace. The aggregate benchmark is the throughput
+// gate; this trace exposes queue bursts instead of averaging them away. GPU time
+// is the newest completed logical frame and therefore trails the CPU sample by the
+// configured in-flight depth.
+public function metalReportBenchFrame(ctxPtr: RawPtr, frameIndex: Number) {
+    metalProbe(
+        ProbeSentinel.benchFrame,
+        [frameIndex, Number(metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)), Number(
+            metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)
+        ), Number(metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs))]
+    )
+}
+
+public function metalReportBenchWorst(frameNs: Number, cpuNs: Number, gpuNs: Number) {
+    metalProbe(ProbeSentinel.benchWorst, [frameNs, cpuNs, gpuNs])
+}
+
+// --- on-screen percentile bench ---------------------------------------------
+// KIRA_METAL_ONSCREEN_BENCH=N runs the REAL window loop — visible window, a
+// presented drawable every frame, nothing offscreen — for N measured frames
+// after warmup, then prints a percentile summary per series. The GPU series is
+// command-buffer residency (GPUStartTime to GPUEndTime): it includes every
+// stall and neighbor on the GPU timeline, so read it as a ceiling; the
+// per-encoder truth needs a Metal System Trace (docs/frame-cost.md).
+
+// The distribution of one series, as fields rather than as a sentence.
+//
+// A benchmark run is read by a person, so this is a `log` rather than the
+// probe channel: the numbers are fields, so a run can be compared field by field
+// instead of by reading two paragraphs of prose.
+public function metalBenchReportSeries(name: String, samples: borrow[Number]) {
+    if samples.count == 0 {
+        return
+    }
+    let sorted = graphicsSortedCosts(samples)
+    log info(
+        "Ember benchmark series",
+        series: name,
+        frames: samples.count,
+        p50ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 50)),
+        p75ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 75)),
+        p90ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 90)),
+        p95ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 95)),
+        p99ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 99)),
+        p999ms: millisecondsFromNanoseconds(graphicsPercentile(sorted, 99.9)),
+        maxms: millisecondsFromNanoseconds(sorted[sorted.count - 1])
+    )
+}
+
+// Collect one frame's samples (called after end-frame timing; the GPU sample
+// trails the CPU one by the in-flight depth, which percentiles do not mind).
+function metalBenchCollect(
+    ctxPtr: RawPtr,
+    frameNs: borrow mut[Number],
+    cpuNs: borrow mut[Number],
+    gpuNs: borrow mut[Number]
+) {
+    frameNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)))
+    cpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)))
+    gpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs)))
+}
+
+public function metalBenchReport(
+    ctxPtr: RawPtr,
+    frameNs: borrow[Number],
+    cpuNs: borrow[Number],
+    gpuNs: borrow[Number]
+) {
+    let pxW = metalContextPhysicalWidth(ctxPtr)
+    let pxH = metalContextPhysicalHeight(ctxPtr)
+    log info(
+        "Ember on-screen benchmark",
+        width: pxW,
+        height: pxH,
+        frames: frameNs.count,
+        note: "gpu is command-buffer residency, a ceiling"
+    )
+    metalBenchReportSeries("frame", frameNs)
+    metalBenchReportSeries("cpu", cpuNs)
+    metalBenchReportSeries("gpu", gpuNs)
+}

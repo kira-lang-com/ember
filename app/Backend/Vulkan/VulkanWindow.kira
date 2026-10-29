@@ -1,0 +1,114 @@
+import Foundation
+import Heap
+
+public enum VulkanWindowPlatform {
+    Windows
+    Linux
+}
+
+public function vulkanWindowProcedure(
+    window: RawPtr,
+    message: U32,
+    wparam: U64,
+    lparam: Int
+) -> Int {
+    match fromCode<Win32Message>(message) {
+        Close -> {
+            destroyWindowHandle(window)
+            return 0
+        }
+        Destroy -> {
+            postQuitMessage(0)
+            return 0
+        }
+        // Everything else takes the default handling.
+        else -> return defaultWindowProcedure(window, message, wparam, lparam)
+    }
+}
+
+public function vulkanRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
+    return windowClassRegistered(
+        WindowClass {
+            byteSize: U32(sizeOf<WindowClass>()),
+            style: WindowClassStyle.redrawOnResize,
+            procedure: vulkanWindowProcedure,
+            instance: instance,
+            cursor: loadCursor(nullPointer(), StockCursor.arrow),
+            className: className
+        }
+    )
+}
+
+// Only surface creation is Vulkan-specific. Window creation stays on the same
+// native Win32 and Wayland implementations Dawn already uses, so both backends
+// get identical sizing, input and close behavior.
+construct VulkanWindow {
+    requires {
+        function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure>
+        function clientWidth(window: RawPtr) -> Number
+        function clientHeight(window: RawPtr) -> Number
+        function scale(window: RawPtr) -> Number
+        function resize(window: RawPtr, width: Number, height: Number)
+        function close(window: RawPtr) -> Void
+        function createSurface(instance: RawPtr, window: RawPtr) -> Optional<RawPtr>
+    }
+}
+
+construct VulkanWindowWin32() extends VulkanWindow {
+    function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure> {
+        let instance = moduleHandle("")
+        if !vulkanRegisterWindowClass(instance, "EmberVulkanWindow") {
+            return .Error(.ClassNotRegistered)
+        }
+        return dawnOpenWindow(instance, "EmberVulkanWindow", window)
+    }
+    function clientWidth(window: RawPtr) -> Number { return dawnClientWidth(window) }
+    function clientHeight(window: RawPtr) -> Number { return dawnClientHeight(window) }
+    function scale(window: RawPtr) -> Number { return dawnWindowScale(window) }
+    function resize(window: RawPtr, width: Number, height: Number) {
+        dawnResizeWindow(window, width, height)
+    }
+    function close(window: RawPtr) {
+        destroyWindowHandle(window)
+    }
+    function createSurface(instance: RawPtr, window: RawPtr) -> Optional<RawPtr> {
+        return vulkanCreateWin32Surface(instance, moduleHandle(""), window)
+    }
+}
+
+construct VulkanWindowWayland() extends VulkanWindow {
+    function open(window: borrow WindowRequest) -> Result<RawPtr, WindowFailure> {
+        return DawnWindowWayland().open(window)
+    }
+    // In pixels: the surface's points at its scale.
+    function clientWidth(window: RawPtr) -> Number {
+        return Int(kira_wayland_surface_width(window)) * self.scale(window)
+    }
+    function clientHeight(window: RawPtr) -> Number {
+        return Int(kira_wayland_surface_height(window)) * self.scale(window)
+    }
+    function scale(window: RawPtr) -> Number { return Int(kira_wayland_surface_scale(window)) }
+    function resize(window: RawPtr, width: Number, height: Number) {}
+    function close(window: RawPtr) {
+        kira_wayland_proxy_destroy(window)
+    }
+    function createSurface(instance: RawPtr, window: RawPtr) -> Optional<RawPtr> {
+        return vulkanCreateWaylandSurface(instance, kira_wayland_proxy_get_display(window), window)
+    }
+}
+
+function vulkanWindowFor(platform: borrow VulkanWindowPlatform) -> Any VulkanWindow {
+    match platform {
+        Windows -> return VulkanWindowWin32()
+        Linux -> return VulkanWindowWayland()
+    }
+}
+
+public function vulkanWindowPlatformForHost() -> VulkanWindowPlatform {
+    // Tessera opens no window, so this is never asked there; it answers as
+    // the Linux kernel's, the code its build already links.
+    if targetPlatform!() == .Linux || targetPlatform!() == .Tessera {
+        return .Linux
+    }
+    return .Windows
+}

@@ -1,0 +1,358 @@
+import Foundation
+// WebGPU's own closed sets, and the two shapes its generated bindings cannot
+// carry, written out once.
+//
+// # Why the constants are here
+//
+// `webgpu.h` spells its enumerations as C `enum`s, and autobind carries types
+// and functions across rather than the values inside an enumeration — a Kira
+// binding names `format: I32`, and what a valid `I32` is stays in the header.
+// So the numbers live here, one function per value, in the same shape
+// `Formats.kira` and `PassVocabulary.kira` already use for Kira's own
+// vocabulary. Every mapper below turns one of those enums into one of these,
+// and a mapper names every variant with no `_` arm.
+//
+// # The two shapes the binding skips
+//
+// `WGPUDeviceDescriptor` is not in the generated file, and the file says why:
+// its `deviceLostCallbackInfo.callback` takes a `WGPUDevice const *`, a pointer
+// to a pointer with no C type name to point at. Only `WGPUDeviceDescriptor_ptr`
+// survives, and a pointer with no writable target cannot be built.
+//
+// A device created with a null descriptor works and reports nothing: no device-
+// lost callback, and no uncaptured-error callback — so a WGSL shader Dawn
+// rejects, a bind group that does not match its layout, and a draw outside a
+// pass all fail silently and leave a blank frame with no line saying why. That
+// is precisely the failure this backend cannot afford. So the descriptor is
+// declared here field for field, with the two callback parameters that have no
+// name declared as the pointer words they are, and `wgpuAdapterCreateDevice` is
+// declared a second time against it. The symbol is the same one; the Kira name
+// is different because the shape is.
+
+public @FFI.Pointer { target: WGPUStringView, ownership: borrowed }
+struct WGPUStringViewPointer {}
+
+public @FFI.Extern { library: kira_runtime, symbol: kira_dynamic_alloc, abi: c }
+function allocateSurfaceTexture(size: U64) -> WGPUSurfaceTexture_ptr
+
+// `WGPUDeviceLostCallback`: `(WGPUDevice const *device, WGPUDeviceLostReason,
+// WGPUStringView message, void *userdata1, void *userdata2)`. The first is a
+// pointer to a handle, which is a pointer word; the message is a struct C passes
+// by value, and the seam hands it over as a pointer to it.
+public @FFI.Callback { abi: c, params: [RawPtr, I32, WGPUStringView, RawPtr, RawPtr], result: Void }
+struct DawnDeviceLostCallback {}
+
+// `WGPUUncapturedErrorCallback`: the same shape with an error type in place of
+// the loss reason, and no callback mode beside it.
+public @FFI.Callback { abi: c, params: [RawPtr, I32, WGPUStringView, RawPtr, RawPtr], result: Void }
+struct DawnUncapturedErrorCallback {}
+
+// A `WGPUStringView` over Kira text. The length is the byte count rather than
+// `WGPU_STRLEN`, so a label carrying an interior NUL still measures right.
+public function dawnText(text: borrow String) -> WGPUStringView {
+    return WGPUStringView { data: text, length: U64(text.count) }
+}
+
+// --- structure types -----------------------------------------------------
+// The `sType` of each chained extension this backend uses.
+
+// --- callback modes ------------------------------------------------------
+// `AllowProcessEvents`: the callback runs inside `wgpuInstanceProcessEvents`,
+// which is the one place this backend is willing to re-enter Kira from Dawn.
+
+// --- adapter selection ---------------------------------------------------
+
+// --- surfaces ------------------------------------------------------------
+
+// The present mode a run asked for, or `Fifo` when it asked for none.
+//
+// `Fifo` is the only mode every surface must support, so it stays the default.
+// The others exist because a frame-cost measurement taken under `Fifo` measures
+// the display's refresh interval rather than the renderer: the wait for a
+// drawable *is* the frame time there, and nothing about the program's own cost
+// is visible under it.
+public function dawnPresentModeFromEnvironment() -> I32 {
+    let requested = environmentValue("KIRA_GRAPHICS_PRESENT_MODE")
+    if requested.count == 0 || requested == "fifo" {
+        return DawnVocabulary.presentModeFifo
+    }
+    if requested == "fifo-relaxed" {
+        return DawnVocabulary.presentModeFifoRelaxed
+    }
+    if requested == "immediate" {
+        return DawnVocabulary.presentModeImmediate
+    }
+    if requested == "mailbox" {
+        return DawnVocabulary.presentModeMailbox
+    }
+    log fault(
+        "KIRA_GRAPHICS_PRESENT_MODE names a mode other than `fifo`, `fifo-relaxed`, `immediate` or `mailbox`",
+        requested: requested
+    )
+    return DawnVocabulary.presentModeFifo
+}
+// `SuccessOptimal` and `SuccessSuboptimal`. A suboptimal texture still draws;
+// it says the surface should be reconfigured, which a resize already does.
+// `WGPU_DEPTH_SLICE_UNDEFINED`, which a 2D color attachment must carry: a zero
+// there names slice 0 of a 3D texture and is refused for a 2D one.
+
+// --- texture formats -----------------------------------------------------
+
+// --- texture usage -------------------------------------------------------
+
+// --- buffer usage --------------------------------------------------------
+
+// --- pass actions --------------------------------------------------------
+
+// --- views and copies ----------------------------------------------------
+
+// --- optional bool -------------------------------------------------------
+
+// --- vertex ---------------------------------------------------------------
+
+// --- error reporting -----------------------------------------------------
+// `WGPUErrorType`, for the uncaptured-error callback's own message.
+public function dawnErrorText(kind: I32) -> String {
+    if kind == I32(2) { return "validation" }
+    if kind == I32(3) { return "out of memory" }
+    if kind == I32(4) { return "internal" }
+    return "unknown"
+}
+
+// --- Kira's vocabulary, in WebGPU's numbers ------------------------------
+// `Swapchain` is the one format that is not a format: it names whatever the
+// surface turned out to be, which only the runtime knows, so the caller that
+// has the state resolves it before asking.
+public function dawnTextureFormat(format: borrow TextureFormat) -> I32 {
+    match format {
+        Rgba8Unorm -> return DawnVocabulary.formatRgba8Unorm
+        Rgba16Float -> return DawnVocabulary.formatRgba16Float
+        Depth24Stencil8 -> return DawnVocabulary.formatDepth24PlusStencil8
+        R32Uint -> return DawnVocabulary.formatR32Uint
+        Swapchain -> return DawnVocabulary.formatUndefined
+        None -> return DawnVocabulary.formatUndefined
+    }
+}
+
+public function dawnVertexFormat(format: borrow VertexFormat) -> I32 {
+    match format {
+        Float -> return I32(28)
+        Float2 -> return I32(29)
+        Float3 -> return I32(30)
+        Float4 -> return I32(31)
+    }
+}
+
+public function dawnVertexFormatBytes(format: borrow VertexFormat) -> Number {
+    match format {
+        Float -> return 4
+        Float2 -> return 8
+        Float3 -> return 12
+        Float4 -> return 16
+    }
+}
+
+public function dawnCompareFunction(compare: borrow CompareFunction) -> I32 {
+    match compare {
+        Never -> return I32(1)
+        Less -> return I32(2)
+        LessEqual -> return I32(4)
+        Equal -> return I32(3)
+        GreaterEqual -> return I32(7)
+        Greater -> return I32(5)
+        Always -> return I32(8)
+    }
+}
+
+public function dawnCullMode(mode: borrow CullMode) -> I32 {
+    match mode {
+        None -> return I32(1)
+        Front -> return I32(2)
+        Back -> return I32(3)
+    }
+}
+
+public function dawnFrontFace(face: borrow FrontFace) -> I32 {
+    match face {
+        CounterClockwise -> return I32(1)
+        Clockwise -> return I32(2)
+    }
+}
+
+public function dawnPrimitiveTopology(topology: borrow PrimitiveTopology) -> I32 {
+    match topology {
+        TriangleList -> return I32(4)
+        TriangleStrip -> return I32(5)
+        LineList -> return I32(2)
+    }
+}
+
+public function dawnIndexFormat(format: borrow IndexFormat) -> I32 {
+    match format {
+        Uint16 -> return DawnVocabulary.indexFormatUint16
+        Uint32 -> return DawnVocabulary.indexFormatUint32
+    }
+}
+
+public function dawnLoadAction(action: borrow LoadAction) -> I32 {
+    match action {
+        Clear -> return DawnVocabulary.loadOpClear
+        Load -> return DawnVocabulary.loadOpLoad
+        // WebGPU has no "don't care" load: an attachment is either preserved or
+        // cleared, and clearing is the one of the two that cannot read back
+        // whatever the last pass left in the texture.
+        DontCare -> return DawnVocabulary.loadOpClear
+    }
+}
+
+public function dawnStoreAction(action: borrow StoreAction) -> I32 {
+    match action {
+        Store -> return DawnVocabulary.storeOpStore
+        DontCare -> return DawnVocabulary.storeOpDiscard
+    }
+}
+
+public function dawnFilterMode(filter: borrow TextureFilter) -> I32 {
+    match filter {
+        Nearest -> return I32(WGPUFilterMode_Nearest)
+        Linear -> return I32(WGPUFilterMode_Linear)
+    }
+}
+
+public function dawnAddressMode(mode: borrow AddressMode) -> I32 {
+    match mode {
+        ClampToEdge -> return I32(WGPUAddressMode_ClampToEdge)
+        Repeat -> return I32(WGPUAddressMode_Repeat)
+    }
+}
+
+function dawnBlendFactor(factor: BlendFactor) -> I32 {
+    let raw = match factor {
+        Zero -> WGPUBlendFactor_Zero
+        One -> WGPUBlendFactor_One
+        Source -> WGPUBlendFactor_Src
+        OneMinusSource -> WGPUBlendFactor_OneMinusSrc
+        SourceAlpha -> WGPUBlendFactor_SrcAlpha
+        OneMinusSourceAlpha -> WGPUBlendFactor_OneMinusSrcAlpha
+        Destination -> WGPUBlendFactor_Dst
+        OneMinusDestination -> WGPUBlendFactor_OneMinusDst
+        DestinationAlpha -> WGPUBlendFactor_DstAlpha
+        OneMinusDestinationAlpha -> WGPUBlendFactor_OneMinusDstAlpha
+    }
+    return I32(raw)
+}
+
+function dawnBlendOperation(operation: BlendOperation) -> I32 {
+    let raw = match operation {
+        Add -> WGPUBlendOperation_Add
+        Subtract -> WGPUBlendOperation_Subtract
+        ReverseSubtract -> WGPUBlendOperation_ReverseSubtract
+        Min -> WGPUBlendOperation_Min
+        Max -> WGPUBlendOperation_Max
+    }
+    return I32(raw)
+}
+
+function dawnBlendComponent(component: borrow BlendComponent) -> WGPUBlendComponent {
+    return WGPUBlendComponent {
+        operation: dawnBlendOperation(component.operation),
+        srcFactor: dawnBlendFactor(component.source),
+        dstFactor: dawnBlendFactor(component.destination)
+    }
+}
+
+// A blend as WebGPU's factors and operations.
+public function dawnBlendState(blend: borrow BlendFunction) -> WGPUBlendState {
+    return WGPUBlendState {
+        color: dawnBlendComponent(blend.color),
+        alpha: dawnBlendComponent(blend.alpha)
+    }
+}
+
+// What a texture created for `usage` may be used as.
+//
+// Every one of them carries `CopyDst`, because `createTextureFromPixels` and
+// `updateTexture` both write through the queue, and `CopySrc` so a frame
+// capture can read a render target back.
+public function dawnTextureUsage(usage: borrow TextureUsage) -> U64 {
+    let shared = DawnVocabulary.textureUsageCopyDestination | DawnVocabulary.textureUsageCopySource
+    match usage {
+        Sampled -> return shared | DawnVocabulary.textureUsageBinding
+        SampledStreaming -> return shared | DawnVocabulary.textureUsageBinding
+        RenderTarget -> return shared | DawnVocabulary.textureUsageRenderAttachment
+        RenderTargetSampled -> return shared | DawnVocabulary.textureUsageRenderAttachment | DawnVocabulary.textureUsageBinding
+        DepthStencil -> return shared | DawnVocabulary.textureUsageRenderAttachment
+        SampledStorage -> return shared
+            | DawnVocabulary.textureUsageBinding
+            | DawnVocabulary.textureUsageStorageBinding
+    }
+}
+
+public function dawnBufferUsage(usage: borrow BufferUsage) -> U64 {
+    let shared = DawnVocabulary.bufferUsageCopyDestination | DawnVocabulary.bufferUsageCopySource
+    match usage {
+        Vertex -> return shared | DawnVocabulary.bufferUsageVertex
+        Index -> return shared | DawnVocabulary.bufferUsageIndex
+        Uniform -> return shared | DawnVocabulary.bufferUsageUniform
+        Storage -> return shared | DawnVocabulary.bufferUsageStorage
+    }
+}
+
+public namespace DawnVocabulary {
+    // WGPUFeatureName_ShaderF16: `enable f16;` in WGSL.
+    let featureShaderF16: I32 = I32(WGPUFeatureName_ShaderF16)
+    // WGPUFeatureName_ShaderModuleCompilationOptions: a module's strict math.
+    let featureCompilationOptions: I32 = I32(WGPUFeatureName_ShaderModuleCompilationOptions)
+    let structureCompilationOptions: I32 = I32(WGPUSType_ShaderModuleCompilationOptions)
+    let textureUsageCopySource: U64 = U64(1)
+    let textureUsageCopyDestination: U64 = U64(2)
+    let textureUsageBinding: U64 = U64(4)
+    let textureUsageStorageBinding: U64 = U64(8)
+    let textureUsageRenderAttachment: U64 = U64(16)
+    let bufferUsageMapRead: U64 = U64(1)
+    let bufferUsageCopySource: U64 = U64(4)
+    let bufferUsageCopyDestination: U64 = U64(8)
+    let bufferUsageIndex: U64 = U64(16)
+    let bufferUsageVertex: U64 = U64(32)
+    let bufferUsageUniform: U64 = U64(64)
+    let bufferUsageStorage: U64 = U64(128)
+    let colorWriteMaskAll: U64 = U64(15)
+    let mapModeRead: U64 = U64(1)
+    let structureWgsl: I32 = I32(2)
+    let structureWindowsHwnd: I32 = I32(5)
+    let structureWaylandSurface: I32 = I32(7)
+    let callbackOnProcessEvents: I32 = I32(2)
+    let callbackWaitAnyOnly: I32 = I32(1)
+    let instanceFeatureTimedWaitAny: I32 = I32(1)
+    let waitSucceeded: I32 = I32(1)
+    let featureLevelCore: I32 = I32(2)
+    let powerPreferenceHighPerformance: I32 = I32(2)
+    let requestAdapterSucceeded: I32 = I32(1)
+    let compositeAlphaAuto: I32 = I32(0)
+    let presentModeFifo: I32 = I32(1)
+    let presentModeFifoRelaxed: I32 = I32(2)
+    let presentModeImmediate: I32 = I32(3)
+    let presentModeMailbox: I32 = I32(4)
+    let surfaceTextureOptimal: I32 = I32(1)
+    let surfaceTextureSuboptimal: I32 = I32(2)
+    let depthSliceUndefined: U32 = U32(4294967295)
+    let formatUndefined: I32 = I32(0)
+    let formatRgba8Unorm: I32 = I32(22)
+    let formatBgra8Unorm: I32 = I32(27)
+    let formatRgba16Float: I32 = I32(40)
+    let formatR32Uint: I32 = I32(15)
+    let formatDepth24PlusStencil8: I32 = I32(47)
+    let loadOpLoad: I32 = I32(1)
+    let loadOpClear: I32 = I32(2)
+    let storeOpStore: I32 = I32(1)
+    let storeOpDiscard: I32 = I32(2)
+    let textureDimension2d: I32 = I32(2)
+    let textureViewDimension2d: I32 = I32(2)
+    let textureAspectAll: I32 = I32(1)
+    let mapSucceeded: I32 = I32(1)
+    let optionalFalse: I32 = I32(0)
+    let optionalTrue: I32 = I32(1)
+    let vertexStepModeVertex: I32 = I32(1)
+    let indexFormatUint16: I32 = I32(1)
+    let indexFormatUint32: I32 = I32(2)
+}

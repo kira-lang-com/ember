@@ -1,0 +1,202 @@
+// The Metal backend's answers to the public `Graphics` surface.
+//
+// `Graphics` is dispatch and nothing else: one `match` over the backend, one
+// call per arm. The work each arm names lives here for Metal and in
+// `SokolGraphics.kira` for sokol, so a reader following a method reaches the
+// backend that implements it in one step instead of scrolling past the other
+// backend's body.
+
+public function metalCreateGraphicsShader(ctx: RawPtr, source: borrow String) -> ShaderResult {
+    return match metalCreateShader(ctx, source) {
+        Some(id) -> .Ok(GraphicsShader { id: ShaderId(UN32(id)) })
+        None -> .Error(.ShaderRejected)
+    }
+}
+
+public function metalCreateGraphicsRenderPipeline(
+    ctx: RawPtr,
+    descriptor: borrow RenderPipelineDescriptor
+) -> PipelineResult {
+    var recipe = MetalPipelineRecipe {
+        shaderId: descriptor.shader.id.raw,
+        depthEnabled: descriptor.depthStencil.depthEnabled,
+        vertexEntry: copy descriptor.vertexEntry,
+        fragmentEntry: copy descriptor.fragmentEntry,
+        stride: descriptor.vertexLayout.stride
+    }
+    if descriptor.colorTargets.count > 0 {
+        recipe.blend = copy descriptor.colorTargets[0].blend
+        recipe.colorFormat = metalPixelFormatForTexture(
+            textureFormatCode(descriptor.colorTargets[0].format)
+        )
+    }
+    for attribute in descriptor.vertexLayout.attributes {
+        recipe.attributeFormats.append(vertexFormatCode(attribute.format))
+        recipe.attributeOffsets.append(attribute.offset)
+    }
+    return match metalCreateRenderPipelineWithEntries(ctx, recipe) {
+        Some(id) -> .Ok(RenderPipeline { id: PipelineId(UN32(id)) })
+        None -> .Error(.DeviceRefused)
+    }
+}
+
+// The buffer and the memory a caller writes into, which on Metal are the same
+// storage: `contents` is the base of the ring the GPU reads, so a write lands in
+// the buffer itself and `commitDynamicBuffer` has nothing left to do.
+public function metalCreateGraphicsDynamicBuffer(
+    ctx: RawPtr,
+    floatCapacity: Number
+) -> DynamicBufferResult {
+    let id = match metalCreateDynamicBuffer(ctx, floatCapacity) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    return .Ok(
+        DynamicBuffer {
+            buffer: GraphicsBuffer { id: BufferId(UN32(id)) },
+            contents: metalDynamicBufferContents(ctx, id)
+        }
+    )
+}
+
+public function metalCreateGraphicsBuffer(ctx: RawPtr, data: borrow[F32]) -> BufferResult {
+    return match metalCreateVertexBuffer(ctx, data) {
+        Some(id) -> .Ok(GraphicsBuffer { id: BufferId(UN32(id)) })
+        None -> .Error(.DeviceRefused)
+    }
+}
+
+public function metalCreateGraphicsIndexBuffer(ctx: RawPtr, data: borrow[U32]) -> BufferResult {
+    return match metalCreateIndexBuffer(ctx, data) {
+        Some(id) -> .Ok(GraphicsBuffer { id: BufferId(UN32(id)) })
+        None -> .Error(.DeviceRefused)
+    }
+}
+
+// Metal keeps a uniform's values in its own ObjC-side ring buffer, tracked by
+// `id` through `ctx` — the `storage` every `GraphicsUniform` carries is the
+// Sokol draw path's own live payload (see `GraphicsUniform.kira`) and Metal never
+// reads it, so this is an inert placeholder.
+public function metalMakeUniform(
+    ctx: RawPtr,
+    descriptor: borrow UniformDescriptor
+) -> UniformResult {
+    let id = match metalCreateUniform(ctx, descriptor.expectedFloatCount) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    metalUpdateUniform(ctx, id, narrowFloats(descriptor.data))
+    return .Ok(GraphicsUniform { storage: nativeState(UniformState {}), id: UniformId(UN32(id)) })
+}
+
+// A bind group holding `entries`. As with `GraphicsUniform.storage` above:
+// Metal's bind groups live in their own ObjC-side registry through `ctx`, and
+// the group's `storage` is only ever read by the Sokol draw path.
+function metalBindGroupOf(ctx: RawPtr, entries: borrow[MetalBindEntry]) -> BindGroupResult {
+    let id = match metalCreateBindGroup(ctx) {
+        Some(id) -> id
+        None -> return .Error(.DeviceRefused)
+    }
+    for entry in entries {
+        metalBindGroupAddEntry(ctx, id, entry)
+    }
+    return .Ok(BindGroup { storage: nativeState(BindGroupState {}), id: BindGroupId(UN32(id)) })
+}
+
+public function metalCreateGraphicsBindGroup(
+    ctx: RawPtr,
+    descriptor: borrow BindGroupDescriptor
+) -> BindGroupResult {
+    var entries: [MetalBindEntry] = []
+    for entry in descriptor.uniformEntries {
+        entries.append(
+            MetalBindEntry {
+                kind: MetalBindGroup.bindEntryKindUniform,
+                slot: entry.uniformSlot,
+                resourceId: entry.uniform.id.raw
+            }
+        )
+    }
+    for entry in descriptor.textureEntries {
+        entries.append(
+            MetalBindEntry {
+                kind: MetalBindGroup.bindEntryKindTexture,
+                slot: entry.textureSlot,
+                resourceId: entry.texture.id.raw
+            }
+        )
+    }
+    for entry in descriptor.samplerEntries {
+        entries.append(
+            MetalBindEntry {
+                kind: MetalBindGroup.bindEntryKindSampler,
+                slot: entry.samplerSlot,
+                resourceId: entry.sampler.id.raw
+            }
+        )
+    }
+    return metalBindGroupOf(ctx, entries)
+}
+
+// A raw registered buffer at a uniform-style slot: the vertex stage reads it at
+// [[buffer(slot+1)]] because vertex buffer 0 holds the attribute stream, and the
+// fragment stage at [[buffer(slot)]]. A uniform binds the same way.
+public function metalCreateGraphicsBufferBindGroup(
+    ctx: RawPtr,
+    slot: Number,
+    bufferId: Number
+) -> BindGroupResult {
+    return metalBindGroupOf(
+        ctx,
+        [MetalBindEntry {
+            kind: MetalBindGroup.bindEntryKindUniform,
+            slot: slot,
+            resourceId: bufferId
+        }]
+    )
+}
+
+public function metalBeginGraphicsBindGroup(ctx: RawPtr) -> BindGroupResult {
+    return metalBindGroupOf(ctx, [])
+}
+
+public function metalCreateGraphicsTextureSamplerBindGroup(
+    ctx: RawPtr,
+    binding: borrow TextureSamplerBinding
+) -> BindGroupResult {
+    return metalBindGroupOf(
+        ctx,
+        [MetalBindEntry {
+            kind: MetalBindGroup.bindEntryKindTexture,
+            slot: binding.textureSlot,
+            resourceId: binding.texture.id.raw
+        }, MetalBindEntry {
+            kind: MetalBindGroup.bindEntryKindSampler,
+            slot: binding.samplerSlot,
+            resourceId: binding.sampler.id.raw
+        }]
+    )
+}
+
+public function metalCreateGraphicsSampler(
+    ctx: RawPtr,
+    descriptor: borrow SamplerDescriptor
+) -> SamplerResult {
+    var minFilter = MetalTexture.samplerFilterNearest
+    if descriptor.minFilter == .Linear {
+        minFilter = MetalTexture.samplerFilterLinear
+    }
+    var magFilter = MetalTexture.samplerFilterNearest
+    if descriptor.magFilter == .Linear {
+        magFilter = MetalTexture.samplerFilterLinear
+    }
+    return match metalCreateSampler(
+        ctx,
+        minFilter,
+        magFilter,
+        MetalTexture.samplerAddressClampToEdge
+    ) {
+        Some(id) -> .Ok(GraphicsSampler { id: SamplerId(UN32(id)) })
+        None -> .Error(.DeviceRefused)
+    }
+}

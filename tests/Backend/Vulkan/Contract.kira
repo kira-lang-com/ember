@@ -1,0 +1,73 @@
+import Foundation
+import Ember
+
+// The Vulkan contract: the pure mappings the backend relies on (composite
+// alpha, sample counts, dynamic offset order, SPIR-V word parsing). These run
+// on every host because they touch no device.
+
+// The composite alpha the surface reports for one supported bit.
+function compositeAlphaFor(bit: Number) -> Number {
+    var capabilities = VkSurfaceCapabilitiesKHR()
+    capabilities.supportedCompositeAlpha = U32(bit)
+    return Number(vulkanCompositeAlpha(capabilities))
+}
+
+// The Vulkan sample flag for a count, or -1 when the count has none.
+function sampleFlagFor(samples: Number) -> Number {
+    return match vulkanSampleCount(samples) {
+        Some(flag) -> Number(flag)
+        None -> -1
+    }
+}
+
+// A single supported composite alpha bit comes back unchanged.
+@Test
+function compositeAlphaUsesSupportedBits() {
+    expect!((compositeAlphaFor(1)) == (1))
+    expect!((compositeAlphaFor(2)) == (2))
+    expect!((compositeAlphaFor(4)) == (4))
+    expect!((compositeAlphaFor(8)) == (8))
+}
+
+// Each power-of-two sample count maps to its own flag, and counts that are not
+// a supported power of two have none.
+@Test
+function sampleCountsMapToVulkanFlags() {
+    expect!((sampleFlagFor(1)) == (1))
+    expect!((sampleFlagFor(2)) == (2))
+    expect!((sampleFlagFor(4)) == (4))
+    expect!((sampleFlagFor(8)) == (8))
+    expect!((sampleFlagFor(16)) == (16))
+    expect!((sampleFlagFor(32)) == (32))
+    expect!((sampleFlagFor(64)) == (64))
+    expect!((sampleFlagFor(0)) == (-1))
+    expect!((sampleFlagFor(3)) == (-1))
+}
+
+// Reflection stores uniforms before storage buffers, but Vulkan orders dynamic
+// offsets by binding number across both kinds.
+@Test
+function dynamicOffsetsFollowBindingOrder() {
+    let reflection = kslParseResourceReflection("u|later:7:16:1:0::;s|earlier:2:1:2:0")
+    let bindings = vulkanDescriptorBindings(reflection, 0)
+    expect!((bindings.count) == (2))
+    expect!((Number(bindings[0].binding)) == (2))
+    expect!((Number(bindings[1].binding)) == (7))
+}
+
+// Hex that is short, or has a non-hex digit, parses to no words.
+@Test
+function spirvRejectsMalformedHex() {
+    expect!((vulkanSpirvWords("123").count) == (0))
+    expect!((vulkanSpirvWords("0000000g").count) == (0))
+}
+
+// Each 32-bit little-endian word keeps all its bits, including the high bit.
+@Test
+function spirvPreservesWordBits() {
+    let words = vulkanSpirvWords("07230203ffffffff80000000")
+    expect!((words.count) == (3))
+    expect!((Number(words[0])) == (119734787))
+    expect!((Number(words[1])) == (4294967295))
+    expect!((Number(words[2])) == (2147483648))
+}

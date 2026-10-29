@@ -1,0 +1,16 @@
+// The public surface speaks `Number`, `UNumber` and the sized aliases. Vertex
+// data reaches every device as 32-bit floats, which no alias names, so it is
+// `[Number]`; an index is a 32-bit unsigned integer, so it is `[UN32]`. A
+// backend narrows both when it writes the buffer, and nowhere before.
+public struct BufferDescriptor {
+    var label: String = ""
+    var usage: BufferUsage = .Vertex
+    var data: [Number] = []
+}
+
+// An index buffer's usage is its name, so it carries none: `sg_buffer_desc`
+// takes the flag from the call that makes it, and Metal has no usage at all.
+public struct IndexBufferDescriptor {
+    var label: String = ""
+    var data: [UN32] = []
+}

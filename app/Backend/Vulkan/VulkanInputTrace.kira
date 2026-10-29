@@ -1,0 +1,35 @@
+// Every event Vulkan delivers, in order, when `EMBER_LOG_INPUT` is set.
+//
+// See `DawnInputTrace.kira` for why this is one function over the handler rather
+// than a log at each call site, and for why the handler is built by a named
+// function rather than a lambda at the binding.
+public function vulkanTracedEvent(runtime: borrow GraphicsRuntimeState) -> (
+    borrow AppEvent
+) -> Void {
+    let deliver: (borrow AppEvent) -> Void = runtime.app.eventHandler
+    return { event in
+        vulkanDeliveredEvent(runtime, event)
+        deliver(event)
+        return
+    }
+}
+
+// One delivered event, as the backend saw it.
+public function vulkanDeliveredEvent(runtime: borrow GraphicsRuntimeState, event: borrow AppEvent) {
+    if runtime.tracing.input {
+        log debug(
+            "Ember delivered an event",
+            area: "input",
+            kind: traceText(event.kind),
+            button: traceText(event.pointerButton),
+            x: event.pointerX,
+            y: event.pointerY,
+            dx: event.pointerDeltaX,
+            dy: event.pointerDeltaY,
+            scrollX: event.scrollX,
+            scrollY: event.scrollY,
+            repeat: event.keyRepeat,
+            frame: event.frameCount
+        )
+    }
+}

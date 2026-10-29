@@ -1,0 +1,224 @@
+import Foundation
+import Heap
+
+// A graphics device with no window.
+//
+// Every runner in this library opens a window, because almost everything that
+// draws has one. A COMPONENT of a compositor does not: its pixels belong to
+// another process, it renders into shared textures, and a window of its own
+// would be a second empty window on the desktop beside the one its output is
+// actually shown in.
+//
+// What it needs is smaller than a window, not larger. A device is an instance,
+// an adapter and a queue; a swapchain is the only part of the usual path that
+// needs a surface, and a pass into a TEXTURE never touches one. So this is the
+// ordinary device creation with the windowing left out, rather than a window
+// with a flag that hides it -- there is nothing to hide.
+//
+//     var device = try openHeadlessGraphics() otherwise return
+//     let target = device.graphics().createTexture(TextureDescriptor {
+//         label: "component-output",
+//         width: 1280,
+//         height: 800
+//     })
+//     ...
+//     var frame = device.frame()
+//     batch.presentBatchIntoTexture(frame, device.graphics(), target.texture, ...)
+//     device.submit()
+//
+// The frame is made and submitted by the caller because a component's pace is
+// its own: a browser draws when a page moves and an assistant draws when a token
+// arrives, and neither is a display refresh.
+// Why no headless device could be opened.
+public enum HeadlessFailure {
+    Vulkan(VulkanSetupFailure)
+    Dawn(DawnSetupFailure)
+    // Metal renders only through a window here.
+    NoMetalHeadless
+    // The device was closed.
+    Closed
+    // The frame a pass would record into could not be begun.
+    VulkanFrame(VulkanFrameFailure)
+}
+
+// Whether a headless device can still be drawn with.
+public enum HeadlessState {
+    Open
+    Closed
+}
+
+// A class, so it crosses a library boundary as an opaque handle (KLF-RIDL
+// section 21.5): the device state it owns lives in this library's runtime, and
+// only this library may reach or release it.
+public class GraphicsHeadless {
+    // The headless device state is an ordinary typed owner. `Graphics` keeps
+    // only borrowed raw callback words into it; this field is the lifetime.
+    var context: NativeState<GraphicsRuntimeState>
+    var handle: Graphics = Graphics {
+        userData: nullPointer(),
+        backend: .Dawn,
+        backendContext: nullPointer()
+    }
+    var state: HeadlessState = .Open
+
+    // The device to create resources on and draw with.
+    function graphics() -> Graphics {
+        return copy handle
+    }
+
+    // A frame to record passes into. Every pass must target a TEXTURE: there is
+    // no swapchain here, and a pass that asked for one would be asking for the
+    // window this deliberately does not have.
+    function frame() -> Result<RenderFrame, HeadlessFailure> {
+        if self.state == .Closed {
+            return .Error(.Closed)
+        }
+        if self.handle.backend == .Vulkan {
+            let context = nativeUserDataBorrow(self.context)
+            match vulkanPrepareHeadlessFrame(context) {
+                Ok -> {}
+                Error(failure) -> return .Error(.VulkanFrame(failure))
+            }
+        }
+        return .Ok(self.handle.frame())
+    }
+
+    // Hand everything recorded since the last submit to the queue.
+    function submit() {
+        if self.state == .Closed {
+            return
+        }
+        let context = nativeUserDataBorrow(self.context)
+        if self.handle.backend == .Vulkan {
+            vulkanSubmitHeadlessFrame(context)
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        dawnSubmitEncoder(state)
+    }
+
+    // Hand everything recorded to the queue and wait until the GPU has done
+    // it. A destroyed resource a submitted pass still uses is freed only when
+    // that pass completes, so a caller that records much faster than the GPU
+    // draws waits here to keep what it destroyed from piling up.
+    function finish() {
+        if self.state == .Closed {
+            return
+        }
+        let context = nativeUserDataBorrow(self.context)
+        if self.handle.backend == .Vulkan {
+            // A Vulkan submit already waits for its frame's fence.
+            vulkanSubmitHeadlessFrame(context)
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        dawnDrainQueue(context, state)
+    }
+
+    // Let the device make progress on work already submitted.
+    //
+    // A windowed program gets this for free from its run loop, which processes
+    // events every time it presents. A component has no run loop, so it says so
+    // itself -- and a component that never did would submit work the device
+    // never got round to reporting on.
+    function tick() {
+        if self.state == .Closed || self.handle.backend == .Vulkan {
+            return
+        }
+        let context = nativeUserDataBorrow(self.context)
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        wgpuInstanceProcessEvents(state.dawn.instance)
+    }
+
+    // Read one headless render target back as a binary PPM.
+    function capture(
+        texture: borrow GraphicsTexture,
+        path: borrow String
+    ) -> Result<Void, CaptureFailure> {
+        if self.state == .Closed {
+            return .Error(.NoDevice)
+        }
+        return captureTexture(self.handle, texture, path)
+    }
+
+    // Shut the device down in place. The handle stays, closed, and a new one
+    // comes from `openHeadlessGraphics`.
+    function close() {
+        if self.state == .Closed {
+            return
+        }
+        let context = nativeUserDataBorrow(self.context)
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if self.handle.backend == .Vulkan {
+            vulkanShutdownState(state.vulkan)
+        } else {
+            dawnShutdown(state)
+        }
+        self.handle.userData = nullPointer()
+        self.handle.backendContext = nullPointer()
+        self.state = .Closed
+    }
+}
+
+// Open a device with no window.
+//
+// A machine with no GPU, or a backend with no headless path, is an error the
+// caller gets back rather than a trap, because a component that cannot draw
+// should say so to the shell that started it and exit, not take the desktop's
+// compositor client down with an abort.
+public function openHeadlessGraphics() -> Result<GraphicsHeadless, HeadlessFailure> {
+    return openHeadlessGraphicsWithBackend(.Dawn)
+}
+
+// The device `backend` renders through, made on the state's own context.
+function headlessCreateDevice(
+    backend: borrow RenderBackendKind,
+    state: borrow mut GraphicsRuntimeState,
+    context: RawPtr
+) -> Result<Void, HeadlessFailure> {
+    return match backend {
+        Vulkan -> match vulkanCreateHeadlessDevice(state) {
+            Ok -> .Ok
+            Error(failure) -> .Error(.Vulkan(failure))
+        }
+        Dawn -> match dawnCreateDeviceAndQueue(state, context) {
+            Ok -> .Ok
+            Error(failure) -> .Error(.Dawn(failure))
+        }
+        Metal -> .Error(.NoMetalHeadless)
+    }
+}
+
+public function openHeadlessGraphicsWithBackend(
+    backend: RenderBackendKind
+) -> Result<GraphicsHeadless, HeadlessFailure> {
+    let application = GraphicsApplication {
+        title: "kira-headless",
+        width: 1,
+        height: 1,
+        sampleCount: 1,
+        windowMode: .Windowed,
+        transparent: false,
+        opacity: 1.0,
+        backend: copy backend
+    }
+    var runtimeState = nativeState(
+        GraphicsRuntimeState {
+            tracing: traceGatesFromEnvironment(),
+            app: application,
+            userData: nullPointer(),
+            frameIndex: 0
+        }
+    )
+    let context = nativeUserDataBorrow(runtimeState)
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    return match headlessCreateDevice(backend, state, context) {
+        Ok -> .Ok(
+            GraphicsHeadless {
+                context: move runtimeState,
+                handle: Graphics { userData: context, backend: backend, backendContext: context }
+            }
+        )
+        Error(failure) -> .Error(failure)
+    }
+}

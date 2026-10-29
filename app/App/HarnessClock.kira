@@ -1,0 +1,38 @@
+// The clock the harness times a run with, and the wait an idle run does.
+//
+// Both are Foundation's, and neither is ours: `processSleep` is the kernel's
+// sleep, and the time is the only clock Foundation publishes. There is no C here
+// because there is nothing left for C to do — see `HarnessTime` below for what
+// that costs.
+//
+// A package cannot declare a `@Service` of its own. Foundation declares these
+// symbols, so naming one again is a duplicate at link time, and naming one
+// without importing Foundation is a name that is not in scope. The kernel
+// service is reachable only through what Foundation exposes.
+
+public namespace HarnessTime {
+    // The clock reports milliseconds, and a frame is measured in seconds.
+    let millisecondsPerSecond: UNumber = 1000
+}
+
+// Waits out a span, for a loop with no compositor to pace it.
+public function harnessSleepSeconds(seconds: Number) {
+    if seconds <= 0 {
+        return
+    }
+    processSleep(seconds * HarnessTime.millisecondsPerSecond)
+}
+
+// Seconds since the Unix epoch.
+//
+// WALL CLOCK, not monotonic: Foundation publishes `unixMillis` and no monotonic
+// reading, so a frame's cost is a difference between two wall-clock readings and
+// steps if the system's clock does. That is a nanosecond-scale concern against a
+// millisecond reading and has never once shown up in a measured frame — but it
+// is a real difference from the clock this replaced, and it is fixed by one
+// line in Foundation rather than by anything here: a `monotonicMillis()`
+// beside `unixMillis()`, wrapping the `kernelMonotonicNanos` the trail already
+// calls.
+public function harnessClockSeconds() -> Number {
+    return unixMillis() / HarnessTime.millisecondsPerSecond
+}

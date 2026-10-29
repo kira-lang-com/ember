@@ -1,0 +1,269 @@
+import Foundation
+import Heap
+// The Dawn backend's run loop: open a window, bring a device up against it, and
+// drive frames until the program or the user asks to stop.
+//
+// Dawn has no run loop of its own — it is a GPU API and nothing more — so this
+// is an ordinary `while` over the Win32 message queue rather than a callback
+// registration. That makes the order plain: pump the queue, run the frame, end
+// it, present. Every message the application reacts to is read here, where the
+// runtime state is in hand, because a `WNDPROC` is handed no user pointer to
+// reach it through (see `DawnWindow.kira`).
+
+// Why a Dawn run never reached its first frame.
+public enum DawnStartFailure {
+    Window(WindowFailure)
+    Setup(DawnSetupFailure)
+}
+
+// The window, the device and the surface, brought up in that order and wired to
+// the run state.
+function dawnStartRun(
+    state: borrow mut GraphicsRuntimeState,
+    app: borrow GraphicsApplication,
+    runtimeUserData: RawPtr
+) -> Result<Void, DawnStartFailure> {
+    // Which window this is depends on the platform, and nothing below this line
+    // knows which one it got.
+    state.dawn.window = match dawnWindowFor(dawnPlatformForHost()).open(app.windowRequest()) {
+        Ok(opened) -> opened
+        Error(failure) -> return .Error(.Window(failure))
+    }
+    state.dawn.messageBlock = allocateZeroed(
+        memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
+    )
+    state.dawn.surfaceTextureBlock = allocateZeroed(
+        memoryLayout(sizeOf<WGPUSurfaceTexture>(), alignOf<WGPUSurfaceTexture>())
+    )
+    match dawnCreateDeviceAndQueue(state, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> return .Error(.Setup(failure))
+    }
+    match dawnCreateSurface(state, app.width, app.height) {
+        Ok -> {}
+        Error(failure) -> return .Error(.Setup(failure))
+    }
+    dawnAttachPlatformRuntime(state, runtimeUserData)
+    return .Ok
+}
+
+// What each platform's window needs handed the run state once the device
+// exists.
+function dawnAttachPlatformRuntime(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) {
+    // Windows only. It hangs the runtime on the window so the window PROCEDURE
+    // can draw while Windows owns the loop during a resize (see
+    // `dawnWindowProcedure`) -- a Win32 problem with a Win32 answer. Attached
+    // after the device exists, so a `WM_SIZE` that arrives first finds nothing
+    // and falls through rather than driving a frame against a surface that is
+    // not there.
+    if targetPlatform!() == .Windows {
+        dawnAttachWindowRuntime(state.dawn.window, runtimeUserData)
+    }
+    // The seat. A Wayland surface is shown by the compositor and touched
+    // through a seat, and the two are bound separately -- so this is where the
+    // window stops being a picture. Here rather than in `open` because the
+    // handlers are handed the run state, which `open` does not have.
+    if targetPlatform!() == .Linux {
+        dawnWaylandAttachInput(state, runtimeUserData)
+    }
+}
+
+public function dawnRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
+    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    state.dawn = dawnEmptyState()
+    readHarnessKnobs(state)
+    dawnReadGpuTraceKnob(state)
+    // System-DPI awareness before the window exists: a process that declares it
+    // later has already been told a scaled size for a window it has not opened.
+    // Declared only for an application that asked for a full-resolution
+    // framebuffer, which is what `highDpi` asks for; without it Windows renders
+    // the process at 96 DPI and upscales. Windows only: a Wayland surface is
+    // told its scale by the output it appears on.
+    if app.highDpi && targetPlatform!() == .Windows {
+        markProcessDpiAware()
+    }
+    match dawnStartRun(state, app, runtimeUserData) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("could not start the Dawn run", failure)
+            dawnShutdown(state)
+            return
+        }
+    }
+    emberLiveBackendInitialized()
+    let onInit: (Graphics) -> Void = state.app.initHandler
+    onInit(Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData })
+    dawnDriveFrames(state, runtimeUserData)
+    let onCleanup: (Graphics) -> Void = state.app.cleanupHandler
+    onCleanup(
+        Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData }
+    )
+    reportFrameCost(state)
+    dawnReportGpuTrace(state)
+    dawnReleaseDepthTarget(state)
+    dawnShutdown(state)
+}
+
+// Moves the window's size on by a step, when a run asked to measure resizing.
+//
+// A real resize is a drag, which no test can repeat and no hand can hold steady
+// for six hundred frames. This walks the size up and back down instead, so every
+// frame takes the resize path — the same `WM_SIZE`, the same reconfigure, the
+// same relayout — and a frame-cost summary describes resizing rather than
+// idling.
+public function dawnSweepWindowSize(state: borrow mut GraphicsRuntimeState) {
+    if state.resizeSweep == 0 {
+        return
+    }
+    let step = Number(sweepStep(state.frameIndex))
+    let stride = Number(state.resizeSweep)
+    dawnResizeWindow(
+        state.dawn.window,
+        ResizeSweep.baseWidth + step * stride,
+        ResizeSweep.baseHeight + floor(step * stride / 2)
+    )
+}
+
+// One frame after another until the window closes, the application requests a
+// quit, or the harness's frame limit is reached.
+public function dawnDriveFrames(state: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
+    while !state.dawn.quitRequested {
+        // Draining the platform's queue. The two window systems are least
+        // alike here: Windows hands a client a message queue it peeks, and
+        // Wayland hands it a socket whose events are dispatched to the
+        // listeners already installed on each object.
+        if targetPlatform!() == .Windows {
+            dawnPumpMessages(state)
+        }
+        if targetPlatform!() == .Linux {
+            dawnPumpWayland(state.dawn.window)
+        }
+        if state.dawn.quitRequested {
+            return
+        }
+        dawnSweepWindowSize(state)
+        dawnResizeIfNeeded(state, runtimeUserData)
+        // Guarded for the same reason the resize path is: a message dispatched
+        // by the pump above can re-enter through the window procedure, and one
+        // encoder cannot record two frames.
+        if !state.dawn.inFrame {
+            state.dawn.inFrame = true
+            dawnRunFrame(state, runtimeUserData)
+            state.dawn.inFrame = false
+        }
+        if state.quitAfterFrames > 0 && state.frameIndex >= state.quitAfterFrames {
+            return
+        }
+    }
+}
+
+// One frame: hand the application a `RenderFrame`, then end whatever it left
+// open and present.
+public function dawnRunFrame(state: borrow mut GraphicsRuntimeState, runtimeUserData: RawPtr) {
+    let graphics = Graphics {
+        userData: state.userData,
+        backend: .Dawn,
+        backendContext: runtimeUserData
+    }
+    var frame = graphics.frame()
+    state.frameIndex = state.frameIndex + 1
+    // The drawable is taken before the clock starts, and that is deliberate.
+    // Under `Fifo` the compositor hands one over at the display's rate, so the
+    // wait for it is the *presentation* interval and not the renderer's cost —
+    // and a frame time that includes it measures the monitor. Sokol's own
+    // measurement excludes it for the same reason: sokol-app waits outside the
+    // frame callback it times.
+    dawnAcquireSurfaceTexture(state)
+    dawnBeginFrameStats(state)
+    dawnTraceBeginFrame(state)
+
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    driveInputScript(state.inputScript, Number(state.frameIndex) - 1, onEvent)
+
+    let onFrame: (borrow mut RenderFrame) -> Void = state.app.frameHandler
+    onFrame(frame)
+    if frame.shouldQuit {
+        state.dawn.quitRequested = true
+    }
+    dawnPresentFrame(runtimeUserData, captureDue(state.capture, state.frameIndex))
+    dawnEndFrameStats(state)
+    dawnTraceEndFrame(state)
+    dawnLogFrameRate(state)
+}
+
+// Reconfigures the surface when the client area has moved, and tells the
+// application about it.
+//
+// Polled rather than driven from `WM_SIZE`: a size message arrives while the
+// window is being dragged, several times a frame, and reconfiguring a surface
+// mid-drag costs more than measuring the rectangle once.
+public function dawnResizeIfNeeded(
+    state: borrow mut GraphicsRuntimeState,
+    runtimeUserData: RawPtr
+) {
+    let width = dawnWindowFor(dawnPlatformForHost()).clientWidth(state.dawn.window)
+    let height = dawnWindowFor(dawnPlatformForHost()).clientHeight(state.dawn.window)
+    if width <= 0 || height <= 0 {
+        return
+    }
+    if width == state.dawn.surfaceWidth && height == state.dawn.surfaceHeight {
+        return
+    }
+    dawnConfigureSurface(state, width, height)
+    let scale = dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    onEvent(
+        AppEvent {
+            kind: .Resized,
+            modifiers: dawnModifierState(),
+            // Points, not whole pixels: at a 1.25x scale a 1924-pixel client
+            // area is 1539.2 points, and an event that rounds it here is a
+            // layout that lays out one pixel out.
+            windowWidth: Number(width) / scale,
+            windowHeight: Number(height) / scale,
+            framebufferWidth: UN32(width),
+            framebufferHeight: UN32(height)
+        }
+    )
+}
+
+// One frame, driven from the window procedure while Windows owns the loop.
+//
+// A border drag never returns to `dawnDriveFrames`, so this is the only place a
+// frame can come from for the whole gesture. It does what the loop's body does
+// and nothing else: take the new size, then render.
+//
+// Re-entrancy is refused rather than queued. A frame can present, and presenting
+// can pump, and a pumped `WM_SIZE` arriving inside a frame would begin a second
+// one against an encoder the first still holds. The dropped frame costs a
+// repeated size; running it would corrupt the one in flight.
+public function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
+    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+    if state.dawn.inFrame || state.dawn.quitRequested || isNull(state.dawn.device) {
+        return
+    }
+    state.dawn.inFrame = true
+    dawnResizeIfNeeded(state, runtimeUserData)
+    dawnRunFrame(state, runtimeUserData)
+    state.dawn.inFrame = false
+}
+
+// Drains the message queue, turning what the application cares about into
+// `AppEvent`s and dispatching the rest.
+public function dawnPumpMessages(state: borrow mut GraphicsRuntimeState) {
+    let scale = dawnWindowFor(dawnPlatformForHost()).scale(state.dawn.window)
+    // Every delivery passes through here, so the trace sees them all in
+    // order without a log at each call site.
+    let onEvent: (borrow AppEvent) -> Void = dawnTracedEvent(state)
+    match win32DrainMessages(state.dawn.messageBlock, scale, state.dawn.input, onEvent) {
+        QuitPosted -> state.dawn.quitRequested = true
+        Empty -> {}
+    }
+}

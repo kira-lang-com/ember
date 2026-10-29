@@ -1,0 +1,316 @@
+import Foundation
+import Heap
+
+// A texture over memory another process exported as a dma-buf.
+//
+// What a compositor samples: a peer rendered into a linear image and handed
+// its memory over as `ExportedTexture.kira` describes it. This side makes a
+// linear image of the same size and format, takes the dma-buf in as that
+// image's dedicated memory, and checks that the rows sit where the peer said
+// they do. A linear image's layout is the driver's choice, so the check is
+// what proves both sides read the same bytes; an image this device would lay
+// out differently is refused rather than drawn wrong.
+//
+// The peer releases the image to `VK_QUEUE_FAMILY_EXTERNAL`, so this side
+// acquires it from there. The image starts `Preinitialized`, and the acquire
+// moves it to the layout shaders sample it in before it is handed out, which
+// keeps the pixels the peer drew. That acquire is recorded into the open frame where there is one, and submitted on
+// its own and waited for where there is not, as an upload is.
+
+namespace VulkanImport {
+    let structureImportMemoryFd: I32 = I32(VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR)
+    let structureDedicatedAllocate: I32 = I32(VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO)
+    let structureExternalImage: I32 = I32(VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_IMAGE_CREATE_INFO)
+    let structureFdProperties: I32 = I32(VK_STRUCTURE_TYPE_MEMORY_FD_PROPERTIES_KHR)
+    // An imported image is only ever sampled.
+    let usage: TextureUsage = .Sampled
+}
+
+// The Vulkan format whose bytes are `format`'s.
+function vulkanImportFormat(format: ExportedPixelFormat) -> I32 {
+    return match format {
+        Rgba8Unorm -> VulkanVocabulary.formatRgba8
+        Bgra8Unorm -> VulkanVocabulary.formatBgra8
+    }
+}
+
+// A linear, sampled image over external dma-buf memory, not yet backed.
+function vulkanNewImportImage(
+    state: borrow VulkanState,
+    memory: borrow ExportedMemory,
+    format: I32
+) -> Result<RawPtr, VulkanResourceFailure> {
+    let external = boxed<VkExternalMemoryImageCreateInfo>(
+        VkExternalMemoryImageCreateInfo {
+            sType: VulkanImport.structureExternalImage,
+            handleTypes: VulkanExport.dmaBuf
+        }
+    )
+    let info = VkImageCreateInfo {
+        sType: VulkanVocabulary.structureImageCreateInfo,
+        pNext: external.pointer(),
+        imageType: VulkanVocabulary.imageType2d,
+        format: format,
+        extent: VkExtent3D { width: U32(memory.width), height: U32(memory.height), depth: U32(1) },
+        mipLevels: U32(1),
+        arrayLayers: U32(1),
+        samples: I32(1),
+        tiling: VulkanExport.tilingLinear,
+        usage: vulkanImageUsage(VulkanImport.usage),
+        sharingMode: VulkanVocabulary.sharingExclusive,
+        initialLayout: VulkanVocabulary.imageLayoutPreinitialized
+    }
+    let imageSlot = boxed<RawPtr>(nullPointer())
+    let result = vulkanResultOf(
+        vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
+    )
+    if result != .Success {
+        return .Error(.Refused(result))
+    }
+    return .Ok(boxedValue<RawPtr>(imageSlot))
+}
+
+// The dma-buf `fd` taken in as `image`'s dedicated memory. On success the
+// allocation owns the descriptor; on failure it is still the caller's.
+function vulkanImportMemory(
+    state: borrow VulkanState,
+    image: RawPtr,
+    requirements: borrow VkMemoryRequirements,
+    fd: I32
+) -> Result<RawPtr, VulkanResourceFailure> {
+    // A dma-buf names the memory types that can import it, and those are not
+    // always every type the image accepts. Where the device answers the query,
+    // its types narrow the image's. Where it refuses the query for this handle
+    // (venus forwards the dma-buf to the host, which answers
+    // VK_ERROR_INVALID_EXTERNAL_HANDLE), the image's own types are used, as
+    // before the query was made, and the allocation below decides.
+    let properties = boxed<VkMemoryFdPropertiesKHR>(
+        VkMemoryFdPropertiesKHR {
+            sType: VulkanImport.structureFdProperties,
+            memoryTypeBits: U32(0)
+        }
+    )
+    let queried = vulkanResultOf(
+        vulkanMemoryFdProperties(
+            state.device,
+            I32(VulkanExport.dmaBuf),
+            fd,
+            properties.pointer()
+        )
+    )
+    var acceptable = requirements.memoryTypeBits
+    if queried == .Success {
+        acceptable = requirements.memoryTypeBits & boxedValue<VkMemoryFdPropertiesKHR>(properties).memoryTypeBits
+    }
+    let memoryType = match vulkanFindMemoryType(state, acceptable, U32(0)) {
+        Some(memoryType) -> memoryType
+        None -> return .Error(.NoMemoryType)
+    }
+    let dedicated = boxed<VkMemoryDedicatedAllocateInfo>(
+        VkMemoryDedicatedAllocateInfo {
+            sType: VulkanImport.structureDedicatedAllocate,
+            image: image
+        }
+    )
+    let importInfo = boxed<VkImportMemoryFdInfoKHR>(
+        VkImportMemoryFdInfoKHR {
+            sType: VulkanImport.structureImportMemoryFd,
+            pNext: dedicated.pointer(),
+            handleType: I32(VulkanExport.dmaBuf),
+            fd: fd
+        }
+    )
+    let allocate = VkMemoryAllocateInfo {
+        sType: VulkanVocabulary.structureMemoryAllocateInfo,
+        pNext: importInfo.pointer(),
+        allocationSize: requirements.size,
+        memoryTypeIndex: memoryType
+    }
+    let memorySlot = boxed<RawPtr>(nullPointer())
+    let allocated = vulkanResultOf(
+        vkAllocateMemory(state.device, allocate, nullPointer(), memorySlot.pointer())
+    )
+    if allocated != .Success {
+        return .Error(.MemoryRefused(allocated))
+    }
+    return .Ok(boxedValue<RawPtr>(memorySlot))
+}
+
+// Whether this device lays `image` out where `memory` says the peer did.
+function vulkanImportLayoutMatches(
+    state: borrow VulkanState,
+    image: RawPtr,
+    memory: borrow ExportedMemory
+) -> Bool {
+    let layout = vulkanColorLayout(state, image)
+    return UN32(layout.rowPitch) == memory.stride && UN32(layout.offset) == memory.offset
+}
+
+// The image behind an imported texture, backed by the peer's memory and
+// registered. The descriptor is the image's once this answers an id.
+function vulkanCreateImportedImage(
+    state: borrow mut VulkanState,
+    memory: borrow ExportedMemory
+) -> Result<U32, ImportFailure> {
+    let format = vulkanImportFormat(memory.format)
+    let image = match vulkanNewImportImage(state, memory, format) {
+        Ok(image) -> image
+        Error(failure) -> {
+            log fault("could not create an image to import into", failure)
+            return .Error(.DeviceRefused)
+        }
+    }
+    if !vulkanImportLayoutMatches(state, image, memory) {
+        vkDestroyImage(state.device, image, nullPointer())
+        log fault(
+            "an imported texture's rows are not where this device lays them",
+            stride: memory.stride,
+            offset: memory.offset
+        )
+        return .Error(.DeviceRefused)
+    }
+    let requirements = vulkanImageRequirements(state, image)
+    let deviceMemory = match vulkanImportMemory(state, image, requirements, I32(memory.handle)) {
+        Ok(deviceMemory) -> deviceMemory
+        Error(failure) -> {
+            vkDestroyImage(state.device, image, nullPointer())
+            log fault("the device would not take a dma-buf in", failure)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let bound = vulkanResultOf(vkBindImageMemory(state.device, image, deviceMemory, U64(0)))
+    if bound != .Success {
+        // The allocation owns the descriptor now, so freeing it closes it.
+        vkFreeMemory(state.device, deviceMemory, nullPointer())
+        vkDestroyImage(state.device, image, nullPointer())
+        log fault("the device would not bind imported memory", bound)
+        return .Error(.DeviceRefused)
+    }
+    let size = Number(requirements.size)
+    let id = vulkanRegisterObject(
+        state,
+        VulkanObject {
+            kind: .Image,
+            handle: image,
+            memory: .Some(deviceMemory),
+            size: size,
+            allocationSize: size,
+            format: format
+        }
+    )
+    vulkanSetObjectLayout(state, id, .Preinitialized)
+    return .Ok(id)
+}
+
+// The imported image acquired from the peer and moved to the layout shaders
+// sample it in.
+function vulkanReadyImported(
+    state: borrow mut VulkanState,
+    imageId: U32
+) -> Result<Void, VulkanFrameFailure> {
+    if state.frameActive {
+        vulkanAcquireExternalImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+        return .Ok
+    }
+    let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
+    if idle != .Success {
+        return .Error(.QueueWaitFailed(idle))
+    }
+    match vulkanRestartCommandBuffer(state, .OneTime) {
+        Ok -> {}
+        Error(failure) -> return .Error(failure)
+    }
+    vulkanAcquireExternalImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+    return vulkanFlushCommands(state)
+}
+
+// Whether the transfer of `texture` to or from the peer ran: recorded into the
+// open frame when there is one, and otherwise submitted on its own once the
+// queue is idle, so the peer never sees memory the GPU is still reading.
+function vulkanTransferImported(
+    context: RawPtr,
+    texture: borrow GraphicsTexture,
+    toPeer: Bool
+) -> Bool {
+    if !vulkanRequireDevice(context, "vulkanTransferImported") || texture.id == 0 {
+        return false
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    let imageId = U32(texture.id)
+    if state.vulkan.frameActive {
+        if toPeer {
+            vulkanReleaseExternalImage(state.vulkan, imageId, VulkanVocabulary.aspectColor)
+        } else {
+            vulkanAcquireExternalImage(state.vulkan, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+        }
+        return true
+    }
+    let idle = vulkanResultOf(vkQueueWaitIdle(state.vulkan.queue))
+    if idle != .Success { return false }
+    match vulkanRestartCommandBuffer(state.vulkan, .OneTime) {
+        Ok -> {}
+        Error(failure) -> return false
+    }
+    if toPeer {
+        vulkanReleaseExternalImage(state.vulkan, imageId, VulkanVocabulary.aspectColor)
+    } else {
+        vulkanAcquireExternalImage(state.vulkan, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+    }
+    match vulkanFlushCommands(state.vulkan) {
+        Ok -> return true
+        Error(failure) -> return false
+    }
+}
+
+// An imported texture the peer drew into again, taken back for sampling.
+public function vulkanAcquireImportedTexture(context: RawPtr, texture: borrow GraphicsTexture) -> Bool {
+    return vulkanTransferImported(context, texture, false)
+}
+
+// An imported texture the GPU has finished sampling, given back to the peer.
+public function vulkanReleaseImportedTexture(context: RawPtr, texture: borrow GraphicsTexture) -> Bool {
+    return vulkanTransferImported(context, texture, true)
+}
+
+public function vulkanImportTexture(
+    context: RawPtr,
+    memory: borrow ExportedMemory
+) -> ImportedTextureResult {
+    if !vulkanRequireDevice(context, "vulkanImportTexture") {
+        return .Error(.Unimportable)
+    }
+    if memory.kind != .DmaBuf || memory.handle == 0 || memory.width == 0 || memory.height == 0 {
+        return .Error(.InvalidMemory)
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(context)
+    if !vulkanMemoryExportSupported(state.vulkan.device) {
+        return .Error(.Unimportable)
+    }
+    let imageId = match vulkanCreateImportedImage(state.vulkan, memory) {
+        Ok(imageId) -> imageId
+        Error(failure) -> return .Error(failure)
+    }
+    match vulkanReadyImported(state.vulkan, imageId) {
+        Ok -> {}
+        Error(failure) -> {
+            vulkanReleaseObject(state.vulkan, imageId)
+            log fault("could not ready an imported texture for sampling", failure)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let views = match vulkanCreateTextureViews(state.vulkan, imageId, VulkanImport.usage) {
+        Ok(views) -> views
+        Error(failure) -> {
+            vulkanReleaseObject(state.vulkan, imageId)
+            log fault("could not create an imported texture's view", failure)
+            return .Error(.DeviceRefused)
+        }
+    }
+    let descriptor = TextureDescriptor {
+        label: "imported",
+        width: memory.width,
+        height: memory.height,
+        usage: VulkanImport.usage
+    }
+    return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
+}

@@ -1,0 +1,76 @@
+public struct DirectionalLight {
+    var direction: Vec3 = Vec3 { x: -0.35, y: -0.70, z: -0.55 }
+    var color: Vec3 = Vec3 { x: 1.0, y: 0.96, z: 0.88 }
+    var intensity: Number = 0.85
+}
+
+public struct SceneUniforms {
+    var viewProjection: Mat4
+    var lightDirection: Vec4
+    var lightColor: Vec4
+}
+
+public struct ObjectUniforms {
+    var model: Mat4
+    var baseColor: Vec4
+}
+
+// The scene block: a view-projection matrix, a light direction and a light
+// colour, which std140 pads to these two multiples of four floats.
+public function sceneUniformFloatCount() -> UN32 {
+    return 24
+}
+
+// The object block: a model matrix and a base colour — a multiple of four
+// floats, one short of the scene block's.
+public function objectUniformFloatCount() -> UN32 {
+    return 20
+}
+
+public function sceneUniforms(
+    camera: borrow PerspectiveCamera,
+    light: borrow DirectionalLight,
+    ambient: Number
+) -> SceneUniforms {
+    return SceneUniforms {
+        viewProjection: cameraViewProjectionMatrix(camera),
+        lightDirection: Vec4 {
+            x: Float(light.direction.x),
+            y: Float(light.direction.y),
+            z: Float(light.direction.z),
+            w: Float(light.intensity)
+        },
+        lightColor: Vec4 {
+            x: Float(light.color.x),
+            y: Float(light.color.y),
+            z: Float(light.color.z),
+            w: Float(ambient)
+        }
+    }
+}
+
+public function objectUniforms(model: borrow Mat4, baseColor: borrow Vec4) -> ObjectUniforms {
+    return ObjectUniforms { model: model, baseColor: baseColor }
+}
+
+// The scene block as the GPU reads it: column-major, because that is the order
+// a GLSL `mat4` and a std140 uniform both arrive in.
+//
+// This is the one place these numbers become floats. Everything above it — the
+// camera, the light, the ambient term — is a `Number` a program computed, and
+// the narrowing that reaches the shader happens here rather than at every site
+// that reads a field.
+public function sceneUniformData(uniforms: borrow SceneUniforms) -> [Number] {
+    let m = uniforms.viewProjection
+    let lightDirection = uniforms.lightDirection
+    let lightColor = uniforms.lightColor
+
+    return[m.m00, m.m10, m.m20, m.m30, m.m01, m.m11, m.m21, m.m31, m.m02, m.m12, m.m22, m.m32, m.m03, m.m13, m.m23, m.m33, lightDirection.x, lightDirection.y, lightDirection.z, lightDirection.w, lightColor.x, lightColor.y, lightColor.z, lightColor.w]
+}
+
+public function objectUniformData(uniforms: borrow ObjectUniforms) -> [Number] {
+    let m = uniforms.model
+    let baseColor = uniforms.baseColor
+
+    return[m.m00, m.m10, m.m20, m.m30, m.m01, m.m11, m.m21, m.m31, m.m02, m.m12, m.m22, m.m32, m.m03, m.m13, m.m23, m.m33, baseColor.x, baseColor.y, baseColor.z, baseColor.w]
+}

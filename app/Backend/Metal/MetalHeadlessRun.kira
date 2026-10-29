@@ -1,0 +1,246 @@
+import Foundation
+import Heap
+
+// The headless Metal run: no window, no drawable, no compositor — the frame
+// handler driven against a fixed offscreen target so a session with no screen
+// can still say what a frame contained. Benchmarks, scripted input, pixel
+// probes, digests, dumps and harness captures all live on this path.
+//
+// Split from MetalApplication.kira, which owns the device, the pool, and the
+// choice between this path and the window.
+public function metalRunOffscreenApplication(
+    app: borrow GraphicsApplication,
+    ctxPtr: RawPtr,
+    userData: RawPtr,
+    pool: RawPtr
+) {
+    metalContextAttachOffscreenFormat(
+        ctxPtr,
+        app.width,
+        app.height,
+        metalPixelFormatForTexture(textureFormatCode(app.colorFormat)),
+        harnessKnobs(app).scale
+    )
+    emberLiveBackendInitialized()
+    let onInit: (Graphics) -> Void = app.initHandler
+    onInit(Graphics { userData: userData, backend: .Metal, backendContext: ctxPtr })
+    // Deterministic frame-time benchmark: KIRA_METAL_BENCH runs the frame
+    // handler many times offscreen and reports average ms + implied FPS, so VM
+    // hot-path optimization can be measured without the on-screen present/vsync
+    // loop.
+    if metalEnvIsSet("KIRA_METAL_BENCH") {
+        metalRunOffscreenBench(app, ctxPtr, userData)
+    } else {
+        metalRunOffscreenFrames(app, ctxPtr, userData)
+        metalReportOffscreenTarget(app, ctxPtr)
+    }
+    metalContextFree(ctxPtr)
+    metalAutoreleasePoolPop(pool)
+}
+
+// One frame handed to the application and submitted, with its timing taken.
+function metalTimedFrame(
+    ctx: RawPtr,
+    userData: RawPtr,
+    onFrame: borrow (borrow mut RenderFrame) -> Void
+) {
+    var frame = Graphics { userData: userData, backend: .Metal, backendContext: ctx }.frame()
+    metalContextBeginFrameTiming(ctx)
+    onFrame(frame)
+    graphicsSubmitFrame(frame)
+    metalContextEndFrameTiming(ctx)
+}
+
+namespace MetalOffscreenBench {
+    // A throughput sample. A run that has to expose a periodic cost — anything
+    // on a cadence of its own, like a HUD that refreshes a few times a second —
+    // needs to be long enough to contain several of its periods, so
+    // KIRA_METAL_BENCH_FRAMES sets the count.
+    let frames: Number = 180
+    // How many widths a resize benchmark cycles through.
+    let resizeCycle: Number = 120
+}
+
+// The slowest frame a benchmark saw, on each of its three clocks.
+struct MetalWorstFrame {
+    var frameNs: UNumber = 0
+    var cpuNs: UNumber = 0
+    var gpuNs: UNumber = 0
+}
+
+extend MetalWorstFrame {
+    // The frame just ended, kept where it is the worst so far. The first two
+    // frames' totals are left out: they still pay for first-touch caches.
+    function record(borrow mut self, ctx: RawPtr, index: Number) {
+        let frameNs = metalMemReadU64(ctx, MetalContext.offsetFrameDurationNs)
+        let cpuNs = metalMemReadU64(ctx, MetalContext.offsetCpuFrameDurationNs)
+        let gpuNs = metalMemReadU64(ctx, MetalContext.offsetGpuFrameDurationNs)
+        if index > 1 && frameNs > self.frameNs { self.frameNs = frameNs }
+        if cpuNs > self.cpuNs { self.cpuNs = cpuNs }
+        if gpuNs > self.gpuNs { self.gpuNs = gpuNs }
+    }
+}
+
+// One measured benchmark frame, resized first when the run cycles its size.
+function metalBenchFrame(
+    app: borrow GraphicsApplication,
+    ctx: RawPtr,
+    userData: RawPtr,
+    index: Number
+) {
+    // KIRA_METAL_RESIZE_BENCH cycles the offscreen size each frame so the app
+    // sees a changing viewport every frame — exercising the resize/rebuild path
+    // (no damage-skip) instead of the static re-present path. Re-attaching the
+    // offscreen target only allocates a native MTLTexture, so the Kira struct
+    // allocation count still reflects the per-frame rebuild work.
+    if metalEnvIsSet("KIRA_METAL_RESIZE_BENCH") {
+        metalContextAttachOffscreen(
+            ctx,
+            app.width + (index % MetalOffscreenBench.resizeCycle),
+            app.height,
+            harnessKnobs(app).scale
+        )
+    }
+    metalTimedFrame(ctx, userData, app.frameHandler)
+}
+
+function metalRunOffscreenBench(app: borrow GraphicsApplication, ctx: RawPtr, userData: RawPtr) {
+    let frames = metalEnvNumber("KIRA_METAL_BENCH_FRAMES", MetalOffscreenBench.frames)
+    let detailed = metalEnvIsSet("KIRA_METAL_BENCH_DETAIL")
+    // Warm up one frame (first-touch caches, retained tree mount) before timing.
+    let warmPool = metalAutoreleasePoolPush()
+    metalTimedFrame(ctx, userData, app.frameHandler)
+    metalAutoreleasePoolPop(warmPool)
+    let startNs = metalClockNs(MetalForeign.clockUptimeRaw)
+    var deadlineNs = startNs + U64(app.targetFrameDurationNs)
+    var worst = MetalWorstFrame()
+    var index = 0
+    while frames == 0 || index < frames {
+        let framePool = metalAutoreleasePoolPush()
+        metalBenchFrame(app, ctx, userData, index)
+        worst.record(ctx, index)
+        if detailed {
+            metalReportBenchFrame(ctx, index)
+        }
+        metalAutoreleasePoolPop(framePool)
+        if app.targetFrameDurationNs > 0 {
+            metalContextWaitUntilNs(ctx, deadlineNs)
+            deadlineNs = metalClockNs(MetalForeign.clockUptimeRaw) + U64(app.targetFrameDurationNs)
+        }
+    }
+    // The frame budget includes GPU completion, not merely how quickly the CPU
+    // can enqueue the frames. Drain the last buffer (the queue orders all
+    // earlier work before it) before stopping the benchmark clock.
+    metalContextWaitForGpu(ctx)
+    let endNs = metalClockNs(MetalForeign.clockUptimeRaw)
+    metalReportBench(Int(endNs - startNs), frames)
+    metalReportBenchWorst(Int(worst.frameNs), Int(worst.cpuNs), Int(worst.gpuNs))
+}
+
+// Deterministic multi-frame offscreen run with scripted input:
+// the harness's quit-after count loops the frame handler that many times, as
+// it ends a Vulkan run; without one, KIRA_METAL_OFFSCREEN_FRAMES=N does. With
+// neither, the run goes on until the process is ended, as a Dawn run does: a
+// headless application under a UI test answers its requests frame after
+// frame until the test terminates it. The harness's input script is replayed
+// through the app's REAL event handler before each frame renders — headless
+// end-to-end verification of hit testing, dispatch, state and rendering.
+function metalRunOffscreenFrames(app: borrow GraphicsApplication, ctx: RawPtr, userData: RawPtr) {
+    let knobs = harnessKnobs(app)
+    // How many frames to draw; none means no end.
+    let frames = knobs.quitAfterFrames > 0
+    ? Number(knobs.quitAfterFrames)
+    : metalEnvNumber("KIRA_METAL_OFFSCREEN_FRAMES", 0)
+    // Re-attaching the target at a new size mid-run is the headless equivalent
+    // of a live window resize: a drawable size change, a layout, and the engine
+    // following its target.
+    let resizes = metalScriptedResizes()
+    let format = metalPixelFormatForTexture(textureFormatCode(app.colorFormat))
+    let onEvent: (borrow AppEvent) -> Void = app.eventHandler
+    let onFrame: (borrow mut RenderFrame) -> Void = app.frameHandler
+    var recorder = MetalVideoRecorder()
+    var index = 0
+    while frames == 0 || index < frames {
+        let framePool = metalAutoreleasePoolPush()
+        for resize in resizes {
+            if resize.frame == index {
+                metalContextAttachOffscreenFormat(
+                    ctx,
+                    resize.width,
+                    resize.height,
+                    format,
+                    knobs.scale
+                )
+            }
+        }
+        driveInputScript(knobs.script, index, onEvent)
+        metalTimedFrame(ctx, userData, onFrame)
+        // A headless run captures the target it rendered, on the same frame
+        // number an on-screen run captures its drawable.
+        match captureDue(knobs.capture, UNumber(index + 1)) {
+            Some(path) -> metalCaptureOffscreen(ctx, path)
+            None -> {}
+        }
+        match knobs.video {
+            Some(video) -> metalRecordOffscreen(ctx, video, UNumber(index + 1), recorder)
+            None -> {}
+        }
+        metalAutoreleasePoolPop(framePool)
+        index = index + 1
+    }
+    match knobs.video {
+        Some(video) -> metalVideoFinish(recorder, video.path)
+        None -> {}
+    }
+}
+
+// Frame `frame` into the video, where it is one the video holds; the first
+// such starts the recording.
+function metalRecordOffscreen(
+    ctx: RawPtr,
+    video: borrow VideoCapture,
+    frame: UNumber,
+    recorder: borrow mut MetalVideoRecorder
+) {
+    let last = match video.lastFrame {
+        Some(asked) -> asked
+        None -> frame
+    }
+    if frame < video.firstFrame || frame > last {
+        return
+    }
+    if frame == video.firstFrame {
+        recorder = metalVideoStart(ctx, video)
+    }
+    metalVideoAppend(ctx, recorder)
+}
+
+function metalCaptureOffscreen(ctx: RawPtr, path: borrow String) {
+    let texture = metalMemReadPtr(ctx, MetalContext.offsetColorTexture)
+    match metalCapturePpm(ctx, texture, path) {
+        Ok -> log fault("wrote the rendered frame", capturePath: path)
+        Error(failure) -> log fault(
+            "could not capture the rendered frame",
+            failure,
+            capturePath: path
+        )
+    }
+}
+
+// What the last frame left in the target, reported the ways the environment
+// asked for.
+function metalReportOffscreenTarget(app: borrow GraphicsApplication, ctx: RawPtr) {
+    metalReportCenterPixel(ctx, app.width, app.height)
+    if metalEnvIsSet("KIRA_METAL_READBACK_POINTS") {
+        metalReportProbePixels(ctx, app.width, app.height)
+    }
+    if metalEnvIsSet("KIRA_METAL_IMAGE_DIGEST") {
+        metalReportImageDigest(ctx, app.width, app.height)
+    }
+    // Full-frame visual dump: the env VALUE is the destination path for the raw
+    // BGRA8 framebuffer bytes (width*height*4, row-major).
+    match metalEnv("KIRA_METAL_IMAGE_DUMP") {
+        Some(path) -> metalContextImageDump(ctx, path)
+        None -> {}
+    }
+}

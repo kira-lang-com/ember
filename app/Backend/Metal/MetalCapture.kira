@@ -1,0 +1,98 @@
+import Foundation
+import Heap
+
+// Reading a presented frame back into a file, on Metal.
+//
+// This is the instrument every claim about what a window SHOWED rests on. The
+// sokol and Dawn backends have had it since the harness config existed; Metal —
+// the default backend on every Apple host — had only the raw-bytes dump behind
+// an environment variable, so `--capture` was a flag that did nothing on the one
+// platform the editor is developed on.
+//
+// The texture read is the DRAWABLE the frame was handed, taken after the frame's
+// command buffer completes and before the next one acquires another. A drawable
+// is write-only unless the layer opted out of `framebufferOnly` (see
+// metalContextAttachLayerToView), which a capture run does.
+
+public @FFI.Extern { library: kira_metal, symbol: fopen, abi: c }
+function metalFOpen(path: CString, mode: CString): RawPtr
+
+// The texture of the drawable this frame is being rendered into, while the
+// context still holds it: submitting the frame presents it and lets it go.
+public function metalContextDrawableTexture(ctx: RawPtr) -> RawPtr {
+    let drawable = metalMemReadPtr(ctx, MetalContext.offsetDrawable)
+    if isNull(drawable) {
+        return nullPointer()
+    }
+    return metalMsgSend(drawable, metalSel("texture"))
+}
+
+// A texture the CPU may read, with everything that wrote it finished.
+public function metalCaptureReadableTexture(ctx: RawPtr, texture: RawPtr) -> RawPtr {
+    let pending = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
+    if !isNull(pending) {
+        metalMsgSend(pending, metalSel("waitUntilCompleted"))
+    }
+    let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
+    if isNull(texture) || isNull(queue) {
+        return texture
+    }
+    // `getBytes:` on a lossless-compressed texture faults inside the driver
+    // rather than failing, and a drawable Core Animation handed back is exactly
+    // the kind it compresses. This is the counterpart of the
+    // optimizeContentsForGPUAccess the render paths run.
+    let cmd: RawPtr = metalMsgSend(queue, metalSel("commandBuffer"))
+    let blit: RawPtr = metalMsgSend(cmd, metalSel("blitCommandEncoder"))
+    metalMsgSend(blit, metalSel("optimizeContentsForCPUAccess:"), texture)
+    metalMsgSend(blit, metalSel("endEncoding"))
+    metalMsgSend(cmd, metalSel("commit"))
+    metalMsgSend(cmd, metalSel("waitUntilCompleted"))
+    return texture
+}
+
+// The BGRA bytes of a `width` x `height` texture, in a block the caller frees.
+function metalReadTextureBytes(texture: RawPtr, width: Number, height: Number) -> RawPtr {
+    let bytesPerRow = width * sizeOf<U32>()
+    let source = metalMemAlloc(U64(bytesPerRow * height))
+    let region = boxed<MetalRegion>(MetalRegion { width: U64(width), height: U64(height) })
+    metalMsgSend(
+        texture,
+        metalSel("getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
+        source,
+        U64(bytesPerRow),
+        region.pointer(),
+        0
+    )
+    return source
+}
+
+// The frame at `texture`, at the context's physical size, as a binary PPM at
+// `path`.
+public function metalCapturePpm(
+    ctx: RawPtr,
+    texture: RawPtr,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    let width = metalContextPhysicalWidth(ctx)
+    let height = metalContextPhysicalHeight(ctx)
+    if width <= 0 || height <= 0 {
+        return .Error(.NoTexture)
+    }
+    let readable = metalCaptureReadableTexture(ctx, texture)
+    if isNull(readable) {
+        return .Error(.NoTexture)
+    }
+    let source = metalReadTextureBytes(readable, width, height)
+    let outcome = writeCapture(
+        MappedPixels {
+            start: source,
+            width: width,
+            height: height,
+            bytesPerRow: width * sizeOf<U32>(),
+            order: .Bgra
+        },
+        path
+    )
+    metalMemFree(source)
+    return outcome
+}

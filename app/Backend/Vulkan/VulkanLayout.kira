@@ -1,0 +1,239 @@
+import Foundation
+import Heap
+
+// Image layouts, and the barriers that move an image between them.
+//
+// Each layout has one kind of work that reads or writes an image in it, so a
+// barrier's source is read off the layout an image was left in and its
+// destination off the layout it is moved to: no caller restates the stages and
+// accesses a layout already implies.
+
+public enum VulkanImageLayout {
+    Undefined
+    General
+    ColorAttachment
+    DepthAttachment
+    ShaderRead
+    TransferSource
+    TransferDestination
+    Present
+    // A linear image whose memory already holds pixels: one imported from
+    // another process. Moving it out of this layout keeps them, where moving
+    // it out of `Undefined` may not.
+    Preinitialized
+}
+
+public function vulkanLayoutCode(layout: borrow VulkanImageLayout) -> I32 {
+    return match layout {
+        Undefined -> VulkanVocabulary.imageLayoutUndefined
+        General -> VulkanVocabulary.imageLayoutGeneral
+        ColorAttachment -> VulkanVocabulary.imageLayoutColorAttachment
+        DepthAttachment -> VulkanVocabulary.imageLayoutDepthAttachment
+        ShaderRead -> VulkanVocabulary.imageLayoutShaderRead
+        TransferSource -> VulkanVocabulary.imageLayoutTransferSource
+        TransferDestination -> VulkanVocabulary.imageLayoutTransferDestination
+        Present -> VulkanVocabulary.imageLayoutPresent
+        Preinitialized -> VulkanVocabulary.imageLayoutPreinitialized
+    }
+}
+
+// The pipeline stages that touch an image in some layout, and how.
+struct VulkanImageUse {
+    let stage: U32
+    let access: U32 = VulkanVocabulary.accessNone
+}
+
+function vulkanLayoutUse(layout: borrow VulkanImageLayout) -> VulkanImageUse {
+    let colorAccess = VulkanVocabulary.accessColorAttachmentWrite | U32(
+        VK_ACCESS_COLOR_ATTACHMENT_READ_BIT
+    )
+    let depthStage = VulkanVocabulary.stageEarlyFragmentTests | U32(
+        VK_PIPELINE_STAGE_LATE_FRAGMENT_TESTS_BIT
+    )
+    let depthAccess = VulkanVocabulary.accessDepthStencilWrite | U32(
+        VK_ACCESS_DEPTH_STENCIL_ATTACHMENT_READ_BIT
+    )
+    return match layout {
+        Undefined -> VulkanImageUse { stage: VulkanVocabulary.stageTopOfPipe }
+        General -> VulkanImageUse {
+            stage: VulkanVocabulary.stageComputeShader,
+            access: VulkanVocabulary.accessShaderWrite | VulkanVocabulary.accessShaderRead
+        }
+        ColorAttachment -> VulkanImageUse {
+            stage: VulkanVocabulary.stageColorAttachmentOutput,
+            access: colorAccess
+        }
+        DepthAttachment -> VulkanImageUse { stage: depthStage, access: depthAccess }
+        ShaderRead -> VulkanImageUse {
+            stage: VulkanVocabulary.stageFragmentShader | VulkanVocabulary.stageComputeShader,
+            access: VulkanVocabulary.accessShaderRead
+        }
+        TransferSource -> VulkanImageUse {
+            stage: VulkanVocabulary.stageTransfer,
+            access: VulkanVocabulary.accessTransferRead
+        }
+        TransferDestination -> VulkanImageUse {
+            stage: VulkanVocabulary.stageTransfer,
+            access: VulkanVocabulary.accessTransferWrite
+        }
+        Present -> VulkanImageUse { stage: VulkanVocabulary.stageBottomOfPipe }
+        Preinitialized -> VulkanImageUse { stage: VulkanVocabulary.stageTopOfPipe }
+    }
+}
+
+// One image moving between two layouts.
+struct VulkanLayoutChange {
+    let image: RawPtr
+    let from: VulkanImageLayout
+    let to: VulkanImageLayout
+    let aspect: U32
+    // The queue families an ownership transfer moves between. Both ignored
+    // moves none.
+    let sourceFamily: U32 = VulkanVocabulary.queueFamilyIgnored
+    let destinationFamily: U32 = VulkanVocabulary.queueFamilyIgnored
+}
+
+function vulkanRecordLayoutChange(state: borrow VulkanState, change: borrow VulkanLayoutChange) {
+    let source = vulkanLayoutUse(change.from)
+    let destination = vulkanLayoutUse(change.to)
+    let barrier = VkImageMemoryBarrier {
+        sType: VulkanVocabulary.structureImageMemoryBarrier,
+        srcAccessMask: source.access,
+        dstAccessMask: destination.access,
+        oldLayout: vulkanLayoutCode(change.from),
+        newLayout: vulkanLayoutCode(change.to),
+        srcQueueFamilyIndex: change.sourceFamily,
+        dstQueueFamilyIndex: change.destinationFamily,
+        image: change.image,
+        subresourceRange: VkImageSubresourceRange {
+            aspectMask: change.aspect,
+            levelCount: U32(1),
+            layerCount: U32(1)
+        }
+    }
+    vkCmdPipelineBarrier(
+        state.commandBuffer,
+        source.stage,
+        destination.stage,
+        U32(0),
+        U32(0),
+        nullPointer(),
+        U32(0),
+        nullPointer(),
+        U32(1),
+        barrier
+    )
+}
+
+// A registered image moved to `layout`, through `aspect`.
+public function vulkanTransitionImage(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    layout: borrow VulkanImageLayout,
+    aspect: U32
+) {
+    let object = match vulkanObjectRecord(state, imageId) {
+        Some(object) -> object
+        None -> return
+    }
+    if isNull(state.commandBuffer) {
+        return
+    }
+    vulkanRecordLayoutChange(
+        state,
+        VulkanLayoutChange {
+            image: object.handle,
+            from: object.layout,
+            to: copy layout,
+            aspect: aspect
+        }
+    )
+    vulkanSetObjectLayout(state, imageId, copy layout)
+}
+
+// A registered image another process released, acquired onto this device's
+// queue and moved to `layout`.
+//
+// The exporter releases to `VK_QUEUE_FAMILY_EXTERNAL`, so the importer's half
+// of the transfer is an acquire from it, and Vulkan does not make memory the
+// exporter wrote visible without one. The image is `Preinitialized`, which
+// keeps the pixels across the move on a linear image.
+public function vulkanAcquireExternalImage(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    layout: borrow VulkanImageLayout,
+    aspect: U32
+) {
+    let object = match vulkanObjectRecord(state, imageId) {
+        Some(object) -> object
+        None -> return
+    }
+    if isNull(state.commandBuffer) {
+        return
+    }
+    vulkanRecordLayoutChange(
+        state,
+        VulkanLayoutChange {
+            image: object.handle,
+            from: object.layout,
+            to: copy layout,
+            aspect: aspect,
+            sourceFamily: VulkanVocabulary.queueFamilyExternal,
+            destinationFamily: state.queueFamilyIndex
+        }
+    )
+    vulkanSetObjectLayout(state, imageId, copy layout)
+}
+
+// A registered image given back to `VK_QUEUE_FAMILY_EXTERNAL`: the release half
+// of the transfer whose acquire is above, for the peer that draws into the
+// memory again. The image leaves in `General`, which is where the next
+// acquire moves it from.
+public function vulkanReleaseExternalImage(
+    state: borrow mut VulkanState,
+    imageId: U32,
+    aspect: U32
+) {
+    let object = match vulkanObjectRecord(state, imageId) {
+        Some(object) -> object
+        None -> return
+    }
+    if isNull(state.commandBuffer) {
+        return
+    }
+    vulkanRecordLayoutChange(
+        state,
+        VulkanLayoutChange {
+            image: object.handle,
+            from: object.layout,
+            to: .General,
+            aspect: aspect,
+            sourceFamily: state.queueFamilyIndex,
+            destinationFamily: VulkanVocabulary.queueFamilyExternal
+        }
+    )
+    vulkanSetObjectLayout(state, imageId, .General)
+}
+
+// The swapchain's `index`th image moved to `layout`.
+public function vulkanTransitionSwapchainImage(
+    state: borrow mut VulkanState,
+    index: U32,
+    layout: VulkanImageLayout
+) {
+    let slot = Number(index)
+    let from = state.swapchainLayouts[slot]
+    if from == layout {
+        return
+    }
+    vulkanRecordLayoutChange(
+        state,
+        VulkanLayoutChange {
+            image: state.swapchainImages[slot],
+            from: move from,
+            to: copy layout,
+            aspect: VulkanVocabulary.aspectColor
+        }
+    )
+    state.swapchainLayouts[slot] = move layout
+}

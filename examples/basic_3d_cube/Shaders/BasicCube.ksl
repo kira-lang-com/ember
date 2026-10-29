@@ -1,0 +1,102 @@
+type VertexIn {
+    let position: Float3
+    let normal: Float3
+}
+
+type VertexOut {
+    @builtin(position)
+    let clip_position: Float4
+
+    let worldNormal: Float3
+    let worldPosition: Float3
+    let color: Float4
+}
+
+type FragmentOut {
+    let color: Float4
+}
+
+type SceneUniforms {
+    let viewProjection: Float4x4
+    let lightDirection: Float4
+    let lightColor: Float4
+}
+
+type ObjectUniforms {
+    let model: Float4x4
+    let baseColor: Float4
+}
+
+function saturate(value: Float) -> Float {
+    if value < 0.0 { return 0.0 }
+    if value > 1.0 { return 1.0 }
+    return value
+}
+
+function absolute(value: Float) -> Float {
+    if value < 0.0 { return 0.0 - value }
+    return value
+}
+
+shader BasicCube {
+    group Frame {
+        uniform scene: SceneUniforms
+    }
+
+    group Object {
+        uniform object: ObjectUniforms
+    }
+
+    vertex {
+        input VertexIn
+        output VertexOut
+
+        function entry(vertexIn: VertexIn) -> VertexOut {
+            let result: VertexOut
+
+            let worldPosition = mul(object.model, Float4(vertexIn.position, 1.0))
+            result.clip_position = mul(scene.viewProjection, worldPosition)
+            result.worldPosition = Float3(worldPosition.x, worldPosition.y, worldPosition.z)
+
+            let normal4 = mul(object.model, Float4(vertexIn.normal, 0.0))
+            result.worldNormal = normalize(Float3(normal4.x, normal4.y, normal4.z))
+            result.color = object.baseColor
+
+            return result
+        }
+    }
+
+    fragment {
+        input VertexOut
+        output FragmentOut
+
+        function entry(fragmentIn: VertexOut) -> FragmentOut {
+            let result: FragmentOut
+
+            let n = normalize(fragmentIn.worldNormal)
+            // The face colour is the normal, as it has always been; what is new
+            // is that the scene's light actually reaches it. `SceneUniforms`
+            // carried a direction and a colour that no stage read, so under GL —
+            // where a uniform is addressed by the name the linked program has —
+            // the driver stripped both and the host reported two members it
+            // could not find. A light a shader declares and ignores is the
+            // mismatch; using it is the fix.
+            let toLight = normalize(Float3(
+                scene.lightDirection.x,
+                scene.lightDirection.y,
+                scene.lightDirection.z
+            ))
+            let lambert = saturate(dot(n, toLight))
+            let ambient = 0.35
+            let level = ambient + (1.0 - ambient) * lambert
+            result.color = Float4(
+                absolute(n.x) * level * scene.lightColor.x,
+                absolute(n.y) * level * scene.lightColor.y,
+                absolute(n.z) * level * scene.lightColor.z,
+                fragmentIn.color.w
+            )
+
+            return result
+        }
+    }
+}

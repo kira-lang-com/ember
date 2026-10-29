@@ -1,0 +1,236 @@
+// The closed sets a pipeline is described with.
+//
+// A closed set is an enum, so the compiler checks it: every `match` below names
+// every variant with no `_` arm, so adding a format is a compile error at each
+// site that must learn about it rather than a value that silently falls through.
+//
+// Each carries its wire `code`, which is the integer the backends already speak.
+// That is what lets the typed surface land without touching a backend: the enum
+// is the API, the code is the protocol underneath it.
+
+import Foundation
+
+// The bytes one texel of an uploaded RGBA8 image takes: the layout every
+// `updateTexture` and `createTextureFromPixels` array is in.
+public namespace TexelBytes {
+    let rgba8: UNumber = 4
+}
+
+public enum TextureFormat {
+    Rgba8Unorm
+    Rgba16Float
+    Depth24Stencil8
+    R32Uint
+    // Whatever the swapchain's color format turns out to be. A pipeline created
+    // with it bakes in that format, so a target sampled by that pipeline has to
+    // resolve the sentinel the same way rather than assume RGBA8.
+    Swapchain
+    None
+}
+
+public function textureFormatCode(format: TextureFormat) -> Number {
+    match format {
+        Rgba8Unorm -> return 1
+        Rgba16Float -> return 2
+        Depth24Stencil8 -> return 3
+        R32Uint -> return 10
+        Swapchain -> return 0 - 1
+        None -> return 0
+    }
+}
+
+public enum VertexFormat {
+    Float
+    Float2
+    Float3
+    Float4
+}
+
+public function vertexFormatCode(format: VertexFormat) -> Number {
+    match format {
+        Float -> return 0
+        Float2 -> return 1
+        Float3 -> return 2
+        Float4 -> return 3
+    }
+}
+
+// How a fragment meets what is already in the target. `Additive` adds the
+// color weighted by its alpha. The premultiplied pair add an already-weighted
+// color to the target or take it away, leaving the target's alpha as it was —
+// linear dodge and linear burn, for a shader that writes `color` for the one
+// and `1 - color` for the other. `PremultipliedDestinationOut` keeps the target
+// only where the fragment is not: Porter-Duff destination-out, Core
+// Animation's `destOut` compositing filter.
+public enum BlendPreset {
+    Replace
+    Alpha
+    PremultipliedAlpha
+    Additive
+    PremultipliedAdditive
+    PremultipliedSubtractive
+    PremultipliedDestinationOut
+}
+
+// What one side of a blend is weighted by. Metal, Vulkan and WebGPU name the
+// same ten; `Source` and `Destination` weigh each channel by the matching
+// channel, the `Alpha` pair every channel by alpha.
+public enum BlendFactor {
+    Zero
+    One
+    Source
+    OneMinusSource
+    SourceAlpha
+    OneMinusSourceAlpha
+    Destination
+    OneMinusDestination
+    DestinationAlpha
+    OneMinusDestinationAlpha
+}
+
+// How the weighted source and destination combine. `Subtract` is source minus
+// destination and `ReverseSubtract` destination minus source; `Min` and `Max`
+// ignore the factors, as every backend does.
+public enum BlendOperation {
+    Add
+    Subtract
+    ReverseSubtract
+    Min
+    Max
+}
+
+// One channel group's blend: operation(source * sourceFactor,
+// destination * destinationFactor).
+public struct BlendComponent {
+    var operation: BlendOperation = .Add
+    var source: BlendFactor = .One
+    var destination: BlendFactor = .Zero
+}
+
+// A whole blend, color and alpha apart, for a blend no preset names: a
+// renderer that implements a library's own blend modes (RenderBox's, Core
+// Graphics') builds each one from its table of factors.
+public struct BlendFunction {
+    var color: BlendComponent = BlendComponent()
+    var alpha: BlendComponent = BlendComponent()
+}
+
+// The one definition of each preset; every backend reads presets through it.
+public function blendPresetFunction(preset: BlendPreset) -> BlendFunction {
+    match preset {
+        Replace -> return BlendFunction()
+        Alpha -> return BlendFunction {
+            color: BlendComponent { source: .SourceAlpha, destination: .OneMinusSourceAlpha },
+            alpha: BlendComponent { destination: .OneMinusSourceAlpha }
+        }
+        PremultipliedAlpha -> return uniformBlend(
+            BlendComponent { destination: .OneMinusSourceAlpha }
+        )
+        Additive -> return BlendFunction {
+            color: BlendComponent { source: .SourceAlpha, destination: .One },
+            alpha: BlendComponent { destination: .One }
+        }
+        PremultipliedAdditive -> return BlendFunction {
+            color: BlendComponent { destination: .One },
+            alpha: BlendComponent { source: .Zero, destination: .One }
+        }
+        PremultipliedSubtractive -> return BlendFunction {
+            color: BlendComponent { operation: .ReverseSubtract, destination: .One },
+            alpha: BlendComponent { source: .Zero, destination: .One }
+        }
+        PremultipliedDestinationOut -> return uniformBlend(
+            BlendComponent { source: .Zero, destination: .OneMinusSourceAlpha }
+        )
+    }
+}
+
+// The same blend for color and alpha.
+public function uniformBlend(component: borrow BlendComponent) -> BlendFunction {
+    return BlendFunction { color: copy component, alpha: copy component }
+}
+
+public function blendPresetCode(preset: BlendPreset) -> Number {
+    match preset {
+        Replace -> return 1
+        Alpha -> return 2
+        PremultipliedAlpha -> return 3
+        Additive -> return 4
+        PremultipliedAdditive -> return 5
+        PremultipliedSubtractive -> return 6
+        PremultipliedDestinationOut -> return 7
+    }
+}
+
+public enum CompareFunction {
+    Never
+    Less
+    LessEqual
+    Equal
+    GreaterEqual
+    Greater
+    Always
+}
+
+public function compareFunctionCode(compare: CompareFunction) -> Number {
+    match compare {
+        Never -> return 0
+        Less -> return 1
+        LessEqual -> return 2
+        Equal -> return 3
+        GreaterEqual -> return 4
+        Greater -> return 5
+        Always -> return 6
+    }
+}
+
+public enum CullMode {
+    None
+    Front
+    Back
+}
+
+public function cullModeCode(mode: CullMode) -> Number {
+    match mode {
+        None -> return 0
+        Front -> return 1
+        Back -> return 2
+    }
+}
+
+public enum FrontFace {
+    CounterClockwise
+    Clockwise
+}
+
+public function frontFaceCode(face: FrontFace) -> Number {
+    match face {
+        CounterClockwise -> return 1
+        Clockwise -> return 2
+    }
+}
+
+public enum PrimitiveTopology {
+    TriangleList
+    TriangleStrip
+    LineList
+}
+
+public function primitiveTopologyCode(topology: PrimitiveTopology) -> Number {
+    match topology {
+        TriangleList -> return 1
+        TriangleStrip -> return 2
+        LineList -> return 3
+    }
+}
+
+public enum IndexFormat {
+    Uint16
+    Uint32
+}
+
+public function indexFormatCode(format: IndexFormat) -> Number {
+    match format {
+        Uint16 -> return 1
+        Uint32 -> return 2
+    }
+}

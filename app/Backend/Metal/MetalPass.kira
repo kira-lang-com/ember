@@ -1,0 +1,306 @@
+import Heap
+
+// Running a Metal render pass: begin, end, submit, and reading the result back.
+//
+// The readback half is what makes a rendered frame provable. `metalContextReadPixel`
+// and `metalContextImageDigest` read the presented drawable rather than a texture
+// the test happened to draw into, so "it rendered" is a statement about what the
+// display was handed, not about what the program believes it did.
+
+// How a pass starts: what it does to the color target, the color a clear
+// writes, and whether it carries the context's depth target, cleared to 1.0 and
+// bound with the less/write depth-stencil state.
+public struct MetalPassStart {
+    var loadAction: U64 = MetalRegistry.loadActionClear
+    var clearColor: RGBAColor = RGBAColor()
+    var depthEnabled: Bool = false
+}
+
+// The texture a swapchain pass draws into. In layer mode, the next
+// CAMetalLayer drawable's texture, or the hidden target while the window vends
+// none; in offscreen mode, the fixed offscreen texture. Either way the active
+// texture is recorded at the colorTexture slot so readback (verification)
+// targets exactly what was rendered.
+function metalAcquirePassTexture(ctx: RawPtr) -> RawPtr {
+    let layer = metalMemReadPtr(ctx, MetalContext.offsetLayer)
+    if isNull(layer) {
+        return metalMemReadPtr(ctx, MetalContext.offsetColorTexture)
+    }
+    var texture = nullPointer()
+    if metalContextWindowState(ctx) == .Hidden {
+        metalMemWritePtr(ctx, MetalContext.offsetDrawable, nullPointer())
+        texture = metalContextHiddenTarget(ctx)
+    } else {
+        metalContextReleaseHiddenTarget(ctx)
+        let drawable: RawPtr = metalMsgSend(layer, metalSel("nextDrawable"))
+        if isNull(drawable) {
+            texture = metalContextHiddenTarget(ctx)
+            metalMemWritePtr(ctx, MetalContext.offsetDrawable, nullPointer())
+        } else {
+            metalMemWritePtr(ctx, MetalContext.offsetDrawable, drawable)
+            texture = metalMsgSend(drawable, metalSel("texture"))
+        }
+    }
+    metalMemWritePtr(ctx, MetalContext.offsetColorTexture, texture)
+    return texture
+}
+
+// The MTLRenderPassDescriptor for a pass into `texture`.
+function metalPassDescriptor(ctx: RawPtr, texture: RawPtr, start: borrow MetalPassStart) -> RawPtr {
+    let rpClass = metalObjcGetClass("MTLRenderPassDescriptor")
+    let rp: RawPtr = metalMsgSend(rpClass, metalSel("renderPassDescriptor"))
+    let colorAttachments: RawPtr = metalMsgSend(rp, metalSel("colorAttachments"))
+    let ca0: RawPtr = metalMsgSend(colorAttachments, metalSel("objectAtIndexedSubscript:"), 0)
+    metalMsgSend(ca0, metalSel("setTexture:"), texture)
+    metalMsgSend(ca0, metalSel("setLoadAction:"), start.loadAction)
+    metalMsgSend(ca0, metalSel("setStoreAction:"), MetalRegistry.storeActionStore)
+    metalMsgSend(
+        ca0,
+        metalSel("setClearColor:"),
+        Float(start.clearColor.r),
+        Float(start.clearColor.g),
+        Float(start.clearColor.b),
+        Float(start.clearColor.a)
+    )
+    if start.depthEnabled {
+        let depthTexture = metalMemReadPtr(ctx, MetalContext.offsetDepthTexture)
+        let depthAtt: RawPtr = metalMsgSend(rp, metalSel("depthAttachment"))
+        metalMsgSend(depthAtt, metalSel("setTexture:"), depthTexture)
+        metalMsgSend(depthAtt, metalSel("setLoadAction:"), MetalRegistry.loadActionClear)
+        // Depth is cleared at the start of every pass and read by nothing after
+        // it, so storing it writes the whole target back for bytes no one loads
+        // — 33 MB a pass at 4K. Discarding it lets a tile-based GPU keep depth in
+        // tile memory and never touch system memory with it at all.
+        metalMsgSend(depthAtt, metalSel("setStoreAction:"), MetalRegistry.storeActionDontCare)
+        metalMsgSend(depthAtt, metalSel("setClearDepth:"), 1.0)
+    }
+    return rp
+}
+
+// Opens the pass's render-command encoder on the frame's command buffer and
+// records it on the context.
+function metalOpenPassEncoder(ctx: RawPtr, rp: RawPtr, depthEnabled: Bool) {
+    let commandBuffer = metalContextActiveCommandBuffer(ctx)
+    let encoder: RawPtr = metalMsgSend(
+        commandBuffer,
+        metalSel("renderCommandEncoderWithDescriptor:"),
+        rp
+    )
+    if depthEnabled {
+        let depthState = metalMemReadPtr(ctx, MetalContext.offsetDepthState)
+        metalMsgSend(encoder, metalSel("setDepthStencilState:"), depthState)
+    }
+    metalMemWritePtr(ctx, MetalContext.offsetEncoder, encoder)
+}
+
+// Begin a render pass into the context's color target: the swapchain drawable
+// in layer mode, the offscreen texture otherwise.
+public function metalContextBeginClear(ctx: RawPtr, start: borrow MetalPassStart) {
+    metalContextCountPass(ctx)
+    let texture = metalAcquirePassTexture(ctx)
+    metalOpenPassEncoder(ctx, metalPassDescriptor(ctx, texture, start), start.depthEnabled)
+}
+
+// Begin a render pass that targets a REGISTERED texture (not the context's swapchain/
+// offscreen color texture). Used for intermediate passes in multi-pass rendering. Does
+// not touch the context colorTexture slot, so a later swapchain pass + readback still
+// see the final image.
+public function metalContextBeginClearTarget(
+    ctx: RawPtr,
+    textureId: Number,
+    start: borrow MetalPassStart
+) {
+    metalContextCountPass(ctx)
+    let texture = metalLookup(ctx, textureId)
+    metalOpenPassEncoder(ctx, metalPassDescriptor(ctx, texture, start), start.depthEnabled)
+}
+
+// End only the current render encoder. Every pass in a logical frame shares the
+// active command buffer; texture dependencies are ordered by encoder boundaries.
+public function metalContextEndPass(ctx: RawPtr) {
+    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+    if !isNull(encoder) {
+        metalMsgSend(encoder, metalSel("endEncoding"))
+        metalMemWritePtr(ctx, MetalContext.offsetEncoder, nullPointer())
+    }
+}
+
+// Commit the logical frame once after its final pass.
+public function metalContextSubmitActiveFrame(ctx: RawPtr) {
+    let commandBuffer = metalMemReadPtr(ctx, MetalContext.offsetActiveCommandBuffer)
+    if isNull(commandBuffer) {
+        return
+    }
+    // Present the drawable in layer mode before committing.
+    let drawable = metalMemReadPtr(ctx, MetalContext.offsetDrawable)
+    if !isNull(drawable) {
+        metalMsgSend(commandBuffer, metalSel("presentDrawable:"), drawable)
+        metalMemWritePtr(ctx, MetalContext.offsetDrawable, nullPointer())
+    }
+    metalMsgSend(commandBuffer, metalSel("commit"))
+    metalStashCommandBuffer(ctx, commandBuffer)
+    // Take a slot in the in-flight ring, which is what a later pass waits on before
+    // it records — the bound that keeps the uniform ring from being lapped.
+    metalPacingEndPass(ctx, commandBuffer)
+    // `KIRA_METAL_SYNC_FRAME=1` blocks until this frame is done on the GPU: a
+    // bisection tool, not a mode anything ships in. It gives up all pipelining, so
+    // an artifact that survives it is not the CPU writing memory a running frame is
+    // reading — which is what the uniform ring in MetalPacing.kira now prevents by
+    // construction, and what this variable proved was happening before it existed.
+    if metalEnvIsSet("KIRA_METAL_SYNC_FRAME") {
+        metalMsgSend(commandBuffer, metalSel("waitUntilCompleted"))
+    }
+    metalReportRaceTally(ctx)
+    metalMemWritePtr(ctx, MetalContext.offsetActiveCommandBuffer, nullPointer())
+// No waitUntilCompleted otherwise: the on-screen path presents the drawable (which
+// sequences its own work and never blocks), and the offscreen path only needs
+// GPU completion when a pixel is read back — so the wait lives in
+// metalContextReadPixel. Blocking every offscreen frame serialized CPU and GPU
+// (no pipelining) — the resize-bench cost that does not exist on screen. The
+// command buffer stays retained at MetalContext.offsetCommandBuffer for that wait.
+}
+
+// Frame tally for KIRA_METAL_RACE_PROBE: sentinel, overlapping uniform writes,
+// total uniform writes. Printed per frame (not summed at exit) because the
+// count is expected to climb with scene size, and a single total would hide
+// that. Counters reset here, so each line covers exactly one frame.
+function metalReportRaceTally(ctx: RawPtr) {
+    if metalMemReadU64(ctx, MetalContext.offsetRaceProbe) == 0 {
+        return
+    }
+    metalProbe(
+        ProbeSentinel.benchPercentile,
+        [Number(metalMemReadU64(ctx, MetalContext.offsetRaceOverlaps)), Number(
+            metalMemReadU64(ctx, MetalContext.offsetRaceWrites)
+        )]
+    )
+    metalMemWriteU64(ctx, MetalContext.offsetRaceOverlaps, 0)
+    metalMemWriteU64(ctx, MetalContext.offsetRaceWrites, 0)
+}
+
+// One-shot compatibility for backend self-tests and direct Metal helpers.
+public function metalContextEndAndCommit(ctx: RawPtr) {
+    metalContextEndPass(ctx)
+    metalContextSubmitActiveFrame(ctx)
+}
+
+public function metalContextWaitForGpu(ctx: RawPtr) {
+    let pending = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
+    if !isNull(pending) {
+        metalMsgSend(pending, metalSel("waitUntilCompleted"))
+    }
+}
+
+// Read back a single pixel from the color target. The four BGRA bytes are read as
+// one little-endian U32, i.e. (A << 24) | (R << 16) | (G << 8) | B, so callers can
+// unpack without extra FFI round-trips and we avoid any width-casting in the hot
+// readback path.
+public function metalContextReadPixel(ctx: RawPtr, x: Number, y: Number) -> U32 {
+    // Block on the last submitted command buffer before reading its output (the
+    // per-frame wait was removed from metalContextEndAndCommit so offscreen frames
+    // pipeline; correctness for the readback path is restored here).
+    let pending = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
+    if !isNull(pending) {
+        metalMsgSend(pending, metalSel("waitUntilCompleted"))
+    }
+    let texture = metalMemReadPtr(ctx, MetalContext.offsetColorTexture)
+    let region = boxed<MetalRegion>(
+        MetalRegion { x: U64(x), y: U64(y), width: U64(1), height: U64(1) }
+    )
+    let px = metalMemAlloc(4)
+    metalMsgSend(
+        texture,
+        metalSel("getBytes:bytesPerRow:fromRegion:mipmapLevel:"),
+        px,
+        4,
+        region.pointer(),
+        0
+    )
+    let packed = metalMemReadU32(px, 0)
+    metalMemFree(px)
+    return packed
+}
+
+// Deterministic digest of the WHOLE color target — a golden-image gate. Reads every
+// texel once and folds it into a rolling modular hash (in U64 to avoid overflow; the
+// result fits in U32). Identical rendering -> identical digest, so a shell harness can
+// assert pixel-exact stability of the entire framebuffer, not just probe points.
+// The color target, in a layout the CPU may read, with every command buffer
+// that wrote it completed.
+//
+// `getBytes:` on a lossless-compressed texture faults inside the driver (AGX
+// `processCompressedRegion2D`) rather than failing — a segfault, not an error.
+// A frame that draws nothing never compresses, so this only bites once the
+// compositor has real content to show: readback worked for exactly as long as
+// the UI was blank. `optimizeContentsForCPUAccess:` is the counterpart of the
+// `optimizeContentsForGPUAccess:` the glass path already runs over its blur
+// targets, and committing it here orders the read after everything on the
+// queue, which waiting on the pending command buffer alone does not.
+public function metalContextReadableColorTexture(ctx: RawPtr) -> RawPtr {
+    return metalCaptureReadableTexture(ctx, metalMemReadPtr(ctx, MetalContext.offsetColorTexture))
+}
+
+namespace MetalDigest {
+    // A rolling hash over every texel, seeded with FNV's offset basis and kept
+    // modulo the largest 31-bit prime so it never leaves 64 bits.
+    let seed: U64 = 2166136261
+    let multiplier: U64 = 31
+    let prime: U64 = 2147483647
+}
+
+// The digest of the whole color target, or nothing where there is no target.
+public function metalContextImageDigest(ctx: RawPtr, width: Number, height: Number) -> U32? {
+    let texture = metalContextReadableColorTexture(ctx)
+    if isNull(texture) {
+        return .None
+    }
+    let bytes = metalReadTextureBytes(texture, width, height)
+    var hash = MetalDigest.seed
+    for index in 0..width * height {
+        let word = metalMemReadU32(bytes, U64(index * sizeOf<U32>()))
+        hash = (hash * MetalDigest.multiplier + U64(word)) % MetalDigest.prime
+    }
+    metalMemFree(bytes)
+    return .Some(U32(hash))
+}
+
+// Full-framebuffer dump — writes the color target's raw texel bytes (BGRA8, row-major,
+// width*4 bytes per row, no header) to `path` for visual verification of a rendered
+// frame. Dimensions are known to the harness, so a raw blob keeps the writer trivial;
+// opt-in via KIRA_METAL_IMAGE_DUMP (the env VALUE is the destination path).
+//
+// The target's CURRENT size in PHYSICAL pixels: a resize script may have
+// re-attached it mid-run, and an offscreen-scale run has a points-x-scale
+// target.
+public function metalContextImageDump(ctx: RawPtr, path: borrow String) {
+    let texture = metalContextReadableColorTexture(ctx)
+    if isNull(texture) {
+        log fault("there is no color target to dump", path: path)
+        return
+    }
+    let width = metalContextPhysicalWidth(ctx)
+    let height = metalContextPhysicalHeight(ctx)
+    let bytes = metalReadTextureBytes(texture, width, height)
+    metalWriteRaw(bytes, width * height * sizeOf<U32>(), path)
+    metalMemFree(bytes)
+}
+
+// Writes `count` bytes at `bytes` to the file at `path`, and says where it
+// could not.
+function metalWriteRaw(bytes: RawPtr, count: Number, path: borrow String) {
+    let stream = metalFOpen(path, "wb")
+    if isNull(stream) {
+        log fault("could not open the capture file to write the frame", path: path)
+        return
+    }
+    let written = metalFWrite(bytes, 1, U64(count), stream)
+    if written != U64(count) {
+        log fault(
+            "wrote only part of the captured frame",
+            written: written,
+            count: count,
+            path: path
+        )
+    }
+    metalFClose(stream)
+}

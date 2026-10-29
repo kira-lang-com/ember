@@ -1,0 +1,280 @@
+import Foundation
+import Heap
+// The draw path on WebGPU.
+//
+// `RenderEncoder` carries its backend through the native state a pass handed it
+// (see `RenderEncoder.kira`), so a draw never re-derives which backend it is on.
+// What reaches here is the encoder's recorded state — a pipeline, the buffers,
+// the bind-group slots and the scissor — and the counts of one draw.
+//
+// The one thing this does that the other backends do not is turn each bound
+// `BindGroup` into a real `WGPUBindGroup`. A WebGPU bind group is created
+// against the *pipeline's* layout for one group index, and neither is known
+// until the draw — so the group is minted here and cached on the group's own
+// state until the pipeline, the slot or its entries change.
+
+// Whether a draw issued through this runtime may proceed.
+public function dawnPassIsActive(runtime: RawPtr) -> Bool {
+    if isNull(runtime) {
+        return false
+    }
+    return nativeRecover<GraphicsRuntimeState>(runtime).dawn.passActive
+}
+
+// Binds what the pipeline reads, however its shader says the slots are read.
+//
+// A pipeline built from a KSL shader has one `@group(0)` and the slots are a
+// partition of it, so they are merged and bound at index 0. A pipeline built
+// from WGSL a caller wrote has whatever groups that caller declared, so each
+// slot is bound at its own index. Answers whether the draw may proceed.
+public function dawnApplyBindings(
+    state: borrow mut GraphicsRuntimeState,
+    pipeline: borrow DawnDrawPipeline,
+    groups: borrow[BindGroup?]
+) -> Result<Void, DawnBindFailure> {
+    match dawnPipelineBindingSlot(state, pipeline.id) {
+        Some(slot) -> {
+            // A KSL shader that writes several resource groups asks for exactly
+            // what caller-written WGSL asks for — one bind group per `@group(n)`
+            // — so it takes the same path, each slot filtered to its own group's
+            // bindings. Merging is for the one-group shader the merge was written
+            // for.
+            if dawnDistinctGroupCount(state.dawn.pipelineBindings[slot].groups) > 1 {
+                return dawnBindPerGroup(state, pipeline, slot, groups)
+            }
+            return dawnBindMergedGroup(state, pipeline, slot, groups)
+        }
+        // No reflection: each slot is bound as the group of the same index.
+        None -> {}
+    }
+    for (index, slot) in groups.enumerated() {
+        match slot {
+            Some(group) -> dawnApplyBindGroup(state, pipeline, UN32(index), group)
+            // An unset slot has nothing to bind; a group the shader needed there
+            // is the device's to report.
+            None -> {}
+        }
+    }
+    return .Ok
+}
+
+// Binds one group at `slot`.
+public function dawnApplyBindGroup(
+    state: borrow mut GraphicsRuntimeState,
+    pipeline: borrow DawnDrawPipeline,
+    slot: UN32,
+    group: borrow BindGroup
+) {
+    let layout = wgpuRenderPipelineGetBindGroupLayout(pipeline.handle, U32(slot))
+    if isNull(layout) {
+        log fault("the pipeline has no layout for a bound group", slot: slot)
+        return
+    }
+    let target = DawnGroupTarget { pipelineId: pipeline.id, slot: slot, layout: layout }
+    let handle = dawnDeviceBindGroup(state, group, target)
+    wgpuBindGroupLayoutRelease(layout)
+    match handle {
+        Some(handle) -> dawnSetGroup(state, slot, handle)
+        // `dawnDeviceBindGroup` reported why.
+        None -> {}
+    }
+}
+
+// The viewport over the whole pass and the scissor the encoder set, both on
+// every draw rather than once per pass: the pass may be an offscreen target of
+// its own size, and one draw's scissor must not leak into the next. Answers
+// false where the scissor misses the pass.
+function dawnSetDrawArea(state: borrow GraphicsRuntimeState, scissor: borrow ScissorRect?) -> Bool {
+    let pass = state.dawn.passEncoder
+    wgpuRenderPassEncoderSetViewport(
+        pass,
+        F32(0),
+        F32(0),
+        F32(state.dawn.passWidth),
+        F32(state.dawn.passHeight),
+        F32(0),
+        F32(1)
+    )
+    match scissorWithinPass(scissor, state.dawn.passWidth, state.dawn.passHeight) {
+        Some(area) -> {
+            wgpuRenderPassEncoderSetScissorRect(
+                pass,
+                U32(area.x),
+                U32(area.y),
+                U32(area.width),
+                U32(area.height)
+            )
+            return true
+        }
+        None -> return false
+    }
+}
+
+function dawnBindBuffers(state: borrow GraphicsRuntimeState, encoder: borrow RenderEncoderState) {
+    let pass = state.dawn.passEncoder
+    match encoder.vertexBuffer {
+        Some(id) -> {
+            let buffer = dawnObject(state, id.raw)
+            if !isNull(buffer) {
+                wgpuRenderPassEncoderSetVertexBuffer(
+                    pass,
+                    U32(0),
+                    buffer,
+                    U64(0),
+                    wgpuBufferGetSize(buffer)
+                )
+            }
+        }
+        None -> {}
+    }
+    match encoder.indexBuffer {
+        Some(index) -> {
+            let buffer = dawnObject(state, index.buffer.raw)
+            if !isNull(buffer) {
+                wgpuRenderPassEncoderSetIndexBuffer(
+                    pass,
+                    buffer,
+                    dawnIndexFormat(index.format),
+                    U64(0),
+                    wgpuBufferGetSize(buffer)
+                )
+            }
+        }
+        None -> {}
+    }
+}
+
+// The encoder's pipeline, buffers and groups bound on the open pass. Answers
+// the pipeline's id, or nothing where the draw cannot proceed.
+function dawnPrepareDraw(
+    state: borrow mut GraphicsRuntimeState,
+    encoder: borrow RenderEncoderState
+) -> U32? {
+    let pipelineId = match encoder.pipeline {
+        Some(pipeline) -> pipeline.id.raw
+        None -> return .None
+    }
+    let pipelineHandle = dawnObject(state, pipelineId)
+    if isNull(pipelineHandle) {
+        return .None
+    }
+    wgpuRenderPassEncoderSetPipeline(state.dawn.passEncoder, pipelineHandle)
+    if !dawnSetDrawArea(state, encoder.scissor) {
+        return .None
+    }
+    dawnBindBuffers(state, encoder)
+    let pipeline = DawnDrawPipeline { handle: pipelineHandle, id: pipelineId }
+    match dawnApplyBindings(state, pipeline, encoder.bindGroups) {
+        Ok -> {}
+        Error(failure) -> {
+            log fault("a draw's groups could not be bound, so it was skipped", failure)
+            return .None
+        }
+    }
+    return .Some(pipelineId)
+}
+
+public function dawnDrawWithBindings(
+    runtime: RawPtr,
+    encoder: borrow RenderEncoderState,
+    counts: borrow DrawCounts
+) {
+    if !dawnPassIsActive(runtime) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(runtime)
+    let pipelineId = match dawnPrepareDraw(state, encoder) {
+        Some(id) -> id
+        None -> return
+    }
+    let pass = state.dawn.passEncoder
+    let instances = UN32(max(counts.instanceCount, 1))
+    if counts.indexCount > 0 && encoder.indexBuffer != .None {
+        wgpuRenderPassEncoderDrawIndexed(
+            pass,
+            U32(counts.indexCount),
+            U32(instances),
+            U32(counts.firstIndex),
+            I32(0),
+            U32(0)
+        )
+        dawnNoteDraw(state, counts.indexCount * instances)
+        dawnTraceDraw(state, pipelineId, counts)
+        return
+    }
+    if counts.vertexCount == 0 {
+        return
+    }
+    wgpuRenderPassEncoderDraw(pass, U32(counts.vertexCount), U32(instances), U32(0), U32(0))
+    dawnNoteDraw(state, counts.vertexCount * instances)
+    dawnTraceDraw(
+        state,
+        pipelineId,
+        DrawCounts { vertexCount: counts.vertexCount, instanceCount: instances }
+    )
+}
+
+// A GPU-driven draw: the vertex and instance counts come out of a buffer a
+// compute pass wrote rather than from the CPU.
+public function dawnEncoderDrawIndirect(
+    runtime: RawPtr,
+    encoder: borrow RenderEncoderState,
+    indirectBufferId: UNumber
+) {
+    if !dawnPassIsActive(runtime) {
+        return
+    }
+    var state = nativeRecover<GraphicsRuntimeState>(runtime)
+    let arguments = dawnObject(state, U32(indirectBufferId))
+    if isNull(arguments) {
+        return
+    }
+    match dawnPrepareDraw(state, encoder) {
+        Some(_) -> {
+            wgpuRenderPassEncoderDrawIndirect(state.dawn.passEncoder, arguments, U64(0))
+            dawnNoteDraw(state, 0)
+        }
+        None -> {}
+    }
+}
+
+// Counts one draw and the primitives it rasterized, for `frame.statistics()`.
+public function dawnNoteDraw(state: borrow mut GraphicsRuntimeState, elementCount: Number) {
+    state.dawn.stats.drawCount = state.dawn.stats.drawCount + 1
+    state.dawn.stats.triangleCount = state.dawn.stats.triangleCount
+        + floor(elementCount / DawnPrimitive.triangleVertices)
+}
+
+namespace DawnPrimitive {
+    let triangleVertices: UNumber = 3
+}
+
+// One draw, as it was issued: what it drew and how much of it.
+//
+// The counts are here rather than only in the frame's totals because a frame
+// total says how much happened and not what — and "which draw" is the question
+// when a frame is wrong.
+//
+// An index count says the draw was indexed; the caller passes none for a draw
+// that read its vertices in order.
+public function dawnTraceDraw(
+    state: borrow GraphicsRuntimeState,
+    pipeline: Number,
+    counts: borrow DrawCounts
+) {
+    if !state.tracing.draw {
+        return
+    }
+    let indexed = counts.indexCount > 0
+    let elements = indexed ? counts.indexCount : counts.vertexCount
+    let instances = UN32(max(counts.instanceCount, 1))
+    log debug(
+        "Ember issued a draw",
+        area: "draw",
+        pipeline: pipeline,
+        kind: indexed ? "indexed" : "vertex",
+        elements: elements,
+        instances: instances,
+        triangles: floor(elements * instances / DawnPrimitive.triangleVertices)
+    )
+}

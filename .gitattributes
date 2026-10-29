@@ -1,0 +1,2 @@
+*.kira linguist-language=Kira
+NativeLibs/Sokol/** linguist-vendored

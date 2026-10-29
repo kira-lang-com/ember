@@ -1,0 +1,38 @@
+import Foundation
+// Reading the files `kira shader build` writes beside a KSL.
+//
+// Every backend compiles from disk the same way and every one of them wants the
+// same two answers: the text, or the reason the asset could not be had. The
+// three used to each spell `readFile` and each answer `.ok`, which threw the
+// file system's own reason away and made the failure a missing boolean — so this
+// is the one place a shader asset is opened, and it hands back `Result`.
+//
+// A shader that came from an inline `ksl!` artifact never comes through here;
+// that route carries its text already.
+
+// `kira shader build` writes the `.resources` digest beside the stages, and a
+// shader whose text did not come from a KSL compile has none — so an absent
+// digest is an empty one, not a failure. A missing stage is a different thing
+// entirely, and names the path it looked at.
+//
+// The hint is the command that would produce the file. Each backend passes its
+// own, because the command differs per target and the reason is useless without
+// it.
+public function readShaderAsset(
+    path: borrow String,
+    hint: borrow String
+) -> Result<String, ResourceFailure> {
+    match readFile(path) {
+        Ok(contents) -> return .Ok(move contents.text)
+        Error(reason) -> {
+            log fault("no shader", path: path, trace: traceText(reason), hint: hint)
+            return .Error(.AssetUnreadable)
+        }
+    }
+}
+
+// The digest, where it is there and where it is not.
+public function readShaderResourceDigest(path: borrow String) -> String {
+    let digest = try readShaderAsset(path, "run `kira shader build`") otherwise return ""
+    return digest
+}

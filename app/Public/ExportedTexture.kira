@@ -1,0 +1,124 @@
+import Foundation
+
+// A render target whose memory another process can map.
+//
+// A compositor shows pixels a component drew, and the two do not share an
+// address space. What crosses between them is a HANDLE to the memory behind a
+// texture, plus the layout an importer cannot infer: the row stride the driver
+// chose, the offset of the first pixel, and how the bytes are arranged. The
+// texture stays an ordinary `GraphicsTexture` on this side — a pass draws into
+// it like any other target — and the handle is what the other side adopts.
+//
+//     let exported = try device.graphics().createExportedTexture(
+//         ExportedTextureDescriptor { label: "component-output", width: 1280, height: 800 }
+//     ) otherwise return
+//     batch.presentBatchIntoTexture(frame, device.graphics(), exported.texture, ...)
+//     device.submit()
+//     // hand exported.memory.handle, stride and offset to the compositor
+//     device.graphics().destroyExportedTexture(exported)
+//
+// The memory is allocated by the device that renders into it. An importer that
+// cannot share memory across devices (venus under virtio-gpu is one) needs the
+// handle to come from the same device the frames are drawn on, so there is no
+// way to allocate one here and render into it with another.
+
+// What kind of handle names the memory.
+public enum ExportedMemoryKind {
+    // A Linux dma-buf file descriptor, from a Vulkan device.
+    DmaBuf
+    // A Mach port naming an IOSurface, from a Metal device.
+    IOSurface
+}
+
+// The order of the four bytes of one pixel in memory, first byte first.
+//
+// Named by memory order rather than by a fourcc because each consumer has its
+// own: DRM spells `Rgba8Unorm` as `ABGR8888` and `Bgra8Unorm` as `ARGB8888`,
+// because a fourcc names a little-endian 32-bit word.
+public enum ExportedPixelFormat {
+    Rgba8Unorm
+    Bgra8Unorm
+}
+
+// How the bytes of an exported texture are arranged.
+//
+// A kind rather than a number: the DRM format modifier an importer passes is
+// the consumer's own spelling of it, and `.Linear` is `DRM_FORMAT_MOD_LINEAR`,
+// which is 0.
+public enum ExportedMemoryLayout {
+    // One plane, rows end to end at `stride`, no tiling or compression.
+    Linear
+}
+
+// The texture to allocate.
+//
+// `format` is the texture format a pipeline drawing into it names in its color
+// target, so the pipeline and the target agree. Only the four-byte color formats
+// export: `.Swapchain` (the device's swapchain format, or BGRA8 on a headless
+// device) and `.Rgba8Unorm`.
+public struct ExportedTextureDescriptor {
+    var label: String = ""
+    var width: UN32 = 1
+    var height: UN32 = 1
+    var format: TextureFormat = .Swapchain
+}
+
+// The memory behind an exported texture, as an importer needs it described.
+//
+// The layout is what was ALLOCATED, read back from the driver: rows are padded
+// to its own alignment, so `stride` is at least `width * 4` and often more.
+public struct ExportedMemory {
+    var kind: ExportedMemoryKind = .DmaBuf
+    // The dma-buf file descriptor or the Mach port. Owned by the exported
+    // texture: `destroyExportedTexture` closes it. A consumer that keeps the
+    // memory past that duplicates the handle, or has already imported it.
+    // Zero names no handle: a Mach port of 0 is `MACH_PORT_NULL`, and an fd of
+    // 0 is standard input, which no export is ever handed.
+    var handle: UN32 = 0
+    var width: UN32 = 0
+    var height: UN32 = 0
+    // Bytes from the start of one row to the start of the next.
+    var stride: UN32 = 0
+    // Bytes from the start of the memory to the first pixel.
+    var offset: UN32 = 0
+    var format: ExportedPixelFormat = .Bgra8Unorm
+    // How the pixels are arranged. Always `.Linear` here.
+    var layout: ExportedMemoryLayout = .Linear
+}
+
+// A texture a pass draws into, and the memory a peer imports.
+public struct ExportedTexture {
+    var texture: GraphicsTexture = GraphicsTexture()
+    var memory: ExportedMemory = ExportedMemory()
+}
+
+// Why no exported texture could be made.
+public enum ExportFailure {
+    // This backend, or this device, cannot hand its memory to another process:
+    // Dawn on any device, or a Vulkan device without dma-buf export.
+    Unexportable
+    // The device was asked correctly and said no: an allocation, an image or a
+    // view it would not make.
+    DeviceRefused
+    // A size of zero, or a format that is not four bytes of color.
+    InvalidDescriptor
+}
+
+public type ExportedTextureResult = Result<ExportedTexture, ExportFailure>
+
+// Why another process's memory could not be taken in as a texture.
+public enum ImportFailure {
+    // This backend, or this device, cannot take memory from another process:
+    // Dawn on any device, Metal, or a Vulkan device without dma-buf import.
+    Unimportable
+    // The device was asked correctly and said no: an image, an allocation or
+    // a view it would not make, or memory laid out other than this device
+    // would lay out the same image.
+    DeviceRefused
+    // No handle, a size of zero, or a handle that is not a dma-buf.
+    InvalidMemory
+}
+
+// A texture drawn from memory another process exported, sampled and never
+// drawn into here.
+public type ImportedTextureResult = Result<GraphicsTexture, ImportFailure>

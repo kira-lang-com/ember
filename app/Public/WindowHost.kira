@@ -1,0 +1,34 @@
+import Heap
+
+// Backend-neutral host accessors for embedders that attach a native child
+// control to the graphics window. Window size comes off the frame's drawable
+// rather than a backend's own call, so there is one path for every backend.
+public function emberHostWindowHandle(frame: borrow RenderFrame) -> RawPtr {
+    match frame.backend {
+        Dawn -> {
+            if isNull(frame.backendContext) {
+                return nullPointer()
+            }
+            return nativeRecover<GraphicsRuntimeState>(frame.backendContext).dawn.window
+        }
+        Vulkan -> {
+            if isNull(frame.backendContext) {
+                return nullPointer()
+            }
+            return nativeRecover<GraphicsRuntimeState>(frame.backendContext).vulkan.window
+        }
+        Metal -> return nullPointer()
+    }
+}
+
+public function emberHostDrawableWidth(frame: borrow RenderFrame) -> UNumber {
+    return frame.drawableWidth()
+}
+
+public function emberHostDrawableHeight(frame: borrow RenderFrame) -> UNumber {
+    return frame.drawableHeight()
+}
+
+public function emberHostBackingScale(frame: borrow RenderFrame) -> Number {
+    return frame.backingScale()
+}

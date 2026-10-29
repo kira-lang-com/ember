@@ -1,0 +1,62 @@
+public struct GraphicsRuntimeState {
+    // Which trace areas this run prints, resolved once from the environment.
+    //
+    // A field rather than a lookup at each site: an area is checked on paths
+    // as hot as a draw, and every one of them would otherwise scan the
+    // environment.
+    var tracing: TraceGates = TraceGates {}
+    var app: GraphicsApplication
+    var userData: RawPtr
+    var frameIndex: UNumber = 0
+    // The Dawn and Vulkan backends' window, device, resource table and pass
+    // state. The one state blob is what the run loop, a frame and a draw all
+    // already recover.
+    var dawn: DawnState = dawnEmptyState()
+    var vulkan: VulkanState = VulkanState()
+    // Whether this run was asked for frame-rate telemetry
+    // (`KIRA_GRAPHICS_LOG_FPS`). A harness knob rather than pass state, which is
+    // why it sits beside the other three rather than inside one backend's.
+    var logFps: Bool = false
+    // What the frames of this run cost the RENDERER, in seconds: how many were
+    // measured, their total, and the worst single one.
+    //
+    // Deliberately not the frame *rate*. A presented frame arrives at the
+    // display's cadence whatever the renderer did, so a run pinned at 60 fps
+    // says nothing about whether a frame took 1 ms or 15 — and a regression that
+    // doubles the cost of a frame is invisible until it crosses the vsync
+    // interval, at which point it looks like a cliff. Both backends measure the
+    // same span: the application's own frame callback, with the wait for a
+    // drawable outside it.
+    var frameCostCount: UNumber = 0
+    var frameCostTotalSeconds: UNumber = 0
+    var frameCostWorstSeconds: UNumber = 0
+    // Which frame the worst one was, counting from the first after start-up. A
+    // maximum at frame 3 is start-up leaking past the first frame; one at 250 of
+    // 300 is the shape of the run.
+    var frameCostWorstIndex: UNumber = 0
+    // Every frame's cost, for the percentiles `reportFrameCost` prints. A budget
+    // is written against the worst frame, and a maximum alone cannot tell one
+    // hitch from a distribution.
+    var frameCostSamples: [Number] = []
+    var frameCostFirstSeconds: UNumber = 0
+    var frameCostPasses: UNumber = 0
+    var frameCostDraws: UNumber = 0
+    // The harness knobs, read once at init rather than per frame.
+    //
+    // They are launch settings — nothing changes them while a process runs — and
+    // asking the environment for one costs a linear scan and a fresh string on
+    // every frame, in a callback whose whole job is not to allocate. Read once,
+    // the frame callback only compares two integers.
+    var quitAfterFrames: UNumber = 0
+    // Points the window's size sweeps by each frame; zero resizes nothing.
+    var resizeSweep: UNumber = 0
+    // Pixels per point the run fixes for its window; zero leaves them to the
+    // display.
+    var scale: UNumber = 0
+    // A run with no window (`HarnessConfig.headless`).
+    var headless: Bool = false
+    var capture: FrameCapture? = .None
+    // The scripted input, read once at init and injected through the normal
+    // AppEvent handler before a frame draws.
+    var inputScript: InputScript = InputScript()
+}

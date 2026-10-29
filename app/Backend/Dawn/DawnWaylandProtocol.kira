@@ -1,0 +1,67 @@
+// Wayland values that are part of the wire protocol rather than the native
+// binding. Calls and listener layouts come from `app/bindings/wayland.kira`,
+// generated from `NativeLibs/Wayland/kira_wayland.h`.
+
+// A registry event names its interface as a string. The descriptor names and
+// the compositor's event bytes have no identity to compare, so use libc's
+// value comparison through the runtime already loaded in every process.
+public @FFI.Extern { library: kira_runtime, symbol: strcmp, abi: c }
+function waylandCompareNames(a: RawPtr, b: CString) -> I32
+
+// Whether a registry event's interface is `name`.
+public function waylandNamed(interface: RawPtr, name: borrow String) -> Bool {
+    return waylandCompareNames(interface, name) == I32(0)
+}
+
+// `wl_seat.capabilities`: a set of bits, not a number to compare.
+//
+// Typed because a raw bit test in logic is how a capability set grows a fourth
+// member nobody notices is missing: `has` is where a new case is added, and the
+// protocol's bit order is written down once instead of at every reader.
+public distinct WaylandSeatCapability = U32
+
+// The bits `wl_seat.capabilities` carries: pointer bit 0, keyboard bit 1,
+// touch bit 2.
+public namespace SeatCapability {
+    let pointer: WaylandSeatCapability = WaylandSeatCapability(U32(1))
+    let keyboard: WaylandSeatCapability = WaylandSeatCapability(U32(2))
+    let touch: WaylandSeatCapability = WaylandSeatCapability(U32(4))
+}
+
+// Whether a capability set contains one capability.
+public function seatHas(
+    capabilities: borrow WaylandSeatCapability,
+    wanted: borrow WaylandSeatCapability
+) -> Bool {
+    return (capabilities.raw & wanted.raw) == wanted.raw
+}
+
+// Linux input event codes carried by `wl_pointer.button`.
+
+// `wl_pointer.axis`: vertical is axis 0, horizontal axis 1.
+
+// The denominator a `wl_fixed_t` divides by, and the wheel's detent in the
+// same units — which is what makes "ten surface units to a detent" a division
+// rather than a second number written out.
+public namespace WaylandFixed {
+    // `wl_fixed_t` is signed 24.8 fixed point: eight fractional bits, so a
+    // value is its bits over 2^8.
+    let scale: UNumber = 256
+    // One detent of a wheel, in surface units. The protocol reports scroll
+    // distance rather than notches, so this is what turns the distance back
+    // into the notches the layer above speaks in.
+    let detent: UNumber = 10
+}
+
+// `wl_fixed_t` as a plain number.
+public function waylandFixedToNumber(value: I32) -> Number {
+    return Number(value) / WaylandFixed.scale
+}
+
+public namespace DawnWaylandProtocol {
+    let buttonLeft: U32 = U32(272)
+    let buttonRight: U32 = U32(273)
+    let buttonMiddle: U32 = U32(274)
+    let buttonPressed: U32 = U32(1)
+    let axisVertical: U32 = U32(0)
+}

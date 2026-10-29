@@ -1,0 +1,146 @@
+import Ember
+import Foundation
+
+struct FakeCubeState {
+    var shader: FakeShader = FakeShader {}
+    var pipeline: FakeRenderPipeline = FakeRenderPipeline {}
+    var vertices: FakeGraphicsBuffer = FakeGraphicsBuffer {}
+    var indices: FakeGraphicsBuffer = FakeGraphicsBuffer {}
+    var depthTexture: FakeGraphicsTexture = FakeGraphicsTexture {}
+    var cameraBindings: FakeBindGroup = FakeBindGroup {}
+    var objectBindings: FakeBindGroup = FakeBindGroup {}
+    var indexCount: Number = 0
+}
+
+namespace FakeCube {
+    let width: Number = 1280
+    let height: Number = 720
+    let indexCount: Number = 6
+    // A float3 position then a float3 normal, six floats a vertex.
+    let stride: Number = 24
+    let normalOffset: Number = 12
+    let indexStride: Number = 4
+}
+
+function fakeCubeVertices() -> [Number] {
+    return[-1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, -1.0, 1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 1.0, 0.0, 0.0, 1.0, -1.0, 1.0, 1.0, 0.0, 0.0, 1.0]
+}
+
+function fakeCubeIndices() -> [UN32] {
+    return[0, 1, 2, 0, 2, 3]
+}
+
+function fakeCubeLayout() -> FakeVertexLayout {
+    return FakeVertexLayout {
+        stride: FakeCube.stride,
+        attributes: [FakeVertexAttribute {
+            name: "position",
+            format: FakeVertexFormat.float3
+        }, FakeVertexAttribute {
+            name: "normal",
+            location: 1,
+            format: FakeVertexFormat.float3,
+            offset: FakeCube.normalOffset
+        }]
+    }
+}
+
+// A bind group holding one uniform, under `name`.
+function fakeUniformBindings(graphics: borrow FakeGraphics, name: String) -> FakeBindGroup {
+    return graphics.createBindGroup(
+        FakeBindGroupDescriptor {
+            label: name + "-bindings",
+            entries: [FakeBindEntry {
+                name: name,
+                kind: FakeBindEntryKind.uniform,
+                uniform: graphics.createUniform()
+            }]
+        }
+    )
+}
+
+function fakeCubePipeline(shader: FakeShader) -> FakePipelineDescriptor {
+    return FakePipelineDescriptor {
+        label: "cube-pipeline",
+        shader: shader,
+        vertexLayout: fakeCubeLayout(),
+        colorTargets: [FakeColorTargetDescriptor {
+            format: FakeTextureFormat.rgba8Unorm,
+            blend: FakeBlendState { enabled: true, preset: FakeBlendPreset.alpha }
+        }],
+        depthStencil: FakeDepthStencilDescriptor {
+            depthEnabled: true,
+            depthWriteEnabled: true,
+            depthCompare: FakeCompareFunction.lessEqual,
+            format: FakeTextureFormat.depth24Stencil8
+        },
+        rasterization: FakeRasterizationDescriptor {
+            cullMode: FakeCullMode.back,
+            frontFace: FakeFrontFace.counterClockwise
+        }
+    }
+}
+
+function fakeSetupCube(graphics: FakeGraphics) -> FakeCubeState {
+    let shader = graphics.createShaderFromKsl(
+        FakeKslShaderDescriptor { label: "basic-3d-cube", asset: "BasicCube" }
+    )
+    return FakeCubeState {
+        shader: shader,
+        pipeline: graphics.createRenderPipeline(fakeCubePipeline(copy shader)),
+        vertices: graphics.createBuffer(
+            FakeBufferDescriptor {
+                label: "cube-vertices",
+                floatData: fakeCubeVertices(),
+                stride: FakeCube.stride
+            }
+        ),
+        indices: graphics.createBuffer(
+            FakeBufferDescriptor {
+                label: "cube-indices",
+                usage: FakeBufferUsage.index,
+                uint32Data: fakeCubeIndices(),
+                stride: FakeCube.indexStride
+            }
+        ),
+        depthTexture: graphics.createTexture(
+            FakeTextureDescriptor {
+                label: "cube-depth",
+                width: FakeCube.width,
+                height: FakeCube.height,
+                format: FakeTextureFormat.depth24Stencil8,
+                usage: FakeTextureUsage.depthStencil
+            }
+        ),
+        cameraBindings: fakeUniformBindings(graphics, "camera"),
+        objectBindings: fakeUniformBindings(graphics, "object"),
+        indexCount: FakeCube.indexCount
+    }
+}
+
+function fakeEncodeCubePass(encoder: borrow mut FakeRenderEncoder, state: borrow FakeCubeState) {
+    encoder.setPipeline(state.pipeline)
+    encoder.setVertexBuffer(state.vertices)
+    encoder.setIndexBuffer(state.indices, FakeIndexFormat.uint32)
+    encoder.setBindGroup(0, state.cameraBindings)
+    encoder.setBindGroup(1, state.objectBindings)
+    encoder.drawIndexed(state.indexCount)
+}
+
+function fakeDrawCube(frame: borrow mut FakeRenderFrame, state: FakeCubeState) {
+    let pass = FakeRenderPassDescriptor {
+        label: "fake-3d-cube-pass" colorAttachments: [FakeColorAttachment {
+            target: FakeRenderTarget {
+                kind: FakeRenderTargetKind.swapchain
+            } loadAction: FakeLoadAction.clear storeAction: FakeStoreAction.store clearColor: RGBAColor {
+                r: 0.02 g: 0.025 b: 0.04 a: 1.0
+            }
+        }] depthAttachment: FakeDepthAttachment {
+            texture: state.depthTexture loadAction: FakeLoadAction.clear storeAction: FakeStoreAction.store clearDepth: 1.0 readOnly: false
+        } hasDepthAttachment: true
+    }
+
+    var encoder = frame.beginRenderPass(pass)
+    fakeEncodeCubePass(encoder, state)
+    frame.endPass()
+}

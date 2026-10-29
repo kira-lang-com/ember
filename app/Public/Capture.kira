@@ -1,0 +1,54 @@
+import Foundation
+
+// Read a texture back through the backend that owns it and write it as a PPM.
+// Headless clients use this to prove the pixels they rendered without requiring
+// a swapchain or display server.
+public function captureTexture(
+    graphics: borrow Graphics,
+    texture: borrow GraphicsTexture,
+    path: borrow String
+) -> Result<Void, CaptureFailure> {
+    return match graphics.backend {
+        Dawn -> dawnCaptureTexture(graphics.backendContext, texture, path)
+        Vulkan -> vulkanCaptureTexture(graphics.backendContext, texture, path)
+        Metal -> .Error(.Unsupported)
+    }
+}
+
+// `rows` rows of `texture` from row `top` down, as red, green, blue and alpha
+// bytes, or for a half-float texture as each channel's half, little-endian.
+// It waits for the GPU, so it is for an occasional measurement.
+public function readTextureRows(
+    graphics: borrow Graphics,
+    texture: borrow GraphicsTexture,
+    top: UNumber,
+    rows: UNumber
+) -> Result<[UN8], CaptureFailure> {
+    let read = match graphics.backend {
+        Vulkan -> vulkanReadTextureRows(graphics.backendContext, texture, top, rows)
+        Dawn -> dawnReadTextureRows(graphics.backendContext, texture, top, rows)
+        Metal -> .Error(.Unsupported)
+    }
+    return match read {
+        Ok(bytes) -> .Ok(bytes)
+        Error(failure) -> .Error(failure)
+    }
+}
+
+// Every `every`-th pixel of each of `rows` of `texture`, as red, green, blue
+// and alpha bytes, row after row. One wait for the GPU covers every row.
+public function readTextureSamples(
+    graphics: borrow Graphics,
+    texture: borrow GraphicsTexture,
+    rows: borrow [UNumber],
+    every: UNumber
+) -> Result<[UN8], CaptureFailure> {
+    let read = match graphics.backend {
+        Vulkan -> vulkanReadTextureSamples(graphics.backendContext, texture, rows, every)
+        Dawn, Metal -> .Error(.Unsupported)
+    }
+    return match read {
+        Ok(bytes) -> .Ok(bytes)
+        Error(failure) -> .Error(failure)
+    }
+}

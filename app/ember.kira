@@ -1,0 +1,3 @@
+public function emberApiName() -> String {
+    return "Ember"
+}

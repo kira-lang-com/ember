@@ -1,0 +1,122 @@
+import Foundation
+import Heap
+
+// A window's Vulkan surface. Creating one is the one Vulkan call that names
+// the window system's own handles (an `HWND`, a `wl_surface`), so it is not in
+// the platform-neutral core binding: the instance hands the constructor out by
+// name, and Kira calls it through the pointer (KLF section 26.4).
+
+// `VkWaylandSurfaceCreateInfoKHR`.
+@FFI.Struct { layout: c }
+struct VulkanWaylandSurfaceInfo {
+    var sType: I32
+    var pNext: RawPtr
+    var flags: U32
+    var display: RawPtr
+    var surface: RawPtr
+}
+
+// `VkWin32SurfaceCreateInfoKHR`.
+@FFI.Struct { layout: c }
+struct VulkanWin32SurfaceInfo {
+    var sType: I32
+    var pNext: RawPtr
+    var flags: U32
+    var hinstance: RawPtr
+    var hwnd: RawPtr
+}
+
+// Both constructors: the instance, the create info, the allocator and where
+// the surface is written.
+@FFI.Callback { abi: c, params: [RawPtr, RawPtr, RawPtr, RawPtr], result: I32 }
+struct VulkanCreateSurfaceCommand {}
+
+@FFI.Extern { library: vulkan, symbol: vkGetInstanceProcAddr, abi: c }
+function vulkanInstanceCommandAddress(instance: RawPtr, name: CString) -> RawPtr
+
+@FFI.Extern { library: vulkan, symbol: vkGetInstanceProcAddr, abi: c }
+function vulkanCreateSurfaceCommand(instance: RawPtr, name: CString) -> VulkanCreateSurfaceCommand
+
+namespace VulkanSurfaceCommand {
+    let wayland: String = "vkCreateWaylandSurfaceKHR"
+    let win32: String = "vkCreateWin32SurfaceKHR"
+}
+
+// The surface `command` makes from the create info at `info`, or nothing when
+// the instance lacks the command or it refuses.
+function vulkanCreateSurface(
+    instance: RawPtr,
+    command: borrow String,
+    info: RawPtr
+) -> Optional<RawPtr> {
+    if isNull(vulkanInstanceCommandAddress(instance, command)) { return .None }
+    let create = vulkanCreateSurfaceCommand(instance, command)
+    let surface = boxed<RawPtr>(nullPointer())
+    if create(instance, info, nullPointer(), surface.pointer()) != I32(VK_SUCCESS) { return .None }
+    return .Some(boxedValue<RawPtr>(surface))
+}
+
+public function vulkanCreateWaylandSurface(
+    instance: RawPtr,
+    display: RawPtr,
+    surface: RawPtr
+) -> Optional<RawPtr> {
+    let info = boxed<VulkanWaylandSurfaceInfo>(
+        VulkanWaylandSurfaceInfo {
+            sType: VulkanVocabulary.structureWaylandSurfaceCreateInfo,
+            pNext: nullPointer(),
+            flags: U32(0),
+            display: display,
+            surface: surface
+        }
+    )
+    return vulkanCreateSurface(instance, VulkanSurfaceCommand.wayland, info.pointer())
+}
+
+public function vulkanCreateWin32Surface(
+    instance: RawPtr,
+    hinstance: RawPtr,
+    window: RawPtr
+) -> Optional<RawPtr> {
+    let info = boxed<VulkanWin32SurfaceInfo>(
+        VulkanWin32SurfaceInfo {
+            sType: VulkanVocabulary.structureWin32SurfaceCreateInfo,
+            pNext: nullPointer(),
+            flags: U32(0),
+            hinstance: hinstance,
+            hwnd: window
+        }
+    )
+    return vulkanCreateSurface(instance, VulkanSurfaceCommand.win32, info.pointer())
+}
+
+public function vulkanDestroySurface(instance: RawPtr, surface: RawPtr) {
+    vkDestroySurfaceKHR(instance, surface, nullPointer())
+}
+
+@FFI.Extern { library: user32, symbol: ClientToScreen, abi: c }
+function clientToScreen(window: RawPtr, point: RawPtr) -> I32
+
+@FFI.Extern { library: user32, symbol: ClipCursor, abi: c }
+function clipCursor(bounds: RawPtr) -> I32
+
+// Confines the Windows cursor to `window`'s client area, or frees it, and
+// answers whether the system did so.
+public function vulkanClipCursor(window: RawPtr, lock: Bool) -> Bool {
+    if !lock { return clipCursor(nullPointer()) != I32(0) }
+    let client = boxed<WindowRect>(WindowRect {})
+    if windowClientRect(window, client.pointer()) == I32(0) { return false }
+    let bounds = boxedValue<WindowRect>(client)
+    let topLeft = boxed<WindowPoint>(WindowPoint { x: bounds.left, y: bounds.top })
+    let bottomRight = boxed<WindowPoint>(WindowPoint { x: bounds.right, y: bounds.bottom })
+    if clientToScreen(window, topLeft.pointer()) == I32(0)
+        || clientToScreen(window, bottomRight.pointer()) == I32(0) {
+        return false
+    }
+    let start = boxedValue<WindowPoint>(topLeft)
+    let end = boxedValue<WindowPoint>(bottomRight)
+    let screen = boxed<WindowRect>(
+        WindowRect { left: start.x, top: start.y, right: end.x, bottom: end.y }
+    )
+    return clipCursor(screen.pointer()) != I32(0)
+}
