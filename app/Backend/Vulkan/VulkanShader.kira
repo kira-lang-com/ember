@@ -151,74 +151,78 @@ public function vulkanCreateGraphicsShader(
     context: RawPtr,
     source: borrow VulkanGraphicsSource
 ) -> ShaderResult {
-    if !vulkanRequireDevice(context, "vulkanCreateGraphicsShader") {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let vertex = vulkanCreateShaderModule(
-        state.vulkan,
-        source.label + " vertex",
-        narrowWords(source.vertex)
-    )
-    let fragment = vulkanCreateShaderModule(
-        state.vulkan,
-        source.label + " fragment",
-        narrowWords(source.fragment)
-    )
-    if isNull(vertex) || isNull(fragment) {
-        if !isNull(vertex) {
-            vkDestroyShaderModule(state.vulkan.device, vertex, nullPointer())
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateGraphicsShader") {
+            return .Error(.DeviceRefused)
         }
-        if !isNull(fragment) {
-            vkDestroyShaderModule(state.vulkan.device, fragment, nullPointer())
-        }
-        return .Error(.ShaderRejected)
-    }
-    return .Ok(
-        vulkanRecordShader(
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let vertex = vulkanCreateShaderModule(
             state.vulkan,
-            VulkanShaderRecord {
-                vertexModule: vertex,
-                fragmentModule: fragment,
-                computeModule: nullPointer(),
-                vertexEntry: source.vertexEntry,
-                fragmentEntry: source.fragmentEntry,
-                reflection: kslParseResourceReflection(source.reflection),
-                live: true
-            }
+            source.label + " vertex",
+            narrowWords(source.vertex)
         )
-    )
+        let fragment = vulkanCreateShaderModule(
+            state.vulkan,
+            source.label + " fragment",
+            narrowWords(source.fragment)
+        )
+        if isNull(vertex) || isNull(fragment) {
+            if !isNull(vertex) {
+                vkDestroyShaderModule(state.vulkan.device, vertex, nullPointer())
+            }
+            if !isNull(fragment) {
+                vkDestroyShaderModule(state.vulkan.device, fragment, nullPointer())
+            }
+            return .Error(.ShaderRejected)
+        }
+        return .Ok(
+            vulkanRecordShader(
+                state.vulkan,
+                VulkanShaderRecord {
+                    vertexModule: vertex,
+                    fragmentModule: fragment,
+                    computeModule: nullPointer(),
+                    vertexEntry: source.vertexEntry,
+                    fragmentEntry: source.fragmentEntry,
+                    reflection: kslParseResourceReflection(source.reflection),
+                    live: true
+                }
+            )
+        )
+    }
 }
 
 public function vulkanCreateComputeShader(
     context: RawPtr,
     source: borrow VulkanComputeSource
 ) -> ShaderResult {
-    if !vulkanRequireDevice(context, "vulkanCreateComputeShader") {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let module = vulkanCreateShaderModule(
-        state.vulkan,
-        source.label + " compute",
-        narrowWords(source.compute)
-    )
-    if isNull(module) {
-        return .Error(.ShaderRejected)
-    }
-    return .Ok(
-        vulkanRecordShader(
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateComputeShader") {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let module = vulkanCreateShaderModule(
             state.vulkan,
-            VulkanShaderRecord {
-                vertexModule: nullPointer(),
-                fragmentModule: nullPointer(),
-                computeModule: module,
-                computeEntry: source.entry,
-                reflection: kslParseResourceReflection(source.reflection),
-                live: true
-            }
+            source.label + " compute",
+            narrowWords(source.compute)
         )
-    )
+        if isNull(module) {
+            return .Error(.ShaderRejected)
+        }
+        return .Ok(
+            vulkanRecordShader(
+                state.vulkan,
+                VulkanShaderRecord {
+                    vertexModule: nullPointer(),
+                    fragmentModule: nullPointer(),
+                    computeModule: module,
+                    computeEntry: source.entry,
+                    reflection: kslParseResourceReflection(source.reflection),
+                    live: true
+                }
+            )
+        )
+    }
 }
 
 public function vulkanCreateShaderFromArtifact(
@@ -327,23 +331,25 @@ public function vulkanCreateShaderFromSources(
 }
 
 public function vulkanDestroyShader(context: RawPtr, shader: borrow GraphicsShader) {
-    if !vulkanHasDevice(context) || shader.id == 0 {
-        return
+    unsafe {
+        if !vulkanHasDevice(context) || shader.id == 0 {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let index = Number(shader.id.raw) - 1
+        if index < 0 || index >= state.vulkan.shaders.count || !state.vulkan.shaders[index].live {
+            return
+        }
+        let record = state.vulkan.shaders[index]
+        if !isNull(record.vertexModule) {
+            vkDestroyShaderModule(state.vulkan.device, record.vertexModule, nullPointer())
+        }
+        if !isNull(record.fragmentModule) {
+            vkDestroyShaderModule(state.vulkan.device, record.fragmentModule, nullPointer())
+        }
+        if !isNull(record.computeModule) {
+            vkDestroyShaderModule(state.vulkan.device, record.computeModule, nullPointer())
+        }
+        state.vulkan.shaders[index] = VulkanShaderRecord()
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let index = Number(shader.id.raw) - 1
-    if index < 0 || index >= state.vulkan.shaders.count || !state.vulkan.shaders[index].live {
-        return
-    }
-    let record = state.vulkan.shaders[index]
-    if !isNull(record.vertexModule) {
-        vkDestroyShaderModule(state.vulkan.device, record.vertexModule, nullPointer())
-    }
-    if !isNull(record.fragmentModule) {
-        vkDestroyShaderModule(state.vulkan.device, record.fragmentModule, nullPointer())
-    }
-    if !isNull(record.computeModule) {
-        vkDestroyShaderModule(state.vulkan.device, record.computeModule, nullPointer())
-    }
-    state.vulkan.shaders[index] = VulkanShaderRecord()
 }

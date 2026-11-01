@@ -122,35 +122,37 @@ public function dawnCreateGraphicsShader(
     context: RawPtr,
     source: borrow DawnGraphicsSource
 ) -> ShaderResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let vertexModule = dawnCompileWgsl(state, source.label + " vertex", source.vertex)
-    if isNull(vertexModule) {
-        return .Error(.ShaderRejected)
-    }
-    let fragmentModule = dawnCompileWgsl(state, source.label + " fragment", source.fragment)
-    if isNull(fragmentModule) {
-        wgpuShaderModuleRelease(vertexModule)
-        return .Error(.ShaderRejected)
-    }
-    return .Ok(
-        dawnRecordShader(
-            state,
-            DawnShaderRecord {
-                vertexModule: vertexModule,
-                fragmentModule: fragmentModule,
-                computeModule: nullPointer(),
-                vertexEntry: source.vertexEntry,
-                fragmentEntry: source.fragmentEntry,
-                computeEntry: "",
-                live: true,
-                bindings: dawnUsedBindings(source.reflection),
-                hasReflection: source.reflection.count > 0
-            }
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let vertexModule = dawnCompileWgsl(state, source.label + " vertex", source.vertex)
+        if isNull(vertexModule) {
+            return .Error(.ShaderRejected)
+        }
+        let fragmentModule = dawnCompileWgsl(state, source.label + " fragment", source.fragment)
+        if isNull(fragmentModule) {
+            wgpuShaderModuleRelease(vertexModule)
+            return .Error(.ShaderRejected)
+        }
+        return .Ok(
+            dawnRecordShader(
+                state,
+                DawnShaderRecord {
+                    vertexModule: vertexModule,
+                    fragmentModule: fragmentModule,
+                    computeModule: nullPointer(),
+                    vertexEntry: source.vertexEntry,
+                    fragmentEntry: source.fragmentEntry,
+                    computeEntry: "",
+                    live: true,
+                    bindings: dawnUsedBindings(source.reflection),
+                    hasReflection: source.reflection.count > 0
+                }
+            )
         )
-    )
+    }
 }
 
 // A compute shader, whose one module is its kernel.
@@ -160,28 +162,30 @@ public function dawnCreateComputeShader(
     computeWgsl: borrow String,
     computeEntry: borrow String
 ) -> ShaderResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let module = dawnCompileWgsl(state, label + " compute", computeWgsl)
-    if isNull(module) {
-        return .Error(.ShaderRejected)
-    }
-    return .Ok(
-        dawnRecordShader(
-            state,
-            DawnShaderRecord {
-                vertexModule: nullPointer(),
-                fragmentModule: nullPointer(),
-                computeModule: module,
-                vertexEntry: "",
-                fragmentEntry: "",
-                computeEntry: computeEntry,
-                live: true
-            }
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let module = dawnCompileWgsl(state, label + " compute", computeWgsl)
+        if isNull(module) {
+            return .Error(.ShaderRejected)
+        }
+        return .Ok(
+            dawnRecordShader(
+                state,
+                DawnShaderRecord {
+                    vertexModule: nullPointer(),
+                    fragmentModule: nullPointer(),
+                    computeModule: module,
+                    vertexEntry: "",
+                    fragmentEntry: "",
+                    computeEntry: computeEntry,
+                    live: true
+                }
+            )
         )
-    )
+    }
 }
 
 // `Graphics.createShaderFromKslArtifact`. A shader with a compute entry is a
@@ -280,26 +284,28 @@ public function dawnCreateShaderFromSources(
 }
 
 public function dawnDestroyShader(context: RawPtr, shader: borrow GraphicsShader) {
-    if !dawnHasDevice(context) || shader.id == 0 {
-        return
+    unsafe {
+        if !dawnHasDevice(context) || shader.id == 0 {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let slot = Number(shader.id.raw) - 1
+        if slot < 0 || slot >= state.dawn.shaders.count {
+            return
+        }
+        let record = state.dawn.shaders[slot]
+        if !record.live {
+            return
+        }
+        if !isNull(record.vertexModule) {
+            wgpuShaderModuleRelease(record.vertexModule)
+        }
+        if !isNull(record.fragmentModule) {
+            wgpuShaderModuleRelease(record.fragmentModule)
+        }
+        if !isNull(record.computeModule) {
+            wgpuShaderModuleRelease(record.computeModule)
+        }
+        state.dawn.shaders[slot] = dawnEmptyShaderRecord()
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let slot = Number(shader.id.raw) - 1
-    if slot < 0 || slot >= state.dawn.shaders.count {
-        return
-    }
-    let record = state.dawn.shaders[slot]
-    if !record.live {
-        return
-    }
-    if !isNull(record.vertexModule) {
-        wgpuShaderModuleRelease(record.vertexModule)
-    }
-    if !isNull(record.fragmentModule) {
-        wgpuShaderModuleRelease(record.fragmentModule)
-    }
-    if !isNull(record.computeModule) {
-        wgpuShaderModuleRelease(record.computeModule)
-    }
-    state.dawn.shaders[slot] = dawnEmptyShaderRecord()
 }

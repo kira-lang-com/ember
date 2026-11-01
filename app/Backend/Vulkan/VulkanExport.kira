@@ -315,36 +315,38 @@ public function vulkanCreateExportedTexture(
     context: RawPtr,
     descriptor: borrow ExportedTextureDescriptor
 ) -> ExportedTextureResult {
-    if !vulkanRequireDevice(context, "vulkanCreateExportedTexture") {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let format = vulkanImageFormat(state.vulkan, descriptor.format)
-    let pixelFormat = match vulkanExportDescriptorFormat(descriptor, format) {
-        Some(pixelFormat) -> pixelFormat
-        None -> return .Error(.InvalidDescriptor)
-    }
-    if !vulkanMemoryExportSupported(state.vulkan.device) {
-        log warn("the device has no dma-buf export")
-        return .Error(.Unexportable)
-    }
-    if !vulkanRendersLinear(state.vulkan, format) {
-        log warn("the device cannot render into a linear image of this format", format: format)
-        return .Error(.Unexportable)
-    }
-    let image = match vulkanCreateExportableImage(
-        state.vulkan,
-        descriptor,
-        format,
-        move pixelFormat
-    ) {
-        Ok(image) -> image
-        Error(failure) -> {
-            log fault("could not create an exported texture", failure, label: descriptor.label)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateExportedTexture") {
             return .Error(.DeviceRefused)
         }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let format = vulkanImageFormat(state.vulkan, descriptor.format)
+        let pixelFormat = match vulkanExportDescriptorFormat(descriptor, format) {
+            Some(pixelFormat) -> pixelFormat
+            None -> return .Error(.InvalidDescriptor)
+        }
+        if !vulkanMemoryExportSupported(state.vulkan.device) {
+            log warn("the device has no dma-buf export")
+            return .Error(.Unexportable)
+        }
+        if !vulkanRendersLinear(state.vulkan, format) {
+            log warn("the device cannot render into a linear image of this format", format: format)
+            return .Error(.Unexportable)
+        }
+        let image = match vulkanCreateExportableImage(
+            state.vulkan,
+            descriptor,
+            format,
+            move pixelFormat
+        ) {
+            Ok(image) -> image
+            Error(failure) -> {
+                log fault("could not create an exported texture", failure, label: descriptor.label)
+                return .Error(.DeviceRefused)
+            }
+        }
+        return vulkanExportImage(state.vulkan, descriptor, image)
     }
-    return vulkanExportImage(state.vulkan, descriptor, image)
 }
 
 public function vulkanDestroyExportedTexture(context: RawPtr, exported: borrow ExportedTexture) {

@@ -171,10 +171,12 @@ public function dawnEmptyState() -> DawnState {
 // Every member that touches the device asks this first, so a call made outside
 // a run answers with a diagnostic rather than a null dereference.
 public function dawnHasDevice(context: RawPtr) -> Bool {
-    if isNull(context) {
-        return false
+    unsafe {
+        if isNull(context) {
+            return false
+        }
+        return !isNull(nativeRecover<GraphicsRuntimeState>(context).dawn.device)
     }
-    return !isNull(nativeRecover<GraphicsRuntimeState>(context).dawn.device)
 }
 
 // --- the object table ----------------------------------------------------
@@ -289,13 +291,15 @@ public function dawnAdapterReady(
     userdata1: RawPtr,
     userdata2: RawPtr
 ) -> Void {
-    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
-    state.dawn.adapterResolved = true
-    if status != DawnVocabulary.requestAdapterSucceeded {
-        log fault("refused an adapter", view: dawnViewText(message))
-        return
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+        state.dawn.adapterResolved = true
+        if status != DawnVocabulary.requestAdapterSucceeded {
+            log fault("refused an adapter", view: dawnViewText(message))
+            return
+        }
+        state.dawn.adapter = adapter
     }
-    state.dawn.adapter = adapter
 }
 
 // The descriptor and its two callback blocks, as the value

@@ -254,25 +254,29 @@ public function dawnGroupIdentity(
     state: borrow mut GraphicsRuntimeState,
     slot: borrow BindGroup?
 ) -> UNumber? {
-    let group = match slot {
-        Some(group) -> group
-        None -> return .None
-    }
-    var groupState = nativeRecover<BindGroupState>(group.storage)
-    match groupState.identity {
-        Some(identity) -> return .Some(identity)
-        None -> {
-            state.dawn.nextGroupIdentity = state.dawn.nextGroupIdentity + 1
-            groupState.identity = .Some(state.dawn.nextGroupIdentity)
-            return groupState.identity
+    unsafe {
+        let group = match slot {
+            Some(group) -> group
+            None -> return .None
+        }
+        var groupState = nativeRecover<BindGroupState>(group.storage)
+        match groupState.identity {
+            Some(identity) -> return .Some(identity)
+            None -> {
+                state.dawn.nextGroupIdentity = state.dawn.nextGroupIdentity + 1
+                groupState.identity = .Some(state.dawn.nextGroupIdentity)
+                return groupState.identity
+            }
         }
     }
 }
 
 public function dawnGroupRevision(slot: borrow BindGroup?) -> UNumber? {
-    return match slot {
-        Some(group) -> .Some(nativeRecover<BindGroupState>(group.storage).revision)
-        None -> .None
+    unsafe {
+        return match slot {
+            Some(group) -> .Some(nativeRecover<BindGroupState>(group.storage).revision)
+            None -> .None
+        }
     }
 }
 

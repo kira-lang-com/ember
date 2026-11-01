@@ -23,27 +23,29 @@ public function dawnCreateComputePipeline(
     shader: borrow GraphicsShader,
     entryName: borrow String
 ) -> Number {
-    if !dawnHasDevice(context) {
-        return 0
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let record = dawnShaderRecord(state, shader.id.raw)
-    if !record.live || isNull(record.computeModule) {
-        log fault("a compute pipeline names no compiled compute shader", label: label)
-        return 0
-    }
-    let entry = entryName.count > 0 ? entryName : record.computeEntry
-    let pipeline = wgpuDeviceCreateComputePipeline(
-        state.dawn.device,
-        WGPUComputePipelineDescriptor {
-            label: dawnText(label),
-            compute: WGPUComputeState { module: record.computeModule, entryPoint: dawnText(entry) }
+    unsafe {
+        if !dawnHasDevice(context) {
+            return 0
         }
-    )
-    if isNull(pipeline) {
-        return 0
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let record = dawnShaderRecord(state, shader.id.raw)
+        if !record.live || isNull(record.computeModule) {
+            log fault("a compute pipeline names no compiled compute shader", label: label)
+            return 0
+        }
+        let entry = entryName.count > 0 ? entryName : record.computeEntry
+        let pipeline = wgpuDeviceCreateComputePipeline(
+            state.dawn.device,
+            WGPUComputePipelineDescriptor {
+                label: dawnText(label),
+                compute: WGPUComputeState { module: record.computeModule, entryPoint: dawnText(entry) }
+            }
+        )
+        if isNull(pipeline) {
+            return 0
+        }
+        return Int(dawnRegisterObject(state, pipeline, DawnVocabulary.formatUndefined))
     }
-    return Int(dawnRegisterObject(state, pipeline, DawnVocabulary.formatUndefined))
 }
 
 namespace DawnComputeTile {
@@ -216,13 +218,15 @@ function dawnRecordTexturePair(
 }
 
 public function dawnDispatchTextureComputePair(context: RawPtr, pair: borrow TextureComputePair) {
-    if !dawnHasDevice(context) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    match dawnRecordTexturePair(context, state, pair) {
-        Ok -> {}
-        Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        match dawnRecordTexturePair(context, state, pair) {
+            Ok -> {}
+            Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+        }
     }
 }
 
@@ -327,17 +331,19 @@ function dawnDepthEntries(
 }
 
 public function dawnDispatchComputeBuffers(context: RawPtr, dispatch: borrow BufferDispatch) {
-    if !dawnHasDevice(context) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let entries = dawnBufferEntries(state, dispatch.bufferIds, 0)
-    let groups = DawnGroupCount {
-        x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
-    }
-    match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
-        Ok -> {}
-        Error(failure) -> log fault("a dispatch was dropped", failure)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let entries = dawnBufferEntries(state, dispatch.bufferIds, 0)
+        let groups = DawnGroupCount {
+            x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
+        }
+        match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
+            Ok -> {}
+            Error(failure) -> log fault("a dispatch was dropped", failure)
+        }
     }
 }
 
@@ -348,22 +354,24 @@ public function dawnDispatchDepthComputeBuffers(
     depth: borrow GraphicsTexture,
     dispatch: borrow BufferDispatch
 ) {
-    if !dawnHasDevice(context) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let entries = match dawnDepthEntries(state, depth, dispatch.bufferIds) {
-        Ok(entries) -> entries
-        Error(failure) -> {
-            log fault("a depth dispatch was dropped", failure)
+    unsafe {
+        if !dawnHasDevice(context) {
             return
         }
-    }
-    let groups = DawnGroupCount {
-        x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
-    }
-    match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
-        Ok -> {}
-        Error(failure) -> log fault("a depth dispatch was dropped", failure)
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let entries = match dawnDepthEntries(state, depth, dispatch.bufferIds) {
+            Ok(entries) -> entries
+            Error(failure) -> {
+                log fault("a depth dispatch was dropped", failure)
+                return
+            }
+        }
+        let groups = DawnGroupCount {
+            x: dawnWorkgroupCount(dispatch.threadCount, dispatch.threadsPerGroup)
+        }
+        match dawnRecordDispatch(state, dispatch.pipeline, entries, groups) {
+            Ok -> {}
+            Error(failure) -> log fault("a depth dispatch was dropped", failure)
+        }
     }
 }

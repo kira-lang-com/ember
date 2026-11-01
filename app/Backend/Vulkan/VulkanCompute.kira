@@ -116,20 +116,22 @@ public function vulkanCreateComputePipeline(
     shader: borrow GraphicsShader,
     entryName: borrow String
 ) -> UNumber {
-    if !vulkanRequireDevice(context, "vulkanCreateComputePipeline") {
-        return 0
-    }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    match vulkanCreateComputePipelineState(runtime.vulkan, shader, entryName) {
-        Ok(id) -> return id
-        Error(failure) -> {
-            log fault(
-                "could not create a compute pipeline",
-                failure,
-                label: label,
-                shader: shader.id
-            )
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateComputePipeline") {
             return 0
+        }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        match vulkanCreateComputePipelineState(runtime.vulkan, shader, entryName) {
+            Ok(id) -> return id
+            Error(failure) -> {
+                log fault(
+                    "could not create a compute pipeline",
+                    failure,
+                    label: label,
+                    shader: shader.id
+                )
+                return 0
+            }
         }
     }
 }
@@ -172,15 +174,17 @@ function vulkanComputePipeline(
 
 // The buffers bound as storage from `firstSlot` on, in order.
 function vulkanComputeBufferGroup(bufferIds: borrow [BufferId], firstSlot: UNumber) -> BindGroup {
-    let group = vulkanNewBindGroup("kira-vulkan-compute")
-    var groupState = nativeRecover<BindGroupState>(group.storage)
-    for (index, bufferId) in bufferIds.enumerated() {
-        groupState.storageEntries.append(
-            StorageBindEntry { storageSlot: UN32(firstSlot + index), bufferId: bufferId }
-        )
+    unsafe {
+        let group = vulkanNewBindGroup("kira-vulkan-compute")
+        var groupState = nativeRecover<BindGroupState>(group.storage)
+        for (index, bufferId) in bufferIds.enumerated() {
+            groupState.storageEntries.append(
+                StorageBindEntry { storageSlot: UN32(firstSlot + index), bufferId: bufferId }
+            )
+        }
+        groupState.revision = groupState.revision + 1
+        return group
     }
-    groupState.revision = groupState.revision + 1
-    return group
 }
 
 // One kernel bound with `group` and dispatched. Answers false where the group
@@ -236,11 +240,13 @@ function vulkanRecordBufferDispatch(
 }
 
 public function vulkanDispatchComputeBuffers(context: RawPtr, dispatch: borrow BufferDispatch) {
-    if !vulkanRequireDevice(context, "vulkanDispatchComputeBuffers") { return }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .None) {
-        Ok -> {}
-        Error(failure) -> log fault("a dispatch was dropped", failure)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanDispatchComputeBuffers") { return }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .None) {
+            Ok -> {}
+            Error(failure) -> log fault("a dispatch was dropped", failure)
+        }
     }
 }
 
@@ -249,11 +255,13 @@ public function vulkanDispatchDepthComputeBuffers(
     depth: borrow GraphicsTexture,
     dispatch: borrow BufferDispatch
 ) {
-    if !vulkanRequireDevice(context, "vulkanDispatchDepthComputeBuffers") { return }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .Some(copy depth)) {
-        Ok -> {}
-        Error(failure) -> log fault("a depth dispatch was dropped", failure)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanDispatchDepthComputeBuffers") { return }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        match vulkanRecordBufferDispatch(runtime.vulkan, dispatch, .Some(copy depth)) {
+            Ok -> {}
+            Error(failure) -> log fault("a depth dispatch was dropped", failure)
+        }
     }
 }
 
@@ -379,11 +387,13 @@ function vulkanRecordTexturePair(
 }
 
 public function vulkanDispatchTextureComputePair(context: RawPtr, pair: borrow TextureComputePair) {
-    if !vulkanRequireDevice(context, "vulkanDispatchTextureComputePair") { return }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    match vulkanRecordTexturePair(runtime.vulkan, pair) {
-        Ok -> {}
-        Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanDispatchTextureComputePair") { return }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        match vulkanRecordTexturePair(runtime.vulkan, pair) {
+            Ok -> {}
+            Error(failure) -> log fault("a two-pass texture dispatch was dropped", failure)
+        }
     }
 }
 
@@ -400,33 +410,35 @@ public function vulkanReadBufferU32(
     buffer: borrow GraphicsBuffer,
     index: Number
 ) -> BufferReadResult {
-    if !vulkanRequireDevice(context, "vulkanReadBufferU32") {
-        return .Error(.DeviceRefused)
-    }
-    if buffer.id == 0 || index < 0 {
-        return .Error(.NoSuchWord)
-    }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    if runtime.vulkan.passActive {
-        return .Error(.PassOpen)
-    }
-    if index >= vulkanObjectStride(runtime.vulkan, buffer.id.raw) / sizeOf<U32>() {
-        return .Error(.NoSuchWord)
-    }
-    match vulkanSettleForRead(runtime.vulkan) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    let mapped = match vulkanObjectMapped(runtime.vulkan, buffer.id.raw) {
-        Some(mapped) -> mapped
-        None -> return .Error(.NoSuchWord)
-    }
-    return .Ok(
-        heapLoad<U32>(
-            mapped,
-            vulkanObjectOffset(runtime.vulkan, buffer.id.raw) + index * sizeOf<U32>()
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanReadBufferU32") {
+            return .Error(.DeviceRefused)
+        }
+        if buffer.id == 0 || index < 0 {
+            return .Error(.NoSuchWord)
+        }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        if runtime.vulkan.passActive {
+            return .Error(.PassOpen)
+        }
+        if index >= vulkanObjectStride(runtime.vulkan, buffer.id.raw) / sizeOf<U32>() {
+            return .Error(.NoSuchWord)
+        }
+        match vulkanSettleForRead(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        let mapped = match vulkanObjectMapped(runtime.vulkan, buffer.id.raw) {
+            Some(mapped) -> mapped
+            None -> return .Error(.NoSuchWord)
+        }
+        return .Ok(
+            heapLoad<U32>(
+                mapped,
+                vulkanObjectOffset(runtime.vulkan, buffer.id.raw) + index * sizeOf<U32>()
+            )
         )
-    )
+    }
 }
 
 // Waits for every command recorded so far to finish, so what it wrote can be
@@ -460,7 +472,9 @@ public function vulkanMonotonicNanoseconds() -> Number {
 }
 
 public function vulkanFrameStatistics(context: RawPtr) -> FrameStatistics {
-    if isNull(context) { return FrameStatistics {} }
-    let runtime = nativeRecover<GraphicsRuntimeState>(context)
-    return runtime.vulkan.stats
+    unsafe {
+        if isNull(context) { return FrameStatistics {} }
+        let runtime = nativeRecover<GraphicsRuntimeState>(context)
+        return runtime.vulkan.stats
+    }
 }

@@ -199,13 +199,15 @@ public function vulkanDrawWithBindings(
     encoder: borrow RenderEncoderState,
     counts: borrow DrawCounts
 ) {
-    if !vulkanRequireDevice(runtime, "vulkanDrawWithBindings") { return }
-    var state = nativeRecover<GraphicsRuntimeState>(runtime)
-    match vulkanPrepareDraw(state.vulkan, encoder) {
-        Ok(drawable) -> if drawable {
-            vulkanRecordDraw(state.vulkan, encoder, counts)
+    unsafe {
+        if !vulkanRequireDevice(runtime, "vulkanDrawWithBindings") { return }
+        var state = nativeRecover<GraphicsRuntimeState>(runtime)
+        match vulkanPrepareDraw(state.vulkan, encoder) {
+            Ok(drawable) -> if drawable {
+                vulkanRecordDraw(state.vulkan, encoder, counts)
+            }
+            Error(failure) -> log fault("a draw was dropped", failure)
         }
-        Error(failure) -> log fault("a draw was dropped", failure)
     }
 }
 
@@ -214,27 +216,29 @@ public function vulkanEncoderDrawIndirect(
     encoder: borrow RenderEncoderState,
     indirectBufferId: UNumber
 ) {
-    if !vulkanRequireDevice(runtime, "vulkanEncoderDrawIndirect") { return }
-    var state = nativeRecover<GraphicsRuntimeState>(runtime)
-    let arguments = vulkanObject(state.vulkan, U32(indirectBufferId))
-    if isNull(arguments) {
-        log fault(
-            "an indirect draw was dropped",
-            VulkanDrawFailure.ArgumentsNotLive(indirectBufferId)
-        )
-        return
-    }
-    match vulkanPrepareDraw(state.vulkan, encoder) {
-        Ok(drawable) -> if drawable {
-            vkCmdDrawIndirect(
-                state.vulkan.commandBuffer,
-                arguments,
-                U64(0),
-                U32(1),
-                VulkanDraw.indirectStride
+    unsafe {
+        if !vulkanRequireDevice(runtime, "vulkanEncoderDrawIndirect") { return }
+        var state = nativeRecover<GraphicsRuntimeState>(runtime)
+        let arguments = vulkanObject(state.vulkan, U32(indirectBufferId))
+        if isNull(arguments) {
+            log fault(
+                "an indirect draw was dropped",
+                VulkanDrawFailure.ArgumentsNotLive(indirectBufferId)
             )
-            state.vulkan.frameDrawCount = state.vulkan.frameDrawCount + 1
+            return
         }
-        Error(failure) -> log fault("an indirect draw was dropped", failure)
+        match vulkanPrepareDraw(state.vulkan, encoder) {
+            Ok(drawable) -> if drawable {
+                vkCmdDrawIndirect(
+                    state.vulkan.commandBuffer,
+                    arguments,
+                    U64(0),
+                    U32(1),
+                    VulkanDraw.indirectStride
+                )
+                state.vulkan.frameDrawCount = state.vulkan.frameDrawCount + 1
+            }
+            Error(failure) -> log fault("an indirect draw was dropped", failure)
+        }
     }
 }

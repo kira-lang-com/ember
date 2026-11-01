@@ -43,16 +43,18 @@ public function vulkanCreateStorageBufferBindGroup(
     slot: UN32,
     bufferId: U32
 ) -> BindGroupResult {
-    if slot < 0 || bufferId == 0 {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if slot < 0 || bufferId == 0 {
+            return .Error(.DeviceRefused)
+        }
+        let group = vulkanNewBindGroup(label)
+        var state = nativeRecover<BindGroupState>(group.storage)
+        state.storageEntries.append(
+            StorageBindEntry { storageSlot: slot, bufferId: BufferId(bufferId) }
+        )
+        state.revision = state.revision + 1
+        return .Ok(group)
     }
-    let group = vulkanNewBindGroup(label)
-    var state = nativeRecover<BindGroupState>(group.storage)
-    state.storageEntries.append(
-        StorageBindEntry { storageSlot: slot, bufferId: BufferId(bufferId) }
-    )
-    state.revision = state.revision + 1
-    return .Ok(group)
 }
 
 public function vulkanBindGroupAddStorageBuffer(
@@ -60,14 +62,16 @@ public function vulkanBindGroupAddStorageBuffer(
     slot: UN32,
     bufferId: U32
 ) {
-    if group.id == 0 || slot < 0 || bufferId == 0 {
-        return
+    unsafe {
+        if group.id == 0 || slot < 0 || bufferId == 0 {
+            return
+        }
+        var state = nativeRecover<BindGroupState>(group.storage)
+        state.storageEntries.append(
+            StorageBindEntry { storageSlot: slot, bufferId: BufferId(bufferId) }
+        )
+        state.revision = state.revision + 1
     }
-    var state = nativeRecover<BindGroupState>(group.storage)
-    state.storageEntries.append(
-        StorageBindEntry { storageSlot: slot, bufferId: BufferId(bufferId) }
-    )
-    state.revision = state.revision + 1
 }
 
 public function vulkanBeginBindGroup(label: borrow String) -> BindGroupResult {
@@ -79,18 +83,20 @@ public function vulkanBindGroupAddUniform(
     slot: UN32,
     uniform: borrow GraphicsUniform
 ) {
-    if group.id == 0 || slot < 0 || uniform.id == 0 {
-        return
-    }
-    var state = nativeRecover<BindGroupState>(group.storage)
-    state.uniformEntries.append(
-        StoredUniformBindEntry {
-            uniformSlot: slot,
-            uniformId: uniform.id,
-            storage: nativeUserData(uniform.storage)
+    unsafe {
+        if group.id == 0 || slot < 0 || uniform.id == 0 {
+            return
         }
-    )
-    state.revision = state.revision + 1
+        var state = nativeRecover<BindGroupState>(group.storage)
+        state.uniformEntries.append(
+            StoredUniformBindEntry {
+                uniformSlot: slot,
+                uniformId: uniform.id,
+                storage: nativeUserData(uniform.storage)
+            }
+        )
+        state.revision = state.revision + 1
+    }
 }
 
 public function vulkanBindGroupAddTexture(
@@ -98,12 +104,14 @@ public function vulkanBindGroupAddTexture(
     slot: UN32,
     texture: borrow GraphicsTexture
 ) {
-    if slot < 0 || texture.viewId == 0 {
-        return
+    unsafe {
+        if slot < 0 || texture.viewId == 0 {
+            return
+        }
+        var state = nativeRecover<BindGroupState>(group.storage)
+        state.textureEntries.append(TextureBindEntry { textureSlot: slot, texture: texture })
+        state.revision = state.revision + 1
     }
-    var state = nativeRecover<BindGroupState>(group.storage)
-    state.textureEntries.append(TextureBindEntry { textureSlot: slot, texture: texture })
-    state.revision = state.revision + 1
 }
 
 public function vulkanBindGroupAddSampler(
@@ -111,12 +119,14 @@ public function vulkanBindGroupAddSampler(
     slot: UN32,
     sampler: borrow GraphicsSampler
 ) {
-    if slot < 0 || sampler.id == 0 {
-        return
+    unsafe {
+        if slot < 0 || sampler.id == 0 {
+            return
+        }
+        var state = nativeRecover<BindGroupState>(group.storage)
+        state.samplerEntries.append(SamplerBindEntry { samplerSlot: slot, sampler: sampler })
+        state.revision = state.revision + 1
     }
-    var state = nativeRecover<BindGroupState>(group.storage)
-    state.samplerEntries.append(SamplerBindEntry { samplerSlot: slot, sampler: sampler })
-    state.revision = state.revision + 1
 }
 
 public function vulkanCreateTextureSamplerBindGroup(

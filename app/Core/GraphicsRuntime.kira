@@ -126,33 +126,35 @@ public function graphicsPercentile(sorted: borrow[Number], percent: Number) -> N
 }
 
 public function graphicsRuntimeRun(app: borrow GraphicsApplication, userData: RawPtr) {
-    var runtimeState = nativeState(
-        GraphicsRuntimeState {
-            tracing: traceGatesFromEnvironment(),
-            app: app,
-            userData: userData,
-            frameIndex: 0
-        }
-    )
+    unsafe {
+        var runtimeState = nativeState(
+            GraphicsRuntimeState {
+                tracing: traceGatesFromEnvironment(),
+                app: app,
+                userData: userData,
+                frameIndex: 0
+            }
+        )
 
-    match backendSupported(app.backend) {
-        Ok -> {
-            let opened = nativeRecover<GraphicsRuntimeState>(nativeUserDataBorrow(runtimeState))
-            // Which trace areas this run turned on, said once so that a log with
-            // no traces in it has an answer: the variable was not set, or the
-            // threshold is below `debug`, and those are different mistakes.
-            log debug("Ember trace areas", areas: traceGatesSummary(opened.tracing))
+        match backendSupported(app.backend) {
+            Ok -> {
+                let opened = nativeRecover<GraphicsRuntimeState>(nativeUserDataBorrow(runtimeState))
+                // Which trace areas this run turned on, said once so that a log with
+                // no traces in it has an answer: the variable was not set, or the
+                // threshold is below `debug`, and those are different mistakes.
+                log debug("Ember trace areas", areas: traceGatesSummary(opened.tracing))
+            }
+            Error(failure) -> {
+                log fault("the requested backend cannot run on this platform", failure)
+                return
+            }
         }
-        Error(failure) -> {
-            log fault("the requested backend cannot run on this platform", failure)
-            return
-        }
+
+        // The runtime state remains owned by this frame while the backend's
+        // synchronous application loop borrows its stable userdata token.
+        let runtimeUser = nativeUserDataBorrow(runtimeState)
+        // The one backend value built with a null context: the run loop is what
+        // creates the context every other member reads.
+        renderBackendFor(app.backend, nullPointer()).runApplication(app, runtimeUser)
     }
-
-    // The runtime state remains owned by this frame while the backend's
-    // synchronous application loop borrows its stable userdata token.
-    let runtimeUser = nativeUserDataBorrow(runtimeState)
-    // The one backend value built with a null context: the run loop is what
-    // creates the context every other member reads.
-    renderBackendFor(app.backend, nullPointer()).runApplication(app, runtimeUser)
 }

@@ -81,37 +81,39 @@ public function dawnCreateRenderPipeline(
     context: RawPtr,
     descriptor: borrow RenderPipelineDescriptor
 ) -> PipelineResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let shader = dawnShaderRecord(state, descriptor.shader.id.raw)
+        if !shader.live || isNull(shader.vertexModule) || isNull(shader.fragmentModule) {
+            log fault("a pipeline names no compiled graphics shader", label: descriptor.label)
+            return .Error(.ShaderRejected)
+        }
+        if !dawnPipelineFits(descriptor) {
+            return .Error(.DeviceRefused)
+        }
+        let attributes = dawnVertexAttributes(descriptor.vertexLayout)
+        let targets = dawnColorTargets(state, descriptor)
+        let stages = DawnPipelineStages {
+            vertex: dawnVertexState(descriptor, shader, attributes),
+            fragment: dawnFragmentState(shader, targets)
+        }
+        let pipeline = dawnBuildPipeline(state, descriptor, stages)
+        if isNull(pipeline) {
+            return .Error(.DeviceRefused)
+        }
+        let id = dawnRegisterObject(state, pipeline, DawnVocabulary.formatUndefined)
+        // What this pipeline's layout declares, carried forward from the shader so a
+        // draw can assemble one WebGPU group out of the encoder's four slots. A
+        // shader with no reflection records nothing, and a draw on it keeps reading
+        // the slots as group indices.
+        if shader.hasReflection {
+            dawnRecordPipelineBindings(state, id, shader.bindings)
+        }
+        return .Ok(dawnRenderPipeline(descriptor, id))
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let shader = dawnShaderRecord(state, descriptor.shader.id.raw)
-    if !shader.live || isNull(shader.vertexModule) || isNull(shader.fragmentModule) {
-        log fault("a pipeline names no compiled graphics shader", label: descriptor.label)
-        return .Error(.ShaderRejected)
-    }
-    if !dawnPipelineFits(descriptor) {
-        return .Error(.DeviceRefused)
-    }
-    let attributes = dawnVertexAttributes(descriptor.vertexLayout)
-    let targets = dawnColorTargets(state, descriptor)
-    let stages = DawnPipelineStages {
-        vertex: dawnVertexState(descriptor, shader, attributes),
-        fragment: dawnFragmentState(shader, targets)
-    }
-    let pipeline = dawnBuildPipeline(state, descriptor, stages)
-    if isNull(pipeline) {
-        return .Error(.DeviceRefused)
-    }
-    let id = dawnRegisterObject(state, pipeline, DawnVocabulary.formatUndefined)
-    // What this pipeline's layout declares, carried forward from the shader so a
-    // draw can assemble one WebGPU group out of the encoder's four slots. A
-    // shader with no reflection records nothing, and a draw on it keeps reading
-    // the slots as group indices.
-    if shader.hasReflection {
-        dawnRecordPipelineBindings(state, id, shader.bindings)
-    }
-    return .Ok(dawnRenderPipeline(descriptor, id))
 }
 
 // The pipeline recorded under `id`, all three of its ids the one WebGPU object.
@@ -272,22 +274,24 @@ public function dawnDepthState(
 }
 
 public function dawnDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline) {
-    if !dawnHasDevice(context) || pipeline.id == 0 {
-        return
+    unsafe {
+        if !dawnHasDevice(context) || pipeline.id == 0 {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let handle = dawnObject(state, pipeline.id.raw)
+        if isNull(handle) {
+            return
+        }
+        // Every merged bind group was built against some pipeline's layout, and the
+        // id this releases is about to be handed to another pipeline. Emptying the
+        // table is what keeps a later draw from binding a group built for the
+        // pipeline that used to answer to this id.
+        dawnReleaseMergedGroups(state)
+        dawnForgetPipelineBindings(state, pipeline.id.raw)
+        wgpuRenderPipelineRelease(handle)
+        dawnForgetObject(state, pipeline.id.raw)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let handle = dawnObject(state, pipeline.id.raw)
-    if isNull(handle) {
-        return
-    }
-    // Every merged bind group was built against some pipeline's layout, and the
-    // id this releases is about to be handed to another pipeline. Emptying the
-    // table is what keeps a later draw from binding a group built for the
-    // pipeline that used to answer to this id.
-    dawnReleaseMergedGroups(state)
-    dawnForgetPipelineBindings(state, pipeline.id.raw)
-    wgpuRenderPipelineRelease(handle)
-    dawnForgetObject(state, pipeline.id.raw)
 }
 
 public namespace DawnPipeline {

@@ -68,27 +68,31 @@ function triangleResources(
 }
 
 function triangleInit(graphics: Graphics) {
-    var state = nativeRecover<TriangleState>(graphics.userData)
-    match triangleResources(graphics) {
-        Ok(resources) -> state.resources = .Some(move resources)
-        Error(failure) -> reportMissingResource("the triangle", move failure)
+    unsafe {
+        var state = nativeRecover<TriangleState>(graphics.userData)
+        match triangleResources(graphics) {
+            Ok(resources) -> state.resources = .Some(move resources)
+            Error(failure) -> reportMissingResource("the triangle", move failure)
+        }
     }
 }
 
 function triangleFrame(frame: borrow mut RenderFrame) {
-    let state = nativeRecover<TriangleState>(frame.userData)
-    let encoder = frame.beginRenderPass(
-        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.05, b: 0.10 })
-    )
-    match state.resources {
-        Some(resources) -> {
-            encoder.setPipeline(resources.pipeline)
-            encoder.setVertexBuffer(resources.vertices)
-            encoder.draw(Triangle.vertexCount)
+    unsafe {
+        let state = nativeRecover<TriangleState>(frame.userData)
+        let encoder = frame.beginRenderPass(
+            clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.05, b: 0.10 })
+        )
+        match state.resources {
+            Some(resources) -> {
+                encoder.setPipeline(resources.pipeline)
+                encoder.setVertexBuffer(resources.vertices)
+                encoder.draw(Triangle.vertexCount)
+            }
+            None -> {}
         }
-        None -> {}
+        frame.endPass()
     }
-    frame.endPass()
 }
 
 @Main

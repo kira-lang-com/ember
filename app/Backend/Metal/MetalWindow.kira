@@ -179,16 +179,18 @@ public struct MetalLiveState {
 // native-to-native RawPtr-only seam. In a hybrid build the Objective-C callback
 // must not make RenderFrame cross through the bytecode half.
 public function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserData: RawPtr) {
-    let pool = metalAutoreleasePoolPush()
-    metalContextBeginFrameTiming(ctx)
-    metalContextSyncViewportFromView(ctx)
-    let graphics = Graphics { userData: userData, backend: .Metal, backendContext: ctx }
-    var frame = graphics.frame()
-    var runtimeState = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    runtimeState.app.frameHandler(frame)
-    graphicsSubmitFrame(frame)
-    metalContextEndFrameTiming(ctx)
-    metalAutoreleasePoolPop(pool)
+    unsafe {
+        let pool = metalAutoreleasePoolPush()
+        metalContextBeginFrameTiming(ctx)
+        metalContextSyncViewportFromView(ctx)
+        let graphics = Graphics { userData: userData, backend: .Metal, backendContext: ctx }
+        var frame = graphics.frame()
+        var runtimeState = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        runtimeState.app.frameHandler(frame)
+        graphicsSubmitFrame(frame)
+        metalContextEndFrameTiming(ctx)
+        metalAutoreleasePoolPop(pool)
+    }
 }
 
 // The -windowDidResize: IMP. AppKit posts this repeatedly while the user drags
@@ -197,36 +199,42 @@ public function metalRenderLiveFrame(ctx: RawPtr, userData: RawPtr, runtimeUserD
 // rendering follow every intermediate window size instead of stretching the
 // last texture until mouse-up.
 public function metalResizeImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
-    let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
-    if isNull(value) {
-        return
+    unsafe {
+        let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
+        if isNull(value) {
+            return
+        }
+        let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
+        if isNull(statePtr) {
+            return
+        }
+        var state = nativeRecover<MetalLiveState>(statePtr)
+        metalRenderLiveFrame(state.ctx, state.userData, state.runtimeUserData)
     }
-    let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
-    if isNull(statePtr) {
-        return
-    }
-    var state = nativeRecover<MetalLiveState>(statePtr)
-    metalRenderLiveFrame(state.ctx, state.userData, state.runtimeUserData)
 }
 
 // Closing is distinct from hiding or minimizing: hidden windows deliberately keep
 // rendering at half display cadence, while a real close terminates the app loop.
 public function metalWindowCloseImp(selfObj: RawPtr, cmd: RawPtr, notification: RawPtr): Void {
-    let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
-    if isNull(value) {
-        return
+    unsafe {
+        let value = metalObjcGetAssociatedObject(selfObj, metalSel("kiraLiveState"))
+        if isNull(value) {
+            return
+        }
+        let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
+        if isNull(statePtr) {
+            return
+        }
+        var state = nativeRecover<MetalLiveState>(statePtr)
+        state.closed = true
     }
-    let statePtr: RawPtr = metalMsgSend(value, metalSel("pointerValue"))
-    if isNull(statePtr) {
-        return
-    }
-    var state = nativeRecover<MetalLiveState>(statePtr)
-    state.closed = true
 }
 
 public function metalLiveStateClosed(statePtr: RawPtr) -> Bool {
-    let state = nativeRecover<MetalLiveState>(statePtr)
-    return state.closed
+    unsafe {
+        let state = nativeRecover<MetalLiveState>(statePtr)
+        return state.closed
+    }
 }
 
 // Build (once) an NSWindowDelegate class whose -windowDidResize: is the Kira IMP

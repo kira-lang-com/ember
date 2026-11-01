@@ -6,20 +6,22 @@ import Foundation
 
 // Every slot's entries, as one group.
 function vulkanMergeBindings(groups: borrow[BindGroup?]) -> BindGroupState {
-    var merged = BindGroupState()
-    for slot in groups {
-        match slot {
-            Some(group) -> {
-                let source = nativeRecover<BindGroupState>(group.storage)
-                for entry in source.uniformEntries { merged.uniformEntries.append(entry) }
-                for entry in source.textureEntries { merged.textureEntries.append(entry) }
-                for entry in source.samplerEntries { merged.samplerEntries.append(entry) }
-                for entry in source.storageEntries { merged.storageEntries.append(entry) }
+    unsafe {
+        var merged = BindGroupState()
+        for slot in groups {
+            match slot {
+                Some(group) -> {
+                    let source = nativeRecover<BindGroupState>(group.storage)
+                    for entry in source.uniformEntries { merged.uniformEntries.append(entry) }
+                    for entry in source.textureEntries { merged.textureEntries.append(entry) }
+                    for entry in source.samplerEntries { merged.samplerEntries.append(entry) }
+                    for entry in source.storageEntries { merged.storageEntries.append(entry) }
+                }
+                None -> {}
             }
-            None -> {}
         }
+        return merged
     }
-    return merged
 }
 
 // Whether the merged slots supply each binding the shader reads at most once.

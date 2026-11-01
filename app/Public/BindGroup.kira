@@ -91,21 +91,23 @@ public function addUniformToBindGroup(
     uniformSlot: UN32,
     uniform: borrow GraphicsUniform
 ) {
-    var state = nativeRecover<BindGroupState>(group.storage)
-    if uniformSlot >= BindGroupLimits.maxViewBindSlots {
-        log fault(
-            "bind group uniform slot is outside the binding range a shader group numbers",
-            label: state.label
-        )
-        return
-    }
-    state.uniformEntries.append(
-        StoredUniformBindEntry {
-            uniformSlot: uniformSlot,
-            uniformId: uniform.id,
-            storage: nativeUserData(uniform.storage)
+    unsafe {
+        var state = nativeRecover<BindGroupState>(group.storage)
+        if uniformSlot >= BindGroupLimits.maxViewBindSlots {
+            log fault(
+                "bind group uniform slot is outside the binding range a shader group numbers",
+                label: state.label
+            )
+            return
         }
-    )
+        state.uniformEntries.append(
+            StoredUniformBindEntry {
+                uniformSlot: uniformSlot,
+                uniformId: uniform.id,
+                storage: nativeUserData(uniform.storage)
+            }
+        )
+    }
 }
 
 public function addTextureToBindGroup(
@@ -113,16 +115,18 @@ public function addTextureToBindGroup(
     textureSlot: UN32,
     texture: borrow GraphicsTexture
 ) {
-    var state = nativeRecover<BindGroupState>(group.storage)
-    if texture.viewId == 0 {
-        log fault("bind group cannot bind a texture with no sampled view", label: state.label)
-        return
+    unsafe {
+        var state = nativeRecover<BindGroupState>(group.storage)
+        if texture.viewId == 0 {
+            log fault("bind group cannot bind a texture with no sampled view", label: state.label)
+            return
+        }
+        if textureSlot >= BindGroupLimits.maxViewBindSlots {
+            log fault("bind group texture slot is outside the supported view range", label: state.label)
+            return
+        }
+        state.textureEntries.append(TextureBindEntry { textureSlot: textureSlot, texture: texture })
     }
-    if textureSlot >= BindGroupLimits.maxViewBindSlots {
-        log fault("bind group texture slot is outside the supported view range", label: state.label)
-        return
-    }
-    state.textureEntries.append(TextureBindEntry { textureSlot: textureSlot, texture: texture })
 }
 
 public function addSamplerToBindGroup(
@@ -130,19 +134,21 @@ public function addSamplerToBindGroup(
     samplerSlot: UN32,
     sampler: borrow GraphicsSampler
 ) {
-    var state = nativeRecover<BindGroupState>(group.storage)
-    if sampler.id == 0 {
-        log fault("a bind group cannot bind a sampler the device never created", label: state.label)
-        return
+    unsafe {
+        var state = nativeRecover<BindGroupState>(group.storage)
+        if sampler.id == 0 {
+            log fault("a bind group cannot bind a sampler the device never created", label: state.label)
+            return
+        }
+        if samplerSlot >= BindGroupLimits.maxSamplerBindSlots {
+            log fault(
+                "bind group sampler slot is outside the supported sampler range",
+                label: state.label
+            )
+            return
+        }
+        state.samplerEntries.append(SamplerBindEntry { samplerSlot: samplerSlot, sampler: sampler })
     }
-    if samplerSlot >= BindGroupLimits.maxSamplerBindSlots {
-        log fault(
-            "bind group sampler slot is outside the supported sampler range",
-            label: state.label
-        )
-        return
-    }
-    state.samplerEntries.append(SamplerBindEntry { samplerSlot: samplerSlot, sampler: sampler })
 }
 
 public function addStorageBufferToBindGroup(
@@ -150,16 +156,18 @@ public function addStorageBufferToBindGroup(
     storageSlot: UN32,
     bufferId: BufferId
 ) {
-    var state = nativeRecover<BindGroupState>(group.storage)
-    if !bufferId.isPresent() {
-        log fault("bind group cannot bind a storage buffer with no view", label: state.label)
-        return
+    unsafe {
+        var state = nativeRecover<BindGroupState>(group.storage)
+        if !bufferId.isPresent() {
+            log fault("bind group cannot bind a storage buffer with no view", label: state.label)
+            return
+        }
+        if storageSlot >= BindGroupLimits.maxViewBindSlots {
+            log fault("bind group storage slot is outside the supported view range", label: state.label)
+            return
+        }
+        state.storageEntries.append(StorageBindEntry { storageSlot: storageSlot, bufferId: bufferId })
     }
-    if storageSlot >= BindGroupLimits.maxViewBindSlots {
-        log fault("bind group storage slot is outside the supported view range", label: state.label)
-        return
-    }
-    state.storageEntries.append(StorageBindEntry { storageSlot: storageSlot, bufferId: bufferId })
 }
 
 public namespace BindGroupLimits {

@@ -49,11 +49,13 @@ public function dawnWorkDone(
     userdata1: RawPtr,
     userdata2: RawPtr
 ) -> Void {
-    if isNull(userdata1) {
-        return
+    unsafe {
+        if isNull(userdata1) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+        state.dawn.trace.workDone = true
     }
-    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
-    state.dawn.trace.workDone = true
 }
 
 // Submits whatever the frame has recorded and waits for the queue to finish it.

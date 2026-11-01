@@ -174,33 +174,35 @@ namespace UIKitAutoresizing {
 // A window on `scene` whose root controller's view is a full-screen `viewClass`
 // instance. Records both on the application state.
 function metalUIKitShowContent(scene: RawPtr, viewClass: RawPtr, delegate: RawPtr) {
-    let screen: RawPtr = metalMsgSend(metalObjcGetClass("UIScreen"), metalSel("mainScreen"))
-    let bounds: MetalCGRect = metalMsgSend(screen, metalSel("bounds"))
-    let window: RawPtr = metalMsgSend(
-        metalMsgSend(metalObjcGetClass("UIWindow"), metalSel("alloc")),
-        metalSel("initWithWindowScene:"),
-        scene
-    )
-    let view: RawPtr = metalMsgSend(
-        metalMsgSend(viewClass, metalSel("alloc")),
-        metalSel("initWithFrame:"),
-        0.0,
-        0.0,
-        bounds.width,
-        bounds.height
-    )
-    metalMsgSend(view, metalSel("setAutoresizingMask:"), UIKitAutoresizing.flexibleSize)
-    let controller: RawPtr = metalMsgSend(
-        metalMsgSend(metalObjcGetClass("UIViewController"), metalSel("alloc")),
-        metalSel("init")
-    )
-    metalMsgSend(controller, metalSel("setView:"), view)
-    metalMsgSend(window, metalSel("setRootViewController:"), controller)
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    state.delegate = delegate
-    state.window = window
-    state.view = view
-    metalMsgSend(window, metalSel("makeKeyAndVisible"))
+    unsafe {
+        let screen: RawPtr = metalMsgSend(metalObjcGetClass("UIScreen"), metalSel("mainScreen"))
+        let bounds: MetalCGRect = metalMsgSend(screen, metalSel("bounds"))
+        let window: RawPtr = metalMsgSend(
+            metalMsgSend(metalObjcGetClass("UIWindow"), metalSel("alloc")),
+            metalSel("initWithWindowScene:"),
+            scene
+        )
+        let view: RawPtr = metalMsgSend(
+            metalMsgSend(viewClass, metalSel("alloc")),
+            metalSel("initWithFrame:"),
+            0.0,
+            0.0,
+            bounds.width,
+            bounds.height
+        )
+        metalMsgSend(view, metalSel("setAutoresizingMask:"), UIKitAutoresizing.flexibleSize)
+        let controller: RawPtr = metalMsgSend(
+            metalMsgSend(metalObjcGetClass("UIViewController"), metalSel("alloc")),
+            metalSel("init")
+        )
+        metalMsgSend(controller, metalSel("setView:"), view)
+        metalMsgSend(window, metalSel("setRootViewController:"), controller)
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        state.delegate = delegate
+        state.window = window
+        state.view = view
+        metalMsgSend(window, metalSel("makeKeyAndVisible"))
+    }
 }
 
 function metalUIKitConnectScene(
@@ -234,37 +236,43 @@ function metalUIKitConnectScene(
 }
 
 function metalUIKitRunApplication(delegate: RawPtr, selector: RawPtr, timer: RawPtr) {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    metalRunApplication(state.app, state.runtimeUserData)
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        metalRunApplication(state.app, state.runtimeUserData)
+    }
 }
 
 function metalUIKitContentView() -> RawPtr {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    return state.view
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        return state.view
+    }
 }
 
 function metalUIKitAppendTouch(view: RawPtr, touches: RawPtr, kind: AppEventKind) {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    if kind == .TouchesBegan {
-        if !isNull(state.activeTouch) { return }
-        state.activeTouch = metalMsgSend(touches, metalSel("anyObject"))
-    } else {
-        if isNull(state.activeTouch) { return }
-        let contains: Bool = metalMsgSend(touches, metalSel("containsObject:"), state.activeTouch)
-        if !contains { return }
-    }
-    let point: MetalNSPoint = metalMsgSend(state.activeTouch, metalSel("locationInView:"), view)
-    let stamp = metalKvcNumber(state.activeTouch, "timestamp")
-    state.events.append(
-        AppEvent {
-            kind: kind,
-            touchCount: 1,
-            pointerX: Number(point.x),
-            pointerY: Number(point.y),
-            timestamp: stamp
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        if kind == .TouchesBegan {
+            if !isNull(state.activeTouch) { return }
+            state.activeTouch = metalMsgSend(touches, metalSel("anyObject"))
+        } else {
+            if isNull(state.activeTouch) { return }
+            let contains: Bool = metalMsgSend(touches, metalSel("containsObject:"), state.activeTouch)
+            if !contains { return }
         }
-    )
-    if kind == .TouchesEnded || kind == .TouchesCancelled { state.activeTouch = nullPointer() }
+        let point: MetalNSPoint = metalMsgSend(state.activeTouch, metalSel("locationInView:"), view)
+        let stamp = metalKvcNumber(state.activeTouch, "timestamp")
+        state.events.append(
+            AppEvent {
+                kind: kind,
+                touchCount: 1,
+                pointerX: Number(point.x),
+                pointerY: Number(point.y),
+                timestamp: stamp
+            }
+        )
+        if kind == .TouchesEnded || kind == .TouchesCancelled { state.activeTouch = nullPointer() }
+    }
 }
 
 function metalUIKitTouchesBegan(view: RawPtr, selector: RawPtr, touches: RawPtr, event: RawPtr) {
@@ -280,10 +288,12 @@ function metalUIKitTouchesEnded(view: RawPtr, selector: RawPtr, touches: RawPtr,
 }
 
 function metalUIKitTakeEvents() -> [AppEvent] {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    let events = move state.events
-    state.events = []
-    return move events
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        let events = move state.events
+        state.events = []
+        return move events
+    }
 }
 
 public function metalUIKitSafeAreaInsets() -> ViewportInsets {
@@ -314,27 +324,29 @@ public function metalUIKitStartFrames(
     cleanup: () -> Void,
     liveState: NativeState<MetalLiveState>
 ) {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    state.liveState = move liveState
-    state.renderFrame = move renderFrame
-    state.cleanup = move cleanup
-    let link: RawPtr = metalMsgSend(
-        metalObjcGetClass("CADisplayLink"),
-        metalSel("displayLinkWithTarget:selector:"),
-        state.delegate,
-        metalSel("renderKiraFrame:")
-    )
-    state.displayLink = link
-    if isNull(link) { log fault("UIKit could not create its display link") }
-    if isNull(state.delegate) {
-        log fault("UIKit display link has no scene delegate")
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        state.liveState = move liveState
+        state.renderFrame = move renderFrame
+        state.cleanup = move cleanup
+        let link: RawPtr = metalMsgSend(
+            metalObjcGetClass("CADisplayLink"),
+            metalSel("displayLinkWithTarget:selector:"),
+            state.delegate,
+            metalSel("renderKiraFrame:")
+        )
+        state.displayLink = link
+        if isNull(link) { log fault("UIKit could not create its display link") }
+        if isNull(state.delegate) {
+            log fault("UIKit display link has no scene delegate")
+        }
+        metalMsgSend(
+            link,
+            metalSel("setPreferredFramesPerSecond:"),
+            U64(metalViewMaximumFramesPerSecond(state.view))
+        )
+        metalUIKitJoinRunLoop(link)
     }
-    metalMsgSend(
-        link,
-        metalSel("setPreferredFramesPerSecond:"),
-        U64(metalViewMaximumFramesPerSecond(state.view))
-    )
-    metalUIKitJoinRunLoop(link)
 }
 
 // Run loops recognize the common-modes set by the identity of the
@@ -359,15 +371,17 @@ function metalUIKitJoinRunLoop(link: RawPtr) {
 }
 
 function metalUIKitRenderFrame(delegate: RawPtr, selector: RawPtr, link: RawPtr) {
-    var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
-    if !state.renderStarted {
-        state.renderStarted = true
-        log fault("UIKit entered its first display-link frame")
-    }
-    if !state.renderFrame() {
-        log fault("UIKit frame handler requested completion")
-        metalMsgSend(link, metalSel("invalidate"))
-        state.displayLink = nullPointer()
-        state.cleanup()
+    unsafe {
+        var state = nativeRecover<MetalUIKitApplication>(metalUIKitApplicationPointer())
+        if !state.renderStarted {
+            state.renderStarted = true
+            log fault("UIKit entered its first display-link frame")
+        }
+        if !state.renderFrame() {
+            log fault("UIKit frame handler requested completion")
+            metalMsgSend(link, metalSel("invalidate"))
+            state.displayLink = nullPointer()
+            state.cleanup()
+        }
     }
 }

@@ -10,7 +10,9 @@ function waylandCompareNames(a: RawPtr, b: CString) -> I32
 
 // Whether a registry event's interface is `name`.
 public function waylandNamed(interface: RawPtr, name: borrow String) -> Bool {
-    return waylandCompareNames(interface, name) == I32(0)
+    unsafe {
+        return waylandCompareNames(interface, name) == I32(0)
+    }
 }
 
 // `wl_seat.capabilities`: a set of bits, not a number to compare.

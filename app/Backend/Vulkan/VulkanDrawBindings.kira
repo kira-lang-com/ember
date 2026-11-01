@@ -72,11 +72,13 @@ public function vulkanSnapshotUniform(
     state: borrow mut VulkanState,
     entry: borrow StoredUniformBindEntry
 ) -> U32 {
-    let values = nativeRecover<UniformState>(entry.storage)
-    if values.values.count > 0 {
-        vulkanWriteFloats(state, entry.uniformId.raw, narrowFloats(values.values), 0)
+    unsafe {
+        let values = nativeRecover<UniformState>(entry.storage)
+        if values.values.count > 0 {
+            vulkanWriteFloats(state, entry.uniformId.raw, narrowFloats(values.values), 0)
+        }
+        return entry.uniformId.raw
     }
-    return entry.uniformId.raw
 }
 
 // The buffer a uniform or storage binding reads, and its dynamic offset.
@@ -316,15 +318,17 @@ public function vulkanBindDescriptorGroup(
     groupIndex: UNumber,
     group: borrow BindGroup
 ) -> Result<Void, VulkanBindingFailure> {
-    if vulkanGroupBindings(pipeline.reflection, groupIndex).count == 0 {
-        return .Ok
+    unsafe {
+        if vulkanGroupBindings(pipeline.reflection, groupIndex).count == 0 {
+            return .Ok
+        }
+        return vulkanBindDescriptorState(
+            state,
+            pipeline,
+            groupIndex,
+            nativeRecover<BindGroupState>(group.storage)
+        )
     }
-    return vulkanBindDescriptorState(
-        state,
-        pipeline,
-        groupIndex,
-        nativeRecover<BindGroupState>(group.storage)
-    )
 }
 
 // `vulkanBindDescriptorGroup` for a dispatch, which reports its own failure.

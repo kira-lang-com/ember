@@ -35,6 +35,8 @@ public function emptyUniform() -> GraphicsUniform {
 
 // Replaces a uniform's current values in place.
 public function setUniformValues(uniform: borrow GraphicsUniform, data: borrow[Number]) {
-    var state = nativeRecover<UniformState>(uniform.storage)
-    state.values = data
+    unsafe {
+        var state = nativeRecover<UniformState>(uniform.storage)
+        state.values = data
+    }
 }

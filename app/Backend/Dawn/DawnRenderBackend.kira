@@ -75,9 +75,11 @@ construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
     }
 
     function destroyBuffer(buffer: borrow GraphicsBuffer) -> Void {
-        if dawnHasDevice(context) {
-            var state = nativeRecover<GraphicsRuntimeState>(context)
-            dawnDestroyBufferId(state, buffer.id.raw)
+        unsafe {
+            if dawnHasDevice(context) {
+                var state = nativeRecover<GraphicsRuntimeState>(context)
+                dawnDestroyBufferId(state, buffer.id.raw)
+            }
         }
     }
 
@@ -251,48 +253,58 @@ construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
 
     // --- the drawable ----------------------------------------------------
     function backingScale() -> Number {
-        if isNull(context) {
-            return 1
+        unsafe {
+            if isNull(context) {
+                return 1
+            }
+            return dawnWindowFor(dawnPlatformForHost()).scale(
+                nativeRecover<GraphicsRuntimeState>(context).dawn.window
+            )
         }
-        return dawnWindowFor(dawnPlatformForHost()).scale(
-            nativeRecover<GraphicsRuntimeState>(context).dawn.window
-        )
     }
 
     function contextWidth() -> Number {
-        if isNull(context) {
-            return 0
+        unsafe {
+            if isNull(context) {
+                return 0
+            }
+            return nativeRecover<GraphicsRuntimeState>(context).dawn.surfaceWidth
         }
-        return nativeRecover<GraphicsRuntimeState>(context).dawn.surfaceWidth
     }
 
     function contextHeight() -> Number {
-        if isNull(context) {
-            return 0
+        unsafe {
+            if isNull(context) {
+                return 0
+            }
+            return nativeRecover<GraphicsRuntimeState>(context).dawn.surfaceHeight
         }
-        return nativeRecover<GraphicsRuntimeState>(context).dawn.surfaceHeight
     }
 
     // Framebuffer pixels over the backing scale. The client area is measured in
     // physical pixels, and points are what that divides to.
     function viewportWidth() -> Number {
-        if isNull(context) {
-            return 0
+        unsafe {
+            if isNull(context) {
+                return 0
+            }
+            let state = nativeRecover<GraphicsRuntimeState>(context)
+            return Number(state.dawn.surfaceWidth) / dawnWindowFor(dawnPlatformForHost()).scale(
+                state.dawn.window
+            )
         }
-        let state = nativeRecover<GraphicsRuntimeState>(context)
-        return Number(state.dawn.surfaceWidth) / dawnWindowFor(dawnPlatformForHost()).scale(
-            state.dawn.window
-        )
     }
 
     function viewportHeight() -> Number {
-        if isNull(context) {
-            return 0
+        unsafe {
+            if isNull(context) {
+                return 0
+            }
+            let state = nativeRecover<GraphicsRuntimeState>(context)
+            return Number(state.dawn.surfaceHeight) / dawnWindowFor(dawnPlatformForHost()).scale(
+                state.dawn.window
+            )
         }
-        let state = nativeRecover<GraphicsRuntimeState>(context)
-        return Number(state.dawn.surfaceHeight) / dawnWindowFor(dawnPlatformForHost()).scale(
-            state.dawn.window
-        )
     }
 
     function safeAreaInsets() -> ViewportInsets {
@@ -300,32 +312,40 @@ construct DawnRenderBackend(context: RawPtr) extends RenderBackend {
     }
 
     function windowMode() -> WindowMode {
-        if isNull(context) {
-            return .Windowed
+        unsafe {
+            if isNull(context) {
+                return .Windowed
+            }
+            return dawnReadWindowMode(nativeRecover<GraphicsRuntimeState>(context).dawn.window)
         }
-        return dawnReadWindowMode(nativeRecover<GraphicsRuntimeState>(context).dawn.window)
     }
 
     function setWindowMode(mode: borrow WindowMode) -> Void {
-        if isNull(context) {
-            return
+        unsafe {
+            if isNull(context) {
+                return
+            }
+            let state = nativeRecover<GraphicsRuntimeState>(context)
+            dawnApplyWindowMode(state.dawn.window, mode, state.app.windowRequest())
         }
-        let state = nativeRecover<GraphicsRuntimeState>(context)
-        dawnApplyWindowMode(state.dawn.window, mode, state.app.windowRequest())
     }
 
     function minimizeWindow() -> Void {
-        if isNull(context) || targetPlatform!() != .Linux {
-            return
+        unsafe {
+            if isNull(context) || targetPlatform!() != .Linux {
+                return
+            }
+            dawnWaylandMinimize(nativeRecover<GraphicsRuntimeState>(context))
         }
-        dawnWaylandMinimize(nativeRecover<GraphicsRuntimeState>(context))
     }
 
     function toggleMaximizeWindow() -> Void {
-        if isNull(context) || targetPlatform!() != .Linux {
-            return
+        unsafe {
+            if isNull(context) || targetPlatform!() != .Linux {
+                return
+            }
+            dawnWaylandToggleMaximize(nativeRecover<GraphicsRuntimeState>(context))
         }
-        dawnWaylandToggleMaximize(nativeRecover<GraphicsRuntimeState>(context))
     }
 
     // --- compute ---------------------------------------------------------

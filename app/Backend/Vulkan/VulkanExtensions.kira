@@ -107,33 +107,35 @@ function vulkanDeviceVersionSupported(device: RawPtr) -> Bool {
 // The names of the extensions the device offers, or nothing when it will not
 // list them.
 function vulkanDeviceExtensions(device: RawPtr) -> Optional<[String]> {
-    let count = boxed<U32>(U32(0))
-    let counted = vulkanDeviceExtensionProperties(
-        device,
-        nullPointer(),
-        count.pointer(),
-        nullPointer()
-    )
-    if vulkanResultOf(counted) != .Success { return .None }
-    let stride = sizeOf<VkExtensionProperties>()
-    let block = zeroedBlock(
-        max(Number(boxedValue<U32>(count)), 1) * stride,
-        alignOf<VkExtensionProperties>()
-    )
-    let listed = vulkanDeviceExtensionProperties(
-        device,
-        nullPointer(),
-        count.pointer(),
-        block.pointer()
-    )
-    if vulkanResultOf(listed) != .Success { return .None }
-    var names: [String] = []
-    for index in 0..Number(boxedValue<U32>(count)) {
-        // A name is the first member, so it starts where its element does.
-        let name = heapOffset(block.pointer(), index * stride)
-        names.append(stringFromCBytes(name, VulkanExtension.nameLimit))
+    unsafe {
+        let count = boxed<U32>(U32(0))
+        let counted = vulkanDeviceExtensionProperties(
+            device,
+            nullPointer(),
+            count.pointer(),
+            nullPointer()
+        )
+        if vulkanResultOf(counted) != .Success { return .None }
+        let stride = sizeOf<VkExtensionProperties>()
+        let block = zeroedBlock(
+            max(Number(boxedValue<U32>(count)), 1) * stride,
+            alignOf<VkExtensionProperties>()
+        )
+        let listed = vulkanDeviceExtensionProperties(
+            device,
+            nullPointer(),
+            count.pointer(),
+            block.pointer()
+        )
+        if vulkanResultOf(listed) != .Success { return .None }
+        var names: [String] = []
+        for index in 0..Number(boxedValue<U32>(count)) {
+            // A name is the first member, so it starts where its element does.
+            let name = heapOffset(block.pointer(), index * stride)
+            names.append(stringFromCBytes(name, VulkanExtension.nameLimit))
+        }
+        return .Some(names)
     }
-    return .Some(names)
 }
 
 // Whether the device's dynamic rendering feature can be turned on: the

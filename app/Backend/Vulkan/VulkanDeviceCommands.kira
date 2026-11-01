@@ -49,7 +49,9 @@ namespace VulkanMissingCommand {
 }
 
 function vulkanHasDeviceCommand(device: RawPtr, name: borrow String) -> Bool {
-    return !isNull(vulkanDeviceCommandAddress(device, name))
+    unsafe {
+        return !isNull(vulkanDeviceCommandAddress(device, name))
+    }
 }
 
 // Whether the device resolves both dynamic rendering commands, which every
@@ -62,13 +64,17 @@ public function vulkanHasDynamicRendering(device: RawPtr) -> Bool {
 // The device was refused at creation unless it has both commands, so the
 // lookups here always answer one.
 public function vulkanBeginRendering(device: RawPtr, commandBuffer: RawPtr, info: VkRenderingInfo) {
-    let begin = vulkanBeginRenderingCommand(device, VulkanDeviceCommand.beginRendering)
-    begin(commandBuffer, info)
+    unsafe {
+        let begin = vulkanBeginRenderingCommand(device, VulkanDeviceCommand.beginRendering)
+        begin(commandBuffer, info)
+    }
 }
 
 public function vulkanEndRendering(device: RawPtr, commandBuffer: RawPtr) {
-    let end = vulkanEndRenderingCommand(device, VulkanDeviceCommand.endRendering)
-    end(commandBuffer)
+    unsafe {
+        let end = vulkanEndRenderingCommand(device, VulkanDeviceCommand.endRendering)
+        end(commandBuffer)
+    }
 }
 
 // The memory types a dma-buf can be imported as. The loader exports only the
@@ -80,11 +86,13 @@ public function vulkanMemoryFdProperties(
     fd: I32,
     properties: RawPtr
 ) -> I32 {
-    if !vulkanHasDeviceCommand(device, VulkanDeviceCommand.getMemoryFdProperties) {
-        return VulkanMissingCommand.result
+    unsafe {
+        if !vulkanHasDeviceCommand(device, VulkanDeviceCommand.getMemoryFdProperties) {
+            return VulkanMissingCommand.result
+        }
+        let query = vulkanGetMemoryFdPropertiesCommand(device, VulkanDeviceCommand.getMemoryFdProperties)
+        return query(device, handleType, fd, properties)
     }
-    let query = vulkanGetMemoryFdPropertiesCommand(device, VulkanDeviceCommand.getMemoryFdProperties)
-    return query(device, handleType, fd, properties)
 }
 
 // Whether the device can hand an allocation's memory out as a dma-buf: only
@@ -96,16 +104,18 @@ public function vulkanMemoryExportSupported(device: RawPtr) -> Bool {
 // A new dma-buf descriptor for `memory`, owned by the caller, or nothing when
 // the device has no export or the driver refuses this memory.
 public function vulkanGetMemoryFd(device: RawPtr, memory: RawPtr) -> Optional<I32> {
-    if !vulkanMemoryExportSupported(device) { return .None }
-    let get = vulkanGetMemoryFdCommand(device, VulkanDeviceCommand.getMemoryFd)
-    let descriptor = boxed<I32>(I32(-1))
-    let info = VkMemoryGetFdInfoKHR {
-        sType: I32(VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR),
-        memory: memory,
-        handleType: I32(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)
+    unsafe {
+        if !vulkanMemoryExportSupported(device) { return .None }
+        let get = vulkanGetMemoryFdCommand(device, VulkanDeviceCommand.getMemoryFd)
+        let descriptor = boxed<I32>(I32(-1))
+        let info = VkMemoryGetFdInfoKHR {
+            sType: I32(VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR),
+            memory: memory,
+            handleType: I32(VK_EXTERNAL_MEMORY_HANDLE_TYPE_DMA_BUF_BIT_EXT)
+        }
+        if get(device, info, descriptor.pointer()) != I32(VK_SUCCESS) { return .None }
+        return .Some(boxedValue<I32>(descriptor))
     }
-    if get(device, info, descriptor.pointer()) != I32(VK_SUCCESS) { return .None }
-    return .Some(boxedValue<I32>(descriptor))
 }
 
 // Whether the kernel under the build shares memory as dma-bufs: Linux's, which

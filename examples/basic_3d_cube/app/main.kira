@@ -273,10 +273,12 @@ function cubeResources(graphics: borrow Graphics) -> Result<CubeResources, Resou
 }
 
 function cubeInit(graphics: Graphics) {
-    var state = nativeRecover<CubeState>(graphics.userData)
-    match cubeResources(graphics) {
-        Ok(resources) -> state.resources = .Some(move resources)
-        Error(failure) -> reportMissingResource("the cube", move failure)
+    unsafe {
+        var state = nativeRecover<CubeState>(graphics.userData)
+        match cubeResources(graphics) {
+            Ok(resources) -> state.resources = .Some(move resources)
+            Error(failure) -> reportMissingResource("the cube", move failure)
+        }
     }
 }
 
@@ -303,13 +305,15 @@ function cubeDraw(
 }
 
 function cubeFrame(frame: borrow mut RenderFrame) {
-    let state = nativeRecover<CubeState>(frame.userData)
-    let encoder = frame.beginRenderPass(cubeRenderPass())
-    match state.resources {
-        Some(resources) -> cubeDraw(frame, encoder, resources)
-        None -> {}
+    unsafe {
+        let state = nativeRecover<CubeState>(frame.userData)
+        let encoder = frame.beginRenderPass(cubeRenderPass())
+        match state.resources {
+            Some(resources) -> cubeDraw(frame, encoder, resources)
+            None -> {}
+        }
+        frame.endPass()
     }
-    frame.endPass()
 }
 
 function cubeDestroyBindings(graphics: borrow Graphics, bindings: borrow CubeBindings) {
@@ -330,13 +334,15 @@ function cubeDestroyGeometry(graphics: borrow Graphics, geometry: borrow CubeGeo
 }
 
 function cubeCleanup(graphics: Graphics) {
-    let state = nativeRecover<CubeState>(graphics.userData)
-    match state.resources {
-        Some(resources) -> {
-            cubeDestroyBindings(graphics, resources.bindings)
-            cubeDestroyGeometry(graphics, resources.geometry)
+    unsafe {
+        let state = nativeRecover<CubeState>(graphics.userData)
+        match state.resources {
+            Some(resources) -> {
+                cubeDestroyBindings(graphics, resources.bindings)
+                cubeDestroyGeometry(graphics, resources.geometry)
+            }
+            None -> {}
         }
-        None -> {}
     }
 }
 

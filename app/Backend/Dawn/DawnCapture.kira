@@ -32,23 +32,25 @@ public function dawnCaptureFrame(
     context: RawPtr,
     path: borrow String
 ) -> Result<Void, CaptureFailure> {
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let width = state.dawn.surfaceWidth
-    let height = state.dawn.surfaceHeight
-    if width <= 0 || height <= 0 || isNull(state.dawn.frameTexture) {
-        return .Error(.NoImage)
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let width = state.dawn.surfaceWidth
+        let height = state.dawn.surfaceHeight
+        if width <= 0 || height <= 0 || isNull(state.dawn.frameTexture) {
+            return .Error(.NoImage)
+        }
+        return dawnCaptureTextureHandle(
+            context,
+            DawnCaptureSource {
+                texture: state.dawn.frameTexture,
+                width: width,
+                format: state.dawn.surfaceFormat,
+                top: 0,
+                rows: height
+            },
+            path
+        )
     }
-    return dawnCaptureTextureHandle(
-        context,
-        DawnCaptureSource {
-            texture: state.dawn.frameTexture,
-            width: width,
-            format: state.dawn.surfaceFormat,
-            top: 0,
-            rows: height
-        },
-        path
-    )
 }
 
 // An explicit texture as a binary PPM. Headless renderers have no swapchain, so
@@ -58,28 +60,30 @@ public function dawnCaptureTexture(
     texture: borrow GraphicsTexture,
     path: borrow String
 ) -> Result<Void, CaptureFailure> {
-    if !dawnHasDevice(context) {
-        return .Error(.NoDevice)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.NoDevice)
+        }
+        if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
+            return .Error(.NoTexture)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let handle = dawnObject(state, texture.id.raw)
+        if isNull(handle) {
+            return .Error(.NoTexture)
+        }
+        return dawnCaptureTextureHandle(
+            context,
+            DawnCaptureSource {
+                texture: handle,
+                width: texture.width,
+                format: dawnObjectFormat(state, texture.id.raw),
+                top: 0,
+                rows: texture.height
+            },
+            path
+        )
     }
-    if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
-        return .Error(.NoTexture)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let handle = dawnObject(state, texture.id.raw)
-    if isNull(handle) {
-        return .Error(.NoTexture)
-    }
-    return dawnCaptureTextureHandle(
-        context,
-        DawnCaptureSource {
-            texture: handle,
-            width: texture.width,
-            format: dawnObjectFormat(state, texture.id.raw),
-            top: 0,
-            rows: texture.height
-        },
-        path
-    )
 }
 
 // A texture a capture reads, and what it needs to know to read it: `rows`
@@ -183,36 +187,38 @@ function dawnMappedCopy(
     context: RawPtr,
     source: borrow DawnCaptureSource
 ) -> Result<DawnMappedCopy, CaptureFailure> {
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let bytesPerRow = dawnCaptureRowBytes(source.width, source.format)
-    let byteCount = bytesPerRow * source.rows
-    let readback = wgpuDeviceCreateBuffer(
-        state.dawn.device,
-        WGPUBufferDescriptor {
-            label: dawnText("kira-frame-capture"),
-            usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
-            size: U64(byteCount)
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let bytesPerRow = dawnCaptureRowBytes(source.width, source.format)
+        let byteCount = bytesPerRow * source.rows
+        let readback = wgpuDeviceCreateBuffer(
+            state.dawn.device,
+            WGPUBufferDescriptor {
+                label: dawnText("kira-frame-capture"),
+                usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+                size: U64(byteCount)
+            }
+        )
+        if isNull(readback) {
+            return .Error(.StagingRefused)
         }
-    )
-    if isNull(readback) {
-        return .Error(.StagingRefused)
-    }
-    dawnCopyTextureToReadback(state, source, readback, bytesPerRow)
-    match dawnMapReadback(context, state, readback, byteCount) {
-        Ok -> {}
-        Error(failure) -> {
-            dawnReleaseReadback(readback)
-            return .Error(failure)
+        dawnCopyTextureToReadback(state, source, readback, bytesPerRow)
+        match dawnMapReadback(context, state, readback, byteCount) {
+            Ok -> {}
+            Error(failure) -> {
+                dawnReleaseReadback(readback)
+                return .Error(failure)
+            }
         }
+        let pixels = MappedPixels {
+            start: wgpuBufferGetConstMappedRange(readback, U64(0), U64(byteCount)),
+            width: source.width,
+            height: source.rows,
+            bytesPerRow: bytesPerRow,
+            order: dawnPixelOrder(source.format)
+        }
+        return .Ok(DawnMappedCopy { readback: readback, pixels: pixels })
     }
-    let pixels = MappedPixels {
-        start: wgpuBufferGetConstMappedRange(readback, U64(0), U64(byteCount)),
-        width: source.width,
-        height: source.rows,
-        bytesPerRow: bytesPerRow,
-        order: dawnPixelOrder(source.format)
-    }
-    return .Ok(DawnMappedCopy { readback: readback, pixels: pixels })
 }
 
 function dawnReleaseMappedCopy(copy: borrow DawnMappedCopy) {
@@ -243,33 +249,35 @@ public function dawnReadTextureRows(
     top: UNumber,
     rows: UNumber
 ) -> Result<[UN8], CaptureFailure> {
-    if !dawnHasDevice(context) {
-        return .Error(.NoDevice)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.NoDevice)
+        }
+        if texture.id == 0 || rows == 0 || top + rows > texture.height {
+            return .Error(.NoTexture)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let handle = dawnObject(state, texture.id.raw)
+        if isNull(handle) {
+            return .Error(.NoTexture)
+        }
+        let source = DawnCaptureSource {
+            texture: handle,
+            width: texture.width,
+            format: dawnObjectFormat(state, texture.id.raw),
+            top: top,
+            rows: rows
+        }
+        let mapped = match dawnMappedCopy(context, source) {
+            Ok(mapped) -> mapped
+            Error(failure) -> return .Error(failure)
+        }
+        let texelBytes = dawnTexelBytes(source.format)
+        let bytes = texelBytes == DawnTexel.bytes ? mappedRgba(mapped.pixels) : mappedTexels(
+            mapped.pixels,
+            texelBytes
+        )
+        dawnReleaseMappedCopy(mapped)
+        return .Ok(bytes)
     }
-    if texture.id == 0 || rows == 0 || top + rows > texture.height {
-        return .Error(.NoTexture)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let handle = dawnObject(state, texture.id.raw)
-    if isNull(handle) {
-        return .Error(.NoTexture)
-    }
-    let source = DawnCaptureSource {
-        texture: handle,
-        width: texture.width,
-        format: dawnObjectFormat(state, texture.id.raw),
-        top: top,
-        rows: rows
-    }
-    let mapped = match dawnMappedCopy(context, source) {
-        Ok(mapped) -> mapped
-        Error(failure) -> return .Error(failure)
-    }
-    let texelBytes = dawnTexelBytes(source.format)
-    let bytes = texelBytes == DawnTexel.bytes ? mappedRgba(mapped.pixels) : mappedTexels(
-        mapped.pixels,
-        texelBytes
-    )
-    dawnReleaseMappedCopy(mapped)
-    return .Ok(bytes)
 }

@@ -111,10 +111,12 @@ public struct VulkanPipelineRecord {
 }
 
 public function vulkanHasDevice(context: RawPtr) -> Bool {
-    if isNull(context) {
-        return false
+    unsafe {
+        if isNull(context) {
+            return false
+        }
+        return !isNull(nativeRecover<GraphicsRuntimeState>(context).vulkan.device)
     }
-    return !isNull(nativeRecover<GraphicsRuntimeState>(context).vulkan.device)
 }
 
 // `vulkanHasDevice` for an operation that cannot proceed without one: a missing

@@ -46,46 +46,48 @@ function vulkanGraphics(runtime: borrow GraphicsRuntimeState, runtimeUserData: R
 }
 
 public function vulkanRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
-    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    runtime.vulkan = VulkanState()
-    readHarnessKnobs(runtime)
-    if runtime.headless {
-        return vulkanRunHeadlessApplication(app, runtimeUserData)
-    }
-    if targetPlatform!() == .Windows && app.highDpi {
-        markProcessDpiAware()
-    }
-    match vulkanOpenWindow(runtime, app, runtimeUserData) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault(
-                "could not open the window; is a display server running?",
-                failure,
-                title: app.title
-            )
-            vulkanShutdownState(runtime.vulkan)
-            return
+    unsafe {
+        var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        runtime.vulkan = VulkanState()
+        readHarnessKnobs(runtime)
+        if runtime.headless {
+            return vulkanRunHeadlessApplication(app, runtimeUserData)
         }
-    }
-    match vulkanSetUpWindowed(runtime.vulkan, vulkanWindowFor(vulkanWindowPlatformForHost())) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault("could not set up Vulkan for its window", failure)
-            vulkanShutdownState(runtime.vulkan)
-            return
+        if targetPlatform!() == .Windows && app.highDpi {
+            markProcessDpiAware()
         }
+        match vulkanOpenWindow(runtime, app, runtimeUserData) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault(
+                    "could not open the window; is a display server running?",
+                    failure,
+                    title: app.title
+                )
+                vulkanShutdownState(runtime.vulkan)
+                return
+            }
+        }
+        match vulkanSetUpWindowed(runtime.vulkan, vulkanWindowFor(vulkanWindowPlatformForHost())) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not set up Vulkan for its window", failure)
+                vulkanShutdownState(runtime.vulkan)
+                return
+            }
+        }
+        runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
+        runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
+        runtime.vulkan.initialized = true
+        emberLiveBackendInitialized()
+        let onInit: (Graphics) -> Void = runtime.app.initHandler
+        onInit(vulkanGraphics(runtime, runtimeUserData))
+        vulkanDriveFrames(runtimeUserData)
+        vulkanSettleDevice(runtime.vulkan, "the application's resources")
+        let onCleanup: (Graphics) -> Void = runtime.app.cleanupHandler
+        onCleanup(vulkanGraphics(runtime, runtimeUserData))
+        vulkanShutdownState(runtime.vulkan)
     }
-    runtime.dawn.surfaceWidth = runtime.vulkan.swapchainWidth
-    runtime.dawn.surfaceHeight = runtime.vulkan.swapchainHeight
-    runtime.vulkan.initialized = true
-    emberLiveBackendInitialized()
-    let onInit: (Graphics) -> Void = runtime.app.initHandler
-    onInit(vulkanGraphics(runtime, runtimeUserData))
-    vulkanDriveFrames(runtimeUserData)
-    vulkanSettleDevice(runtime.vulkan, "the application's resources")
-    let onCleanup: (Graphics) -> Void = runtime.app.cleanupHandler
-    onCleanup(vulkanGraphics(runtime, runtimeUserData))
-    vulkanShutdownState(runtime.vulkan)
 }
 
 // What an unpresented frame waits out. A frame that presents nothing has no
@@ -111,23 +113,25 @@ function vulkanPumpEvents(runtime: borrow mut GraphicsRuntimeState) {
 }
 
 public function vulkanDriveFrames(runtimeUserData: RawPtr) {
-    var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    while !runtime.vulkan.quitRequested {
-        vulkanPumpEvents(runtime)
-        if runtime.vulkan.quitRequested {
-            return
-        }
-        vulkanResizeIfNeeded(runtime)
-        match vulkanAcquireFrame(runtime.vulkan) {
-            Ok -> {}
-            Error(failure) -> {
-                log fault("could not begin a frame; the run ends", failure)
+    unsafe {
+        var runtime = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        while !runtime.vulkan.quitRequested {
+            vulkanPumpEvents(runtime)
+            if runtime.vulkan.quitRequested {
                 return
             }
-        }
-        vulkanRunFrame(runtime, runtimeUserData)
-        if runtime.quitAfterFrames > 0 && runtime.frameIndex >= runtime.quitAfterFrames {
-            return
+            vulkanResizeIfNeeded(runtime)
+            match vulkanAcquireFrame(runtime.vulkan) {
+                Ok -> {}
+                Error(failure) -> {
+                    log fault("could not begin a frame; the run ends", failure)
+                    return
+                }
+            }
+            vulkanRunFrame(runtime, runtimeUserData)
+            if runtime.quitAfterFrames > 0 && runtime.frameIndex >= runtime.quitAfterFrames {
+                return
+            }
         }
     }
 }

@@ -404,25 +404,27 @@ function dawnOpenRenderPass(
 
 // Begins the pass the frame describes.
 public function dawnBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) -> Bool {
-    if !dawnHasDevice(context) {
-        log fault("skipped a render pass", DawnPassFailure.NoDevice)
-        return false
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let target = match dawnOpenRenderPass(state, frame.attachments) {
-        Ok(target) -> target
-        Error(failure) -> {
-            log fault("skipped a render pass", failure)
+    unsafe {
+        if !dawnHasDevice(context) {
+            log fault("skipped a render pass", DawnPassFailure.NoDevice)
             return false
         }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let target = match dawnOpenRenderPass(state, frame.attachments) {
+            Ok(target) -> target
+            Error(failure) -> {
+                log fault("skipped a render pass", failure)
+                return false
+            }
+        }
+        state.dawn.passActive = true
+        state.dawn.passWidth = UN32(target.width)
+        state.dawn.passHeight = UN32(target.height)
+        state.dawn.passFormat = target.format
+        state.dawn.passIsSwapchain = frame.attachments.color.target.kind == .Swapchain
+        state.dawn.stats.passCount = state.dawn.stats.passCount + 1
+        return true
     }
-    state.dawn.passActive = true
-    state.dawn.passWidth = UN32(target.width)
-    state.dawn.passHeight = UN32(target.height)
-    state.dawn.passFormat = target.format
-    state.dawn.passIsSwapchain = frame.attachments.color.target.kind == .Swapchain
-    state.dawn.stats.passCount = state.dawn.stats.passCount + 1
-    return true
 }
 
 // The frame's command encoder, opened on first use. Every pass of the frame —
@@ -440,23 +442,25 @@ public function dawnFrameEncoder(state: borrow mut GraphicsRuntimeState) -> RawP
 
 // Ends the pass. The commands stay on the frame's encoder until it is submitted.
 public function dawnEndPassAndCommit(context: RawPtr) {
-    if !dawnHasDevice(context) {
-        return
+    unsafe {
+        if !dawnHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if !state.dawn.passActive {
+            log fault("end pass skipped because no Dawn render pass is currently active")
+            return
+        }
+        wgpuRenderPassEncoderEnd(state.dawn.passEncoder)
+        wgpuRenderPassEncoderRelease(state.dawn.passEncoder)
+        state.dawn.passEncoder = nullPointer()
+        state.dawn.passActive = false
+        let composite = state.dawn.passIsSwapchain
+        let extent = String(state.dawn.passWidth) + "x" + String(state.dawn.passHeight)
+        state.dawn.passWidth = 0
+        state.dawn.passHeight = 0
+        dawnTraceSegment(context, state, (composite ? "composite" : "offscreen") + extent, composite)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    if !state.dawn.passActive {
-        log fault("end pass skipped because no Dawn render pass is currently active")
-        return
-    }
-    wgpuRenderPassEncoderEnd(state.dawn.passEncoder)
-    wgpuRenderPassEncoderRelease(state.dawn.passEncoder)
-    state.dawn.passEncoder = nullPointer()
-    state.dawn.passActive = false
-    let composite = state.dawn.passIsSwapchain
-    let extent = String(state.dawn.passWidth) + "x" + String(state.dawn.passHeight)
-    state.dawn.passWidth = 0
-    state.dawn.passHeight = 0
-    dawnTraceSegment(context, state, (composite ? "composite" : "offscreen") + extent, composite)
 }
 
 // Finishes whatever the frame's encoder holds and submits it.
@@ -488,40 +492,42 @@ function dawnCapturePresented(context: RawPtr, path: borrow String) {
 // targets — presents nothing, which is the honest answer rather than an empty
 // swap.
 public function dawnPresentFrame(context: RawPtr, capturePath: borrow String?) {
-    if !dawnHasDevice(context) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    if state.dawn.passActive {
-        log fault("the frame ended with a Dawn render pass still open")
-        dawnEndPassAndCommit(context)
-    }
-    // The resolve and the copy ride the frame's own encoder, so this frame's
-    // timings cost it one submission and no wait; the map that reads them back
-    // is asked for after the submission and answered a frame or two later.
-    let clockSlot = dawnClockResolve(state)
-    dawnSubmitEncoder(state)
-    match clockSlot {
-        Some(slot) -> dawnClockRequest(state, context, slot)
-        None -> {}
-    }
-    // The one place a frame lets Dawn run its callbacks. Everything that answers
-    // through one — a finished map among them — arrives here.
-    wgpuInstanceProcessEvents(state.dawn.instance)
-    if isNull(state.dawn.frameView) {
-        return
-    }
-    match capturePath {
-        Some(path) -> dawnCapturePresented(context, path)
-        None -> {}
-    }
-    wgpuTextureViewRelease(state.dawn.frameView)
-    state.dawn.frameView = nullPointer()
-    wgpuSurfacePresent(state.dawn.surface)
-    state.dawn.frameTexture = nullPointer()
-    if !state.dawn.announcedFrameSubmitted {
-        state.dawn.announcedFrameSubmitted = true
-        emberLiveFramePresented()
-        emberLiveFirstFrame()
+    unsafe {
+        if !dawnHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if state.dawn.passActive {
+            log fault("the frame ended with a Dawn render pass still open")
+            dawnEndPassAndCommit(context)
+        }
+        // The resolve and the copy ride the frame's own encoder, so this frame's
+        // timings cost it one submission and no wait; the map that reads them back
+        // is asked for after the submission and answered a frame or two later.
+        let clockSlot = dawnClockResolve(state)
+        dawnSubmitEncoder(state)
+        match clockSlot {
+            Some(slot) -> dawnClockRequest(state, context, slot)
+            None -> {}
+        }
+        // The one place a frame lets Dawn run its callbacks. Everything that answers
+        // through one — a finished map among them — arrives here.
+        wgpuInstanceProcessEvents(state.dawn.instance)
+        if isNull(state.dawn.frameView) {
+            return
+        }
+        match capturePath {
+            Some(path) -> dawnCapturePresented(context, path)
+            None -> {}
+        }
+        wgpuTextureViewRelease(state.dawn.frameView)
+        state.dawn.frameView = nullPointer()
+        wgpuSurfacePresent(state.dawn.surface)
+        state.dawn.frameTexture = nullPointer()
+        if !state.dawn.announcedFrameSubmitted {
+            state.dawn.announcedFrameSubmitted = true
+            emberLiveFramePresented()
+            emberLiveFirstFrame()
+        }
     }
 }

@@ -106,113 +106,135 @@ public class RenderEncoder {
     var storage: NativeState<RenderEncoderState>
 
     function setPipeline(pipeline: borrow RenderPipeline) {
-        var state = nativeRecover<RenderEncoderState>(self.storage)
-        state.pipeline = .None
-        if pipeline.id.isPresent() {
-            state.pipeline = .Some(pipeline)
+        unsafe {
+            var state = nativeRecover<RenderEncoderState>(self.storage)
+            state.pipeline = .None
+            if pipeline.id.isPresent() {
+                state.pipeline = .Some(pipeline)
+            }
         }
     }
 
     function setVertexBuffer(buffer: borrow GraphicsBuffer) {
-        var state = nativeRecover<RenderEncoderState>(self.storage)
-        state.vertexBuffer = .None
-        if buffer.id.isPresent() {
-            state.vertexBuffer = .Some(buffer.id)
+        unsafe {
+            var state = nativeRecover<RenderEncoderState>(self.storage)
+            state.vertexBuffer = .None
+            if buffer.id.isPresent() {
+                state.vertexBuffer = .Some(buffer.id)
+            }
         }
     }
 
     function setIndexBuffer(buffer: borrow GraphicsBuffer, format: IndexFormat) {
-        var state = nativeRecover<RenderEncoderState>(self.storage)
-        state.indexBuffer = .None
-        if buffer.id.isPresent() {
-            state.indexBuffer = .Some(IndexBinding { buffer: buffer.id, format: move format })
+        unsafe {
+            var state = nativeRecover<RenderEncoderState>(self.storage)
+            state.indexBuffer = .None
+            if buffer.id.isPresent() {
+                state.indexBuffer = .Some(IndexBinding { buffer: buffer.id, format: move format })
+            }
         }
     }
 
     function setBindGroup(slot: UN32, bindGroup: borrow BindGroup) {
-        if slot >= EncoderBindGroup.slots {
-            log fault(
-                "a bind group was set past the encoder's slots",
-                slot: slot,
-                slots: EncoderBindGroup.slots
-            )
-            return
-        }
-        var state = nativeRecover<RenderEncoderState>(self.storage)
-        state.bindGroups[slot] = .None
-        if bindGroup.id != 0 {
-            state.bindGroups[slot] = .Some(bindGroup)
+        unsafe {
+            if slot >= EncoderBindGroup.slots {
+                log fault(
+                    "a bind group was set past the encoder's slots",
+                    slot: slot,
+                    slots: EncoderBindGroup.slots
+                )
+                return
+            }
+            var state = nativeRecover<RenderEncoderState>(self.storage)
+            state.bindGroups[slot] = .None
+            if bindGroup.id != 0 {
+                state.bindGroups[slot] = .Some(bindGroup)
+            }
         }
     }
 
     // Pixel-space scissor in the current render target. Callers restore the
     // full target explicitly when finished.
     function setScissorRect(x: N32, y: N32, width: UN32, height: UN32) {
-        var state = nativeRecover<RenderEncoderState>(self.storage)
-        if width == 0 || height == 0 {
-            return
-        }
-        match state.target {
-            Closed -> {}
-            Metal(context) -> metalEncoderSetScissorRect(
-                context,
-                ScissorRect { x: x, y: y, width: width, height: height }
-            )
-            Dawn(_) -> state.scissor = .Some(
-                ScissorRect { x: x, y: y, width: width, height: height }
-            )
-            Vulkan(_) -> state.scissor = .Some(
-                ScissorRect { x: x, y: y, width: width, height: height }
-            )
+        unsafe {
+            var state = nativeRecover<RenderEncoderState>(self.storage)
+            if width == 0 || height == 0 {
+                return
+            }
+            match state.target {
+                Closed -> {}
+                Metal(context) -> metalEncoderSetScissorRect(
+                    context,
+                    ScissorRect { x: x, y: y, width: width, height: height }
+                )
+                Dawn(_) -> state.scissor = .Some(
+                    ScissorRect { x: x, y: y, width: width, height: height }
+                )
+                Vulkan(_) -> state.scissor = .Some(
+                    ScissorRect { x: x, y: y, width: width, height: height }
+                )
+            }
         }
     }
 
     function draw(vertexCount: UN32) {
-        encoderIssue(
-            nativeRecover<RenderEncoderState>(self.storage),
-            DrawCounts { vertexCount: vertexCount }
-        )
+        unsafe {
+            encoderIssue(
+                nativeRecover<RenderEncoderState>(self.storage),
+                DrawCounts { vertexCount: vertexCount }
+            )
+        }
     }
 
     function drawInstanced(vertexCount: UN32, instanceCount: UN32) {
-        encoderIssue(
-            nativeRecover<RenderEncoderState>(self.storage),
-            DrawCounts { vertexCount: vertexCount, instanceCount: instanceCount }
-        )
+        unsafe {
+            encoderIssue(
+                nativeRecover<RenderEncoderState>(self.storage),
+                DrawCounts { vertexCount: vertexCount, instanceCount: instanceCount }
+            )
+        }
     }
 
     function drawIndexed(indexCount: UN32) {
-        encoderIssue(
-            nativeRecover<RenderEncoderState>(self.storage),
-            DrawCounts { indexCount: indexCount }
-        )
+        unsafe {
+            encoderIssue(
+                nativeRecover<RenderEncoderState>(self.storage),
+                DrawCounts { indexCount: indexCount }
+            )
+        }
     }
 
     function drawIndexedInstanced(indexCount: UN32, instanceCount: UN32) {
-        encoderIssue(
-            nativeRecover<RenderEncoderState>(self.storage),
-            DrawCounts { indexCount: indexCount, instanceCount: instanceCount }
-        )
+        unsafe {
+            encoderIssue(
+                nativeRecover<RenderEncoderState>(self.storage),
+                DrawCounts { indexCount: indexCount, instanceCount: instanceCount }
+            )
+        }
     }
 
     function drawIndexedRange(indexCount: UN32, firstIndex: UN32) {
-        encoderIssue(
-            nativeRecover<RenderEncoderState>(self.storage),
-            DrawCounts { indexCount: indexCount, firstIndex: firstIndex }
-        )
+        unsafe {
+            encoderIssue(
+                nativeRecover<RenderEncoderState>(self.storage),
+                DrawCounts { indexCount: indexCount, firstIndex: firstIndex }
+            )
+        }
     }
 
     // GPU-driven draw: arguments come from a compute-written indirect buffer.
     function drawIndirect(indirectBufferId: UNumber) {
-        let state = nativeRecover<RenderEncoderState>(self.storage)
-        if state.pipeline == .None {
-            return
-        }
-        match state.target {
-            Closed -> {}
-            Metal(context) -> metalEncoderIssueIndirect(context, state, indirectBufferId)
-            Dawn(runtime) -> dawnEncoderDrawIndirect(runtime, state, indirectBufferId)
-            Vulkan(runtime) -> vulkanEncoderDrawIndirect(runtime, state, indirectBufferId)
+        unsafe {
+            let state = nativeRecover<RenderEncoderState>(self.storage)
+            if state.pipeline == .None {
+                return
+            }
+            match state.target {
+                Closed -> {}
+                Metal(context) -> metalEncoderIssueIndirect(context, state, indirectBufferId)
+                Dawn(runtime) -> dawnEncoderDrawIndirect(runtime, state, indirectBufferId)
+                Vulkan(runtime) -> vulkanEncoderDrawIndirect(runtime, state, indirectBufferId)
+            }
         }
     }
 }

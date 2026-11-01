@@ -314,22 +314,24 @@ public function dawnClockMapped(
     userdata1: RawPtr,
     userdata2: RawPtr
 ) -> Void {
-    if isNull(userdata1) || isNull(userdata2) {
-        return
+    unsafe {
+        if isNull(userdata1) || isNull(userdata2) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+        let slot = Number(readDoubleWord(userdata2, U64(0)))
+        if slot < 0 || slot >= state.dawn.clock.readbackIds.count {
+            return
+        }
+        if status == DawnVocabulary.mapSucceeded {
+            dawnClockReadSlot(state, slot)
+        }
+        let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+        if !isNull(readback) && status == DawnVocabulary.mapSucceeded {
+            wgpuBufferUnmap(readback)
+        }
+        state.dawn.clock.readbackBusy[slot] = false
     }
-    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
-    let slot = Number(readDoubleWord(userdata2, U64(0)))
-    if slot < 0 || slot >= state.dawn.clock.readbackIds.count {
-        return
-    }
-    if status == DawnVocabulary.mapSucceeded {
-        dawnClockReadSlot(state, slot)
-    }
-    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
-    if !isNull(readback) && status == DawnVocabulary.mapSucceeded {
-        wgpuBufferUnmap(readback)
-    }
-    state.dawn.clock.readbackBusy[slot] = false
 }
 
 // The GPU time one frame spent before its swapchain pass, and in it.

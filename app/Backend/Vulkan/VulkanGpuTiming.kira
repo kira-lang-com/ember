@@ -29,12 +29,14 @@ public struct VulkanGpuTiming {
 }
 
 public function vulkanMeasureGpu(context: RawPtr, on: Bool) {
-    if !vulkanHasDevice(context) { return }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    runtime.vulkan.gpuTiming.on = on
-    if !on {
-        runtime.vulkan.stats.gpuPasses = []
-        runtime.vulkan.stats.hasGpuSeconds = false
+    unsafe {
+        if !vulkanHasDevice(context) { return }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        runtime.vulkan.gpuTiming.on = on
+        if !on {
+            runtime.vulkan.stats.gpuPasses = []
+            runtime.vulkan.stats.hasGpuSeconds = false
+        }
     }
 }
 

@@ -75,8 +75,10 @@ function metalPutsRaw(text: RawPtr): Void
 // takes several numeric types, so the position states no one of them — and this
 // says it once instead of at nine call sites.
 public function metalMsgSendCount(object: RawPtr, selector: RawPtr) -> U64 {
-    let value: U64 = metalMsgSend(object, selector)
-    return value
+    unsafe {
+        let value: U64 = metalMsgSend(object, selector)
+        return value
+    }
 }
 
 // ---------------------------------------------------------------------------

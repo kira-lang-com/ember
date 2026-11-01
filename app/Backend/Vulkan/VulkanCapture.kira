@@ -215,30 +215,32 @@ public function vulkanCaptureTexture(
     texture: borrow GraphicsTexture,
     path: borrow String
 ) -> Result<Void, CaptureFailure> {
-    if !vulkanRequireDevice(context, "vulkanCaptureTexture") {
-        return .Error(.NoDevice)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCaptureTexture") {
+            return .Error(.NoDevice)
+        }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
+            return .Error(.NoTexture)
+        }
+        match vulkanOpenCaptureFrame(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        let staged = match vulkanStageTexture(runtime.vulkan, texture) {
+            Ok(staged) -> staged
+            Error(failure) -> return .Error(failure)
+        }
+        vulkanTransitionImage(
+            runtime.vulkan,
+            texture.id.raw,
+            .TransferSource,
+            VulkanVocabulary.aspectColor
+        )
+        vulkanCopyImageToStaging(runtime.vulkan, vulkanObject(runtime.vulkan, texture.id.raw), staged)
+        vulkanSubmitHeadlessFrame(context)
+        return vulkanWriteStaging(runtime.vulkan, staged, path)
     }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    if texture.id == 0 || texture.width <= 0 || texture.height <= 0 {
-        return .Error(.NoTexture)
-    }
-    match vulkanOpenCaptureFrame(runtime.vulkan) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    let staged = match vulkanStageTexture(runtime.vulkan, texture) {
-        Ok(staged) -> staged
-        Error(failure) -> return .Error(failure)
-    }
-    vulkanTransitionImage(
-        runtime.vulkan,
-        texture.id.raw,
-        .TransferSource,
-        VulkanVocabulary.aspectColor
-    )
-    vulkanCopyImageToStaging(runtime.vulkan, vulkanObject(runtime.vulkan, texture.id.raw), staged)
-    vulkanSubmitHeadlessFrame(context)
-    return vulkanWriteStaging(runtime.vulkan, staged, path)
 }
 
 // Copies `rows` rows of `texture` from row `top` down into a staging buffer
@@ -264,72 +266,74 @@ public function vulkanReadTextureSamples(
     rows: borrow [UNumber],
     every: UNumber
 ) -> Result<[UN8], CaptureFailure> {
-    if !vulkanRequireDevice(context, "vulkanReadTextureSamples") {
-        return .Error(.NoDevice)
-    }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    if texture.id == 0 || texture.width <= 0 || rows.count == 0 {
-        return .Error(.NoTexture)
-    }
-    for row in rows {
-        if row >= texture.height { return .Error(.NoTexture) }
-    }
-    match vulkanOpenCaptureFrame(runtime.vulkan) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    let count = UNumber(rows.count)
-    let staging = match vulkanRowsStaging(runtime.vulkan, texture.width, count) {
-        Ok(staging) -> staging
-        Error(failure) -> return .Error(failure)
-    }
-    vulkanTransitionImage(
-        runtime.vulkan,
-        texture.id.raw,
-        .TransferSource,
-        VulkanVocabulary.aspectColor
-    )
-    let bytesPerRow = texture.width * VulkanCapture.bytesPerPixel
-    var offset: UNumber = 0
-    for row in rows {
-        vkCmdCopyImageToBuffer(
-            runtime.vulkan.commandBuffer,
-            vulkanObject(runtime.vulkan, texture.id.raw),
-            VulkanVocabulary.imageLayoutTransferSource,
-            vulkanObject(runtime.vulkan, staging),
-            U32(1),
-            VkBufferImageCopy {
-                bufferOffset: U64(offset),
-                imageSubresource: VkImageSubresourceLayers {
-                    aspectMask: VulkanVocabulary.aspectColor,
-                    layerCount: U32(1)
-                },
-                imageOffset: VkOffset3D { x: I32(0), y: I32(row), z: I32(0) },
-                imageExtent: VkExtent3D { width: U32(texture.width), height: U32(1), depth: U32(1) }
-            }
-        )
-        offset += bytesPerRow
-    }
-    vulkanSubmitHeadlessFrame(context)
-    let mapped = match vulkanObjectMapped(runtime.vulkan, staging) {
-        Some(mapped) -> mapped
-        None -> {
-            vulkanReleaseObject(runtime.vulkan, staging)
-            runtime.vulkan.rowsStaging = U32(0)
-            return .Error(.MapFailed)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanReadTextureSamples") {
+            return .Error(.NoDevice)
         }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        if texture.id == 0 || texture.width <= 0 || rows.count == 0 {
+            return .Error(.NoTexture)
+        }
+        for row in rows {
+            if row >= texture.height { return .Error(.NoTexture) }
+        }
+        match vulkanOpenCaptureFrame(runtime.vulkan) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        let count = UNumber(rows.count)
+        let staging = match vulkanRowsStaging(runtime.vulkan, texture.width, count) {
+            Ok(staging) -> staging
+            Error(failure) -> return .Error(failure)
+        }
+        vulkanTransitionImage(
+            runtime.vulkan,
+            texture.id.raw,
+            .TransferSource,
+            VulkanVocabulary.aspectColor
+        )
+        let bytesPerRow = texture.width * VulkanCapture.bytesPerPixel
+        var offset: UNumber = 0
+        for row in rows {
+            vkCmdCopyImageToBuffer(
+                runtime.vulkan.commandBuffer,
+                vulkanObject(runtime.vulkan, texture.id.raw),
+                VulkanVocabulary.imageLayoutTransferSource,
+                vulkanObject(runtime.vulkan, staging),
+                U32(1),
+                VkBufferImageCopy {
+                    bufferOffset: U64(offset),
+                    imageSubresource: VkImageSubresourceLayers {
+                        aspectMask: VulkanVocabulary.aspectColor,
+                        layerCount: U32(1)
+                    },
+                    imageOffset: VkOffset3D { x: I32(0), y: I32(row), z: I32(0) },
+                    imageExtent: VkExtent3D { width: U32(texture.width), height: U32(1), depth: U32(1) }
+                }
+            )
+            offset += bytesPerRow
+        }
+        vulkanSubmitHeadlessFrame(context)
+        let mapped = match vulkanObjectMapped(runtime.vulkan, staging) {
+            Some(mapped) -> mapped
+            None -> {
+                vulkanReleaseObject(runtime.vulkan, staging)
+                runtime.vulkan.rowsStaging = U32(0)
+                return .Error(.MapFailed)
+            }
+        }
+        let bytes = mappedRgbaEvery(
+            MappedPixels {
+                start: mapped,
+                width: texture.width,
+                height: count,
+                bytesPerRow: bytesPerRow,
+                order: vulkanPixelOrder(vulkanObjectFormat(runtime.vulkan, texture.id.raw))
+            },
+            every
+        )
+        return .Ok(bytes)
     }
-    let bytes = mappedRgbaEvery(
-        MappedPixels {
-            start: mapped,
-            width: texture.width,
-            height: count,
-            bytesPerRow: bytesPerRow,
-            order: vulkanPixelOrder(vulkanObjectFormat(runtime.vulkan, texture.id.raw))
-        },
-        every
-    )
-    return .Ok(bytes)
 }
 
 // The buffer rows are read through, kept from one read to the next: a new one

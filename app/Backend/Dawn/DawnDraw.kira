@@ -15,10 +15,12 @@ import Heap
 
 // Whether a draw issued through this runtime may proceed.
 public function dawnPassIsActive(runtime: RawPtr) -> Bool {
-    if isNull(runtime) {
-        return false
+    unsafe {
+        if isNull(runtime) {
+            return false
+        }
+        return nativeRecover<GraphicsRuntimeState>(runtime).dawn.passActive
     }
-    return nativeRecover<GraphicsRuntimeState>(runtime).dawn.passActive
 }
 
 // Binds what the pipeline reads, however its shader says the slots are read.
@@ -179,39 +181,41 @@ public function dawnDrawWithBindings(
     encoder: borrow RenderEncoderState,
     counts: borrow DrawCounts
 ) {
-    if !dawnPassIsActive(runtime) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(runtime)
-    let pipelineId = match dawnPrepareDraw(state, encoder) {
-        Some(id) -> id
-        None -> return
-    }
-    let pass = state.dawn.passEncoder
-    let instances = UN32(max(counts.instanceCount, 1))
-    if counts.indexCount > 0 && encoder.indexBuffer != .None {
-        wgpuRenderPassEncoderDrawIndexed(
-            pass,
-            U32(counts.indexCount),
-            U32(instances),
-            U32(counts.firstIndex),
-            I32(0),
-            U32(0)
+    unsafe {
+        if !dawnPassIsActive(runtime) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(runtime)
+        let pipelineId = match dawnPrepareDraw(state, encoder) {
+            Some(id) -> id
+            None -> return
+        }
+        let pass = state.dawn.passEncoder
+        let instances = UN32(max(counts.instanceCount, 1))
+        if counts.indexCount > 0 && encoder.indexBuffer != .None {
+            wgpuRenderPassEncoderDrawIndexed(
+                pass,
+                U32(counts.indexCount),
+                U32(instances),
+                U32(counts.firstIndex),
+                I32(0),
+                U32(0)
+            )
+            dawnNoteDraw(state, counts.indexCount * instances)
+            dawnTraceDraw(state, pipelineId, counts)
+            return
+        }
+        if counts.vertexCount == 0 {
+            return
+        }
+        wgpuRenderPassEncoderDraw(pass, U32(counts.vertexCount), U32(instances), U32(0), U32(0))
+        dawnNoteDraw(state, counts.vertexCount * instances)
+        dawnTraceDraw(
+            state,
+            pipelineId,
+            DrawCounts { vertexCount: counts.vertexCount, instanceCount: instances }
         )
-        dawnNoteDraw(state, counts.indexCount * instances)
-        dawnTraceDraw(state, pipelineId, counts)
-        return
     }
-    if counts.vertexCount == 0 {
-        return
-    }
-    wgpuRenderPassEncoderDraw(pass, U32(counts.vertexCount), U32(instances), U32(0), U32(0))
-    dawnNoteDraw(state, counts.vertexCount * instances)
-    dawnTraceDraw(
-        state,
-        pipelineId,
-        DrawCounts { vertexCount: counts.vertexCount, instanceCount: instances }
-    )
 }
 
 // A GPU-driven draw: the vertex and instance counts come out of a buffer a
@@ -221,20 +225,22 @@ public function dawnEncoderDrawIndirect(
     encoder: borrow RenderEncoderState,
     indirectBufferId: UNumber
 ) {
-    if !dawnPassIsActive(runtime) {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(runtime)
-    let arguments = dawnObject(state, U32(indirectBufferId))
-    if isNull(arguments) {
-        return
-    }
-    match dawnPrepareDraw(state, encoder) {
-        Some(_) -> {
-            wgpuRenderPassEncoderDrawIndirect(state.dawn.passEncoder, arguments, U64(0))
-            dawnNoteDraw(state, 0)
+    unsafe {
+        if !dawnPassIsActive(runtime) {
+            return
         }
-        None -> {}
+        var state = nativeRecover<GraphicsRuntimeState>(runtime)
+        let arguments = dawnObject(state, U32(indirectBufferId))
+        if isNull(arguments) {
+            return
+        }
+        match dawnPrepareDraw(state, encoder) {
+            Some(_) -> {
+                wgpuRenderPassEncoderDrawIndirect(state.dawn.passEncoder, arguments, U64(0))
+                dawnNoteDraw(state, 0)
+            }
+            None -> {}
+        }
     }
 }
 

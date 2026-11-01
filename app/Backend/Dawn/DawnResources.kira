@@ -46,55 +46,59 @@ public function dawnCreateBuffer(
     context: RawPtr,
     descriptor: borrow BufferDescriptor
 ) -> BufferResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = descriptor.data.count * sizeOf<F32>()
+        let id = match dawnMakeBuffer(
+            state,
+            descriptor.label,
+            dawnBufferUsage(descriptor.usage),
+            byteCount
+        ) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        if descriptor.data.count > 0 {
+            wgpuQueueWriteBuffer(
+                state.dawn.queue,
+                dawnObject(state, id),
+                U64(0),
+                narrowFloats(descriptor.data),
+                U64(byteCount)
+            )
+        }
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = descriptor.data.count * sizeOf<F32>()
-    let id = match dawnMakeBuffer(
-        state,
-        descriptor.label,
-        dawnBufferUsage(descriptor.usage),
-        byteCount
-    ) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    if descriptor.data.count > 0 {
-        wgpuQueueWriteBuffer(
-            state.dawn.queue,
-            dawnObject(state, id),
-            U64(0),
-            narrowFloats(descriptor.data),
-            U64(byteCount)
-        )
-    }
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
 }
 
 public function dawnCreateIndexBuffer(
     context: RawPtr,
     descriptor: borrow IndexBufferDescriptor
 ) -> BufferResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = descriptor.data.count * sizeOf<U32>()
+        let id = match dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Index), byteCount) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        if descriptor.data.count > 0 {
+            wgpuQueueWriteBuffer(
+                state.dawn.queue,
+                dawnObject(state, id),
+                U64(0),
+                narrowWords(descriptor.data),
+                U64(byteCount)
+            )
+        }
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = descriptor.data.count * sizeOf<U32>()
-    let id = match dawnMakeBuffer(state, descriptor.label, dawnBufferUsage(.Index), byteCount) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    if descriptor.data.count > 0 {
-        wgpuQueueWriteBuffer(
-            state.dawn.queue,
-            dawnObject(state, id),
-            U64(0),
-            narrowWords(descriptor.data),
-            U64(byteCount)
-        )
-    }
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
 }
 
 // A buffer whose payload is 32-bit WORDS rather than floats — a kernel's
@@ -105,19 +109,21 @@ public function dawnCreateStorageBufferWords(
     label: borrow String,
     data: borrow[U32]
 ) -> BufferResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = data.count * sizeOf<U32>()
+        let id = match dawnMakeBuffer(state, label, dawnBufferUsage(.Storage), byteCount) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        if data.count > 0 {
+            wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), data, U64(byteCount))
+        }
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = data.count * sizeOf<U32>()
-    let id = match dawnMakeBuffer(state, label, dawnBufferUsage(.Storage), byteCount) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    if data.count > 0 {
-        wgpuQueueWriteBuffer(state.dawn.queue, dawnObject(state, id), U64(0), data, U64(byteCount))
-    }
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: dawnAlignedSize(byteCount) })
 }
 
 // A buffer the CPU rewrites every frame, and the block it writes into.
@@ -131,33 +137,35 @@ public function dawnCreateDynamicBuffer(
     label: borrow String,
     floatCapacity: Number
 ) -> DynamicBufferResult {
-    if !dawnHasDevice(context) || floatCapacity <= 0 {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = dawnAlignedSize(floatCapacity * sizeOf<F32>())
-    let usage = DawnVocabulary.bufferUsageCopyDestination
-        | DawnVocabulary.bufferUsageCopySource
-        | DawnVocabulary.bufferUsageVertex
-        | DawnVocabulary.bufferUsageIndex
-        | DawnVocabulary.bufferUsageStorage
-        | DawnVocabulary.bufferUsageUniform
-    let id = match dawnMakeBuffer(state, label, usage, byteCount) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    let contents = allocateZeroed(memoryLayout(byteCount, alignOf<U64>()))
-    if isNull(contents) {
-        dawnDestroyBufferId(state, id)
-        return .Error(.DeviceRefused)
-    }
-    dawnAttachExtra(state, id, contents)
-    return .Ok(
-        DynamicBuffer {
-            buffer: GraphicsBuffer { id: BufferId(id), byteSize: byteCount },
-            contents: contents
+    unsafe {
+        if !dawnHasDevice(context) || floatCapacity <= 0 {
+            return .Error(.DeviceRefused)
         }
-    )
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = dawnAlignedSize(floatCapacity * sizeOf<F32>())
+        let usage = DawnVocabulary.bufferUsageCopyDestination
+            | DawnVocabulary.bufferUsageCopySource
+            | DawnVocabulary.bufferUsageVertex
+            | DawnVocabulary.bufferUsageIndex
+            | DawnVocabulary.bufferUsageStorage
+            | DawnVocabulary.bufferUsageUniform
+        let id = match dawnMakeBuffer(state, label, usage, byteCount) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        let contents = allocateZeroed(memoryLayout(byteCount, alignOf<U64>()))
+        if isNull(contents) {
+            dawnDestroyBufferId(state, id)
+            return .Error(.DeviceRefused)
+        }
+        dawnAttachExtra(state, id, contents)
+        return .Ok(
+            DynamicBuffer {
+                buffer: GraphicsBuffer { id: BufferId(id), byteSize: byteCount },
+                contents: contents
+            }
+        )
+    }
 }
 
 public function dawnCommitDynamicBuffer(
@@ -166,21 +174,23 @@ public function dawnCommitDynamicBuffer(
     contents: RawPtr,
     floatCount: Number
 ) {
-    if !dawnHasDevice(context) || buffer.id == 0 || isNull(contents) || floatCount <= 0 {
-        return
+    unsafe {
+        if !dawnHasDevice(context) || buffer.id == 0 || isNull(contents) || floatCount <= 0 {
+            return
+        }
+        let state = nativeRecover<GraphicsRuntimeState>(context)
+        let target = dawnObject(state, buffer.id.raw)
+        if isNull(target) {
+            return
+        }
+        wgpuQueueWriteBuffer(
+            state.dawn.queue,
+            target,
+            U64(0),
+            contents,
+            U64(dawnAlignedSize(floatCount * sizeOf<F32>()))
+        )
     }
-    let state = nativeRecover<GraphicsRuntimeState>(context)
-    let target = dawnObject(state, buffer.id.raw)
-    if isNull(target) {
-        return
-    }
-    wgpuQueueWriteBuffer(
-        state.dawn.queue,
-        target,
-        U64(0),
-        contents,
-        U64(dawnAlignedSize(floatCount * sizeOf<F32>()))
-    )
 }
 
 public function dawnDestroyBufferId(state: borrow mut GraphicsRuntimeState, id: U32) {
@@ -206,29 +216,31 @@ public function dawnReadBufferWord(
     buffer: borrow GraphicsBuffer,
     index: Number
 ) -> BufferReadResult {
-    if !dawnHasDevice(context) {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !dawnHasDevice(context) {
+            return .Error(.DeviceRefused)
+        }
+        if buffer.id == 0 || index < 0 {
+            return .Error(.NoSuchWord)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let source = dawnObject(state, buffer.id.raw)
+        if isNull(source) || (index + 1) * sizeOf<U32>() > buffer.byteSize {
+            return .Error(.NoSuchWord)
+        }
+        // Everything the frame has recorded so far has to have RUN before its result
+        // can be copied back: the queue orders submissions, but nothing that is still
+        // sitting on the frame's encoder has been submitted at all.
+        dawnSubmitEncoder(state)
+        let staging = match dawnCopyWordOut(state, source, index) {
+            Some(staging) -> staging
+            None -> return .Error(.DeviceRefused)
+        }
+        let outcome = dawnReadStagedWord(state, staging, context)
+        wgpuBufferDestroy(staging)
+        wgpuBufferRelease(staging)
+        return outcome
     }
-    if buffer.id == 0 || index < 0 {
-        return .Error(.NoSuchWord)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let source = dawnObject(state, buffer.id.raw)
-    if isNull(source) || (index + 1) * sizeOf<U32>() > buffer.byteSize {
-        return .Error(.NoSuchWord)
-    }
-    // Everything the frame has recorded so far has to have RUN before its result
-    // can be copied back: the queue orders submissions, but nothing that is still
-    // sitting on the frame's encoder has been submitted at all.
-    dawnSubmitEncoder(state)
-    let staging = match dawnCopyWordOut(state, source, index) {
-        Some(staging) -> staging
-        None -> return .Error(.DeviceRefused)
-    }
-    let outcome = dawnReadStagedWord(state, staging, context)
-    wgpuBufferDestroy(staging)
-    wgpuBufferRelease(staging)
-    return outcome
 }
 
 // The word a staging buffer holds, once the device has mapped it.
@@ -337,10 +349,12 @@ public function dawnBufferMapped(
     userdata1: RawPtr,
     userdata2: RawPtr
 ) -> Void {
-    var state = nativeRecover<GraphicsRuntimeState>(userdata1)
-    state.dawn.mapResolved = true
-    state.dawn.mapSucceeded = status == DawnVocabulary.mapSucceeded
-    if !state.dawn.mapSucceeded {
-        log fault("refused a buffer map", view: dawnViewText(message))
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(userdata1)
+        state.dawn.mapResolved = true
+        state.dawn.mapSucceeded = status == DawnVocabulary.mapSucceeded
+        if !state.dawn.mapSucceeded {
+            log fault("refused a buffer map", view: dawnViewText(message))
+        }
     }
 }

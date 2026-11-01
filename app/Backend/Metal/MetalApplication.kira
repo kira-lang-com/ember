@@ -18,39 +18,41 @@ public function metalRunApplication(
     app: borrow GraphicsApplication,
     runtimeUserData: RawPtr
 ): Void {
-    // Become a foreground GUI app BEFORE creating the Metal device. The device
-    // (MTLCreateSystemDefaultDevice) and the window both need a WindowServer
-    // connection; establishing the app up front keeps the ordering explicit.
-    if metalUsesUIKit!() {
-        match metalUIKitLaunchApplication(app, runtimeUserData) {
-            Ok -> return
-            Error(failure) -> {
-                log fault("UIKit could not launch the application", trace: traceText(failure))
-                return
+    unsafe {
+        // Become a foreground GUI app BEFORE creating the Metal device. The device
+        // (MTLCreateSystemDefaultDevice) and the window both need a WindowServer
+        // connection; establishing the app up front keeps the ordering explicit.
+        if metalUsesUIKit!() {
+            match metalUIKitLaunchApplication(app, runtimeUserData) {
+                Ok -> return
+                Error(failure) -> {
+                    log fault("UIKit could not launch the application", trace: traceText(failure))
+                    return
+                }
             }
         }
+        metalActivateApp()
+        // One autorelease pool around the whole run; per-frame pools drain inside the
+        // loop. The Metal shader compiler and Foundation helpers create many autoreleased
+        // temporaries, and draining them at well-defined points keeps resource creation
+        // deterministic and bounds memory over a long-running window.
+        let pool = metalAutoreleasePoolPush()
+        let ctxPtr = metalContextAlloc()
+
+        // The recovered runtime state only carries the user pointer; lifecycle handlers
+        // come directly from the borrowed application (closures captured in the app do
+        // not survive the nativeState round-trip on the hybrid backend, but the borrowed
+        // `app` retains them intact).
+        var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        let userData = state.userData
+
+        if metalEnvIsSet("KIRA_METAL_OFFSCREEN") || harnessKnobs(app).headless {
+            metalRunOffscreenApplication(app, ctxPtr, userData, pool)
+            return
+        }
+
+        metalRunWindow(app, ctxPtr, runtimeUserData, pool)
     }
-    metalActivateApp()
-    // One autorelease pool around the whole run; per-frame pools drain inside the
-    // loop. The Metal shader compiler and Foundation helpers create many autoreleased
-    // temporaries, and draining them at well-defined points keeps resource creation
-    // deterministic and bounds memory over a long-running window.
-    let pool = metalAutoreleasePoolPush()
-    let ctxPtr = metalContextAlloc()
-
-    // The recovered runtime state only carries the user pointer; lifecycle handlers
-    // come directly from the borrowed application (closures captured in the app do
-    // not survive the nativeState round-trip on the hybrid backend, but the borrowed
-    // `app` retains them intact).
-    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    let userData = state.userData
-
-    if metalEnvIsSet("KIRA_METAL_OFFSCREEN") || harnessKnobs(app).headless {
-        metalRunOffscreenApplication(app, ctxPtr, userData, pool)
-        return
-    }
-
-    metalRunWindow(app, ctxPtr, runtimeUserData, pool)
 }
 
 // The window `app` asks for, with the context's layer attached to its view. A
@@ -71,34 +73,36 @@ function metalRunWindow(
     runtimeUserData: RawPtr,
     pool: RawPtr
 ) {
-    let userData = nativeRecover<GraphicsRuntimeState>(runtimeUserData).userData
-    // Launch harness: capture destination, the frame to take it on, and how many
-    // frames the run lasts — the same knobs the Dawn and Vulkan loops resolve,
-    // so `--capture` means the same thing on every backend rather than nothing
-    // on this one.
-    let knobs = harnessKnobs(app)
-    let view = metalShowWindow(app, ctxPtr, knobs.capture != .None)
-    emberLiveBackendInitialized()
-    let onInit: (Graphics) -> Void = app.initHandler
-    onInit(Graphics { userData: userData, backend: .Metal, backendContext: ctxPtr })
+    unsafe {
+        let userData = nativeRecover<GraphicsRuntimeState>(runtimeUserData).userData
+        // Launch harness: capture destination, the frame to take it on, and how many
+        // frames the run lasts — the same knobs the Dawn and Vulkan loops resolve,
+        // so `--capture` means the same thing on every backend rather than nothing
+        // on this one.
+        let knobs = harnessKnobs(app)
+        let view = metalShowWindow(app, ctxPtr, knobs.capture != .None)
+        emberLiveBackendInitialized()
+        let onInit: (Graphics) -> Void = app.initHandler
+        onInit(Graphics { userData: userData, backend: .Metal, backendContext: ctxPtr })
 
-    let live = MetalLiveState { ctx: ctxPtr, userData: userData, runtimeUserData: runtimeUserData }
-    let liveStorage = nativeState(move live)
-    var run = metalWindowRunFor(app, move knobs)
-    run.ctx = ctxPtr
-    run.view = view
-    run.nsApp = metalSharedApp()
-    run.hostWindow = metalMsgSend(view, metalSel("window"))
-    run.liveHandle = nativeUserDataBorrow(liveStorage)
-    run.userData = userData
-    run.pool = pool
-    // A window-resize delegate that renders during a drag. AppKit runs a modal
-    // resize-tracking loop inside -sendEvent:, so the main loop cannot update
-    // layout until the delegate re-enters the frame handler.
-    if !isNull(run.hostWindow) {
-        run.resizeDelegate = metalInstallResizeDelegate(run.hostWindow, run.liveHandle)
+        let live = MetalLiveState { ctx: ctxPtr, userData: userData, runtimeUserData: runtimeUserData }
+        let liveStorage = nativeState(move live)
+        var run = metalWindowRunFor(app, move knobs)
+        run.ctx = ctxPtr
+        run.view = view
+        run.nsApp = metalSharedApp()
+        run.hostWindow = metalMsgSend(view, metalSel("window"))
+        run.liveHandle = nativeUserDataBorrow(liveStorage)
+        run.userData = userData
+        run.pool = pool
+        // A window-resize delegate that renders during a drag. AppKit runs a modal
+        // resize-tracking loop inside -sendEvent:, so the main loop cannot update
+        // layout until the delegate re-enters the frame handler.
+        if !isNull(run.hostWindow) {
+            run.resizeDelegate = metalInstallResizeDelegate(run.hostWindow, run.liveHandle)
+        }
+        metalDriveWindow(app, move run, move liveStorage)
     }
-    metalDriveWindow(app, move run, move liveStorage)
 }
 
 // The parts of a window run the launch environment decides: the scripted

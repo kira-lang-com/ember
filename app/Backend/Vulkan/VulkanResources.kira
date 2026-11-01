@@ -83,52 +83,56 @@ public function vulkanCreateBuffer(
     context: RawPtr,
     descriptor: borrow BufferDescriptor
 ) -> BufferResult {
-    if !vulkanRequireDevice(context, "vulkanCreateBuffer") {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateBuffer") {
+            return .Error(.DeviceRefused)
+        }
+        if descriptor.data.count <= 0 {
+            log fault("a vertex buffer was created with no data; Vulkan cannot make an empty buffer")
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = descriptor.data.count * sizeOf<F32>()
+        let request = VulkanBufferRequest {
+            label: descriptor.label,
+            usage: vulkanBufferUsage(descriptor.usage),
+            byteSize: byteCount
+        }
+        let id = match vulkanHostBuffer(state.vulkan, request) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
     }
-    if descriptor.data.count <= 0 {
-        log fault("a vertex buffer was created with no data; Vulkan cannot make an empty buffer")
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = descriptor.data.count * sizeOf<F32>()
-    let request = VulkanBufferRequest {
-        label: descriptor.label,
-        usage: vulkanBufferUsage(descriptor.usage),
-        byteSize: byteCount
-    }
-    let id = match vulkanHostBuffer(state.vulkan, request) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
 public function vulkanCreateIndexBuffer(
     context: RawPtr,
     descriptor: borrow IndexBufferDescriptor
 ) -> BufferResult {
-    if !vulkanRequireDevice(context, "vulkanCreateIndexBuffer") {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateIndexBuffer") {
+            return .Error(.DeviceRefused)
+        }
+        if descriptor.data.count <= 0 {
+            log fault("an index buffer was created with no data")
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = descriptor.data.count * sizeOf<U32>()
+        let request = VulkanBufferRequest {
+            label: descriptor.label,
+            usage: vulkanBufferUsage(.Index),
+            byteSize: byteCount
+        }
+        let id = match vulkanHostBuffer(state.vulkan, request) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        vulkanWriteWords(state.vulkan, id, narrowWords(descriptor.data))
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
     }
-    if descriptor.data.count <= 0 {
-        log fault("an index buffer was created with no data")
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = descriptor.data.count * sizeOf<U32>()
-    let request = VulkanBufferRequest {
-        label: descriptor.label,
-        usage: vulkanBufferUsage(.Index),
-        byteSize: byteCount
-    }
-    let id = match vulkanHostBuffer(state.vulkan, request) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    vulkanWriteWords(state.vulkan, id, narrowWords(descriptor.data))
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
 public function vulkanCreateStorageBufferWords(
@@ -136,26 +140,28 @@ public function vulkanCreateStorageBufferWords(
     label: borrow String,
     data: borrow[U32]
 ) -> BufferResult {
-    if !vulkanRequireDevice(context, "vulkanCreateStorageBufferWords") {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateStorageBufferWords") {
+            return .Error(.DeviceRefused)
+        }
+        if data.count <= 0 {
+            log fault("a storage buffer was created with no data", label: label)
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let byteCount = data.count * sizeOf<U32>()
+        let request = VulkanBufferRequest {
+            label: label,
+            usage: vulkanBufferUsage(.Storage),
+            byteSize: byteCount
+        }
+        let id = match vulkanHostBuffer(state.vulkan, request) {
+            Some(id) -> id
+            None -> return .Error(.DeviceRefused)
+        }
+        vulkanWriteWords(state.vulkan, id, data)
+        return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
     }
-    if data.count <= 0 {
-        log fault("a storage buffer was created with no data", label: label)
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let byteCount = data.count * sizeOf<U32>()
-    let request = VulkanBufferRequest {
-        label: label,
-        usage: vulkanBufferUsage(.Storage),
-        byteSize: byteCount
-    }
-    let id = match vulkanHostBuffer(state.vulkan, request) {
-        Some(id) -> id
-        None -> return .Error(.DeviceRefused)
-    }
-    vulkanWriteWords(state.vulkan, id, data)
-    return .Ok(GraphicsBuffer { id: BufferId(id), byteSize: byteCount })
 }
 
 public function vulkanCreateDynamicBuffer(
@@ -163,28 +169,30 @@ public function vulkanCreateDynamicBuffer(
     label: borrow String,
     floatCapacity: Number
 ) -> DynamicBufferResult {
-    if !vulkanRequireDevice(context, "vulkanCreateDynamicBuffer") {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateDynamicBuffer") {
+            return .Error(.DeviceRefused)
+        }
+        if floatCapacity <= 0 {
+            log fault(
+                "a dynamic buffer was created with no capacity",
+                label: label,
+                floatCapacity: floatCapacity
+            )
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let ring = match vulkanNewRingBuffer(
+            state.vulkan,
+            label,
+            VulkanFrameRing.dynamicUsage,
+            floatCapacity
+        ) {
+            Some(ring) -> ring
+            None -> return .Error(.DeviceRefused)
+        }
+        return vulkanMappedDynamicBuffer(state.vulkan, ring, label)
     }
-    if floatCapacity <= 0 {
-        log fault(
-            "a dynamic buffer was created with no capacity",
-            label: label,
-            floatCapacity: floatCapacity
-        )
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let ring = match vulkanNewRingBuffer(
-        state.vulkan,
-        label,
-        VulkanFrameRing.dynamicUsage,
-        floatCapacity
-    ) {
-        Some(ring) -> ring
-        None -> return .Error(.DeviceRefused)
-    }
-    return vulkanMappedDynamicBuffer(state.vulkan, ring, label)
 }
 
 // The ring as a dynamic buffer, with the host-visible memory the CPU writes
@@ -210,60 +218,64 @@ public function vulkanDynamicBufferFrameStart(
     context: RawPtr,
     buffer: borrow GraphicsBuffer
 ) -> Number {
-    if !vulkanRequireDevice(context, "vulkanDynamicBufferFrameStart") {
-        return 0
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanDynamicBufferFrameStart") {
+            return 0
+        }
+        if buffer.id == 0 {
+            log fault("a dynamic buffer that was never created (id 0) was used")
+            return 0
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let stride = vulkanObjectStride(state.vulkan, buffer.id.raw)
+        let slot = state.vulkan.dynamicFrame % VulkanFrameRing.slots
+        let offset = stride * slot
+        vulkanSetObjectOffset(state.vulkan, buffer.id.raw, offset)
+        return offset
     }
-    if buffer.id == 0 {
-        log fault("a dynamic buffer that was never created (id 0) was used")
-        return 0
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let stride = vulkanObjectStride(state.vulkan, buffer.id.raw)
-    let slot = state.vulkan.dynamicFrame % VulkanFrameRing.slots
-    let offset = stride * slot
-    vulkanSetObjectOffset(state.vulkan, buffer.id.raw, offset)
-    return offset
 }
 
 public function vulkanCreateUniform(
     context: RawPtr,
     descriptor: borrow UniformDescriptor
 ) -> UniformResult {
-    if !vulkanRequireDevice(context, "vulkanCreateUniform") {
-        return .Error(.DeviceRefused)
-    }
-    if descriptor.expectedFloatCount <= 0 || descriptor.data.count != descriptor.expectedFloatCount {
-        log fault(
-            "a uniform was given a different number of floats than it declared",
-            expectedFloatCount: descriptor.expectedFloatCount,
-            count: descriptor.data.count
-        )
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let ring = match vulkanNewRingBuffer(
-        state.vulkan,
-        descriptor.label,
-        VulkanVocabulary.bufferUsageUniform,
-        descriptor.expectedFloatCount
-    ) {
-        Some(ring) -> ring
-        None -> return .Error(.DeviceRefused)
-    }
-    let id = ring.id
-    vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
-    return .Ok(
-        GraphicsUniform {
-            storage: nativeState(
-                UniformState {
-                    label: descriptor.label,
-                    expectedFloatCount: descriptor.expectedFloatCount,
-                    values: descriptor.data
-                }
-            ),
-            id: UniformId(id)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateUniform") {
+            return .Error(.DeviceRefused)
         }
-    )
+        if descriptor.expectedFloatCount <= 0 || descriptor.data.count != descriptor.expectedFloatCount {
+            log fault(
+                "a uniform was given a different number of floats than it declared",
+                expectedFloatCount: descriptor.expectedFloatCount,
+                count: descriptor.data.count
+            )
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let ring = match vulkanNewRingBuffer(
+            state.vulkan,
+            descriptor.label,
+            VulkanVocabulary.bufferUsageUniform,
+            descriptor.expectedFloatCount
+        ) {
+            Some(ring) -> ring
+            None -> return .Error(.DeviceRefused)
+        }
+        let id = ring.id
+        vulkanWriteFloats(state.vulkan, id, narrowFloats(descriptor.data), 0)
+        return .Ok(
+            GraphicsUniform {
+                storage: nativeState(
+                    UniformState {
+                        label: descriptor.label,
+                        expectedFloatCount: descriptor.expectedFloatCount,
+                        values: descriptor.data
+                    }
+                ),
+                id: UniformId(id)
+            }
+        )
+    }
 }
 
 public function vulkanUpdateUniform(
@@ -271,49 +283,53 @@ public function vulkanUpdateUniform(
     uniform: borrow GraphicsUniform,
     data: borrow[Number]
 ) {
-    if !vulkanRequireDevice(context, "vulkanUpdateUniform") {
-        return
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanUpdateUniform") {
+            return
+        }
+        if uniform.id == 0 {
+            log fault("a uniform that was never created (id 0) was updated")
+            return
+        }
+        var uniformState = nativeRecover<UniformState>(uniform.storage)
+        if data.count != uniformState.expectedFloatCount {
+            log fault("uniform update size does not match its declaration")
+            return
+        }
+        uniformState.values = data
     }
-    if uniform.id == 0 {
-        log fault("a uniform that was never created (id 0) was updated")
-        return
-    }
-    var uniformState = nativeRecover<UniformState>(uniform.storage)
-    if data.count != uniformState.expectedFloatCount {
-        log fault("uniform update size does not match its declaration")
-        return
-    }
-    uniformState.values = data
 }
 
 public function vulkanCreateSampler(
     context: RawPtr,
     descriptor: borrow SamplerDescriptor
 ) -> SamplerResult {
-    if !vulkanRequireDevice(context, "vulkanCreateSampler") {
-        return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateSampler") {
+            return .Error(.DeviceRefused)
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let info = VkSamplerCreateInfo {
+            sType: VulkanVocabulary.structureSamplerCreateInfo,
+            magFilter: vulkanSamplerFilter(descriptor.magFilter),
+            minFilter: vulkanSamplerFilter(descriptor.minFilter),
+            mipmapMode: VulkanVocabulary.mipmapNearest,
+            addressModeU: vulkanAddressMode(descriptor.addressModeU),
+            addressModeV: vulkanAddressMode(descriptor.addressModeV),
+            addressModeW: VulkanVocabulary.samplerAddressClamp,
+            maxAnisotropy: 1.0,
+            maxLod: 1.0
+        }
+        let samplerSlot = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateSampler(state.vulkan.device, info, nullPointer(), samplerSlot.pointer())
+        )
+        let sampler = boxedValue<RawPtr>(samplerSlot)
+        if result != .Success || isNull(sampler) {
+            log fault("could not create sampler", label: descriptor.label, result: result)
+            return .Error(.DeviceRefused)
+        }
+        let id = vulkanRegisterObject(state.vulkan, VulkanObject { kind: .Sampler, handle: sampler })
+        return .Ok(GraphicsSampler { id: SamplerId(id) })
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let info = VkSamplerCreateInfo {
-        sType: VulkanVocabulary.structureSamplerCreateInfo,
-        magFilter: vulkanSamplerFilter(descriptor.magFilter),
-        minFilter: vulkanSamplerFilter(descriptor.minFilter),
-        mipmapMode: VulkanVocabulary.mipmapNearest,
-        addressModeU: vulkanAddressMode(descriptor.addressModeU),
-        addressModeV: vulkanAddressMode(descriptor.addressModeV),
-        addressModeW: VulkanVocabulary.samplerAddressClamp,
-        maxAnisotropy: 1.0,
-        maxLod: 1.0
-    }
-    let samplerSlot = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateSampler(state.vulkan.device, info, nullPointer(), samplerSlot.pointer())
-    )
-    let sampler = boxedValue<RawPtr>(samplerSlot)
-    if result != .Success || isNull(sampler) {
-        log fault("could not create sampler", label: descriptor.label, result: result)
-        return .Error(.DeviceRefused)
-    }
-    let id = vulkanRegisterObject(state.vulkan, VulkanObject { kind: .Sampler, handle: sampler })
-    return .Ok(GraphicsSampler { id: SamplerId(id) })
 }

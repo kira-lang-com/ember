@@ -68,38 +68,44 @@ function panelResources(graphics: borrow Graphics) -> Result<PanelResources, Res
 }
 
 function panelInit(graphics: Graphics) {
-    var state = nativeRecover<PanelState>(graphics.userData)
-    match panelResources(graphics) {
-        Ok(resources) -> state.resources = .Some(move resources)
-        Error(failure) -> reportMissingResource("the panel", move failure)
+    unsafe {
+        var state = nativeRecover<PanelState>(graphics.userData)
+        match panelResources(graphics) {
+            Ok(resources) -> state.resources = .Some(move resources)
+            Error(failure) -> reportMissingResource("the panel", move failure)
+        }
     }
 }
 
 function panelFrame(frame: borrow mut RenderFrame) {
-    let state = nativeRecover<PanelState>(frame.userData)
-    let encoder = frame.beginRenderPass(
-        clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.06, b: 0.08 })
-    )
-    match state.resources {
-        Some(resources) -> {
-            encoder.setPipeline(resources.pipeline)
-            encoder.setVertexBuffer(resources.vertices)
-            encoder.draw(Panel.vertexCount)
+    unsafe {
+        let state = nativeRecover<PanelState>(frame.userData)
+        let encoder = frame.beginRenderPass(
+            clearSwapchainRenderPass(RGBAColor { r: 0.05, g: 0.06, b: 0.08 })
+        )
+        match state.resources {
+            Some(resources) -> {
+                encoder.setPipeline(resources.pipeline)
+                encoder.setVertexBuffer(resources.vertices)
+                encoder.draw(Panel.vertexCount)
+            }
+            None -> {}
         }
-        None -> {}
+        frame.endPass()
     }
-    frame.endPass()
 }
 
 function panelCleanup(graphics: Graphics) {
-    let state = nativeRecover<PanelState>(graphics.userData)
-    match state.resources {
-        Some(resources) -> {
-            graphics.destroyBuffer(resources.vertices)
-            graphics.destroyRenderPipeline(resources.pipeline)
-            graphics.destroyShader(copy resources.shader)
+    unsafe {
+        let state = nativeRecover<PanelState>(graphics.userData)
+        match state.resources {
+            Some(resources) -> {
+                graphics.destroyBuffer(resources.vertices)
+                graphics.destroyRenderPipeline(resources.pipeline)
+                graphics.destroyShader(copy resources.shader)
+            }
+            None -> {}
         }
-        None -> {}
     }
 }
 

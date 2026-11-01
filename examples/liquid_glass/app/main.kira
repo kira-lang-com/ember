@@ -322,10 +322,12 @@ function glassResources(graphics: borrow Graphics) -> Result<GlassResources, Res
 }
 
 function glassInit(graphics: Graphics) {
-    var state = nativeRecover<GlassState>(graphics.userData)
-    match glassResources(graphics) {
-        Ok(resources) -> state.resources = .Some(move resources)
-        Error(failure) -> reportMissingResource("the liquid glass", move failure)
+    unsafe {
+        var state = nativeRecover<GlassState>(graphics.userData)
+        match glassResources(graphics) {
+            Ok(resources) -> state.resources = .Some(move resources)
+            Error(failure) -> reportMissingResource("the liquid glass", move failure)
+        }
     }
 }
 
@@ -378,10 +380,12 @@ function glassDraw(frame: borrow mut RenderFrame, resources: borrow GlassResourc
 }
 
 function glassFrame(frame: borrow mut RenderFrame) {
-    let state = nativeRecover<GlassState>(frame.userData)
-    match state.resources {
-        Some(resources) -> glassDraw(frame, resources)
-        None -> {}
+    unsafe {
+        let state = nativeRecover<GlassState>(frame.userData)
+        match state.resources {
+            Some(resources) -> glassDraw(frame, resources)
+            None -> {}
+        }
     }
 }
 
@@ -400,17 +404,19 @@ function glassDestroyTargets(graphics: borrow Graphics, targets: borrow GlassTar
 }
 
 function glassCleanup(graphics: Graphics) {
-    let state = nativeRecover<GlassState>(graphics.userData)
-    match state.resources {
-        Some(resources) -> {
-            glassDestroyStage(graphics, resources.stages.composite)
-            glassDestroyStage(graphics, resources.stages.blur.vertical)
-            glassDestroyStage(graphics, resources.stages.blur.horizontal)
-            glassDestroyStage(graphics, resources.stages.background)
-            glassDestroyTargets(graphics, resources.targets)
-            graphics.destroyBuffer(resources.vertices)
+    unsafe {
+        let state = nativeRecover<GlassState>(graphics.userData)
+        match state.resources {
+            Some(resources) -> {
+                glassDestroyStage(graphics, resources.stages.composite)
+                glassDestroyStage(graphics, resources.stages.blur.vertical)
+                glassDestroyStage(graphics, resources.stages.blur.horizontal)
+                glassDestroyStage(graphics, resources.stages.background)
+                glassDestroyTargets(graphics, resources.targets)
+                graphics.destroyBuffer(resources.vertices)
+            }
+            None -> {}
         }
-        None -> {}
     }
 }
 

@@ -401,50 +401,54 @@ public function vulkanCreateRenderPipeline(
     context: RawPtr,
     descriptor: borrow RenderPipelineDescriptor
 ) -> PipelineResult {
-    if !vulkanRequireDevice(context, "vulkanCreateRenderPipeline") {
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let id = match vulkanCreateRenderPipelineState(state.vulkan, descriptor) {
-        Ok(id) -> PipelineId(U32(id))
-        Error(failure) -> {
-            log fault(
-                "could not create a render pipeline",
-                failure,
-                label: descriptor.label,
-                shader: descriptor.shader.id
-            )
-            return .Error(vulkanPipelineFailureReason(failure))
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateRenderPipeline") {
+            return .Error(.DeviceRefused)
         }
-    }
-    return .Ok(
-        RenderPipeline {
-            id: id,
-            drawPipelineId: id,
-            indexedPipelineId: id,
-            hasPositionAttribute: descriptor.shader.hasPositionAttribute,
-            requiredUniformMask: descriptor.shader.requiredUniformMask,
-            availableUniformMask: descriptor.shader.availableUniformMask,
-            uniformBlocks: descriptor.shader.uniformBlocks
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let id = match vulkanCreateRenderPipelineState(state.vulkan, descriptor) {
+            Ok(id) -> PipelineId(U32(id))
+            Error(failure) -> {
+                log fault(
+                    "could not create a render pipeline",
+                    failure,
+                    label: descriptor.label,
+                    shader: descriptor.shader.id
+                )
+                return .Error(vulkanPipelineFailureReason(failure))
+            }
         }
-    )
+        return .Ok(
+            RenderPipeline {
+                id: id,
+                drawPipelineId: id,
+                indexedPipelineId: id,
+                hasPositionAttribute: descriptor.shader.hasPositionAttribute,
+                requiredUniformMask: descriptor.shader.requiredUniformMask,
+                availableUniformMask: descriptor.shader.availableUniformMask,
+                uniformBlocks: descriptor.shader.uniformBlocks
+            }
+        )
+    }
 }
 
 public function vulkanDestroyPipeline(context: RawPtr, pipeline: borrow RenderPipeline) {
-    if !vulkanHasDevice(context) || pipeline.id == 0 {
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let index = Number(pipeline.id.raw) - 1
-    if index >= state.vulkan.pipelines.count || !state.vulkan.pipelines[index].live {
-        return
-    }
-    if state.vulkan.frameActive {
-        for pending in state.vulkan.pendingRetirePipelines {
-            if pending == index { return }
+    unsafe {
+        if !vulkanHasDevice(context) || pipeline.id == 0 {
+            return
         }
-        state.vulkan.pendingRetirePipelines.append(index)
-        return
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let index = Number(pipeline.id.raw) - 1
+        if index >= state.vulkan.pipelines.count || !state.vulkan.pipelines[index].live {
+            return
+        }
+        if state.vulkan.frameActive {
+            for pending in state.vulkan.pendingRetirePipelines {
+                if pending == index { return }
+            }
+            state.vulkan.pendingRetirePipelines.append(index)
+            return
+        }
+        vulkanReleasePipeline(state.vulkan, index)
     }
-    vulkanReleasePipeline(state.vulkan, index)
 }

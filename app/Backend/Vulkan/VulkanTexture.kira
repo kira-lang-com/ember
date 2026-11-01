@@ -283,39 +283,41 @@ public function vulkanCreateTexture(
     context: RawPtr,
     descriptor: borrow TextureDescriptor
 ) -> TextureResult {
-    if !vulkanRequireDevice(context, "vulkanCreateTexture") {
-        return .Error(.DeviceRefused)
-    }
-    if descriptor.width <= 0 || descriptor.height <= 0 || descriptor.format == .None {
-        log fault(
-            "a texture needs a size and a format",
-            width: descriptor.width,
-            height: descriptor.height,
-            format: descriptor.format
-        )
-        return .Error(.DeviceRefused)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let imageId = match vulkanCreateImageHandle(state.vulkan, descriptor) {
-        Ok(imageId) -> imageId
-        Error(failure) -> {
-            log fault("could not create a texture", failure, label: descriptor.label)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanCreateTexture") {
             return .Error(.DeviceRefused)
         }
-    }
-    let views = match vulkanCreateTextureViews(state.vulkan, imageId, descriptor.usage) {
-        Ok(views) -> views
-        Error(failure) -> {
-            vulkanReleaseObject(state.vulkan, imageId)
+        if descriptor.width <= 0 || descriptor.height <= 0 || descriptor.format == .None {
             log fault(
-                "could not create a view the texture's usage needs",
-                failure,
-                label: descriptor.label
+                "a texture needs a size and a format",
+                width: descriptor.width,
+                height: descriptor.height,
+                format: descriptor.format
             )
             return .Error(.DeviceRefused)
         }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let imageId = match vulkanCreateImageHandle(state.vulkan, descriptor) {
+            Ok(imageId) -> imageId
+            Error(failure) -> {
+                log fault("could not create a texture", failure, label: descriptor.label)
+                return .Error(.DeviceRefused)
+            }
+        }
+        let views = match vulkanCreateTextureViews(state.vulkan, imageId, descriptor.usage) {
+            Ok(views) -> views
+            Error(failure) -> {
+                vulkanReleaseObject(state.vulkan, imageId)
+                log fault(
+                    "could not create a view the texture's usage needs",
+                    failure,
+                    label: descriptor.label
+                )
+                return .Error(.DeviceRefused)
+            }
+        }
+        return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
     }
-    return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
 }
 
 function vulkanGraphicsTexture(
@@ -522,31 +524,33 @@ function vulkanUploadRows(
     pixels: borrow UploadPixels,
     rows: borrow VulkanRowRange
 ) {
-    if !vulkanRequireDevice(context, "vulkanUploadTexture") {
-        return
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanUploadTexture") {
+            return
+        }
+        let byteCount = uploadByteCount(pixels)
+        if texture.id == 0 || byteCount == 0 {
+            log fault(
+                "an upload needs a live texture and at least one byte",
+                texture: texture.id,
+                bytes: byteCount
+            )
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if state.vulkan.passActive {
+            log fault("end the Vulkan render pass before uploading a texture")
+            return
+        }
+        if !vulkanUploadFits(state.vulkan, texture, byteCount, rows) {
+            return
+        }
+        let staging = match vulkanStageUpload(state.vulkan, pixels, byteCount) {
+            Some(staging) -> staging
+            None -> return
+        }
+        vulkanCopyStaged(state.vulkan, staging, texture, rows)
     }
-    let byteCount = uploadByteCount(pixels)
-    if texture.id == 0 || byteCount == 0 {
-        log fault(
-            "an upload needs a live texture and at least one byte",
-            texture: texture.id,
-            bytes: byteCount
-        )
-        return
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    if state.vulkan.passActive {
-        log fault("end the Vulkan render pass before uploading a texture")
-        return
-    }
-    if !vulkanUploadFits(state.vulkan, texture, byteCount, rows) {
-        return
-    }
-    let staging = match vulkanStageUpload(state.vulkan, pixels, byteCount) {
-        Some(staging) -> staging
-        None -> return
-    }
-    vulkanCopyStaged(state.vulkan, staging, texture, rows)
 }
 
 public function vulkanRecordBufferToImage(

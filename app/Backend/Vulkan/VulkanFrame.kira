@@ -6,15 +6,17 @@ import Heap
 // the CPU-visible ring buffers before those buffers are reused.
 
 public function vulkanSubmitFrame(context: RawPtr, frame: borrow RenderFrame) {
-    if !vulkanRequireDevice(context, "vulkanSubmitFrame") { return }
-    var runtime = nativeRecover<GraphicsRuntimeState>(context)
-    vulkanSubmitFrameState(runtime.vulkan)
-    noteFrameCost(
-        runtime,
-        runtime.vulkan.stats.frameSeconds,
-        runtime.vulkan.stats.passCount,
-        runtime.vulkan.stats.drawCount
-    )
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanSubmitFrame") { return }
+        var runtime = nativeRecover<GraphicsRuntimeState>(context)
+        vulkanSubmitFrameState(runtime.vulkan)
+        noteFrameCost(
+            runtime,
+            runtime.vulkan.stats.frameSeconds,
+            runtime.vulkan.stats.passCount,
+            runtime.vulkan.stats.drawCount
+        )
+    }
 }
 
 // The semaphore a frame that presents signals once its commands finish, for

@@ -232,33 +232,35 @@ function vulkanTransferImported(
     texture: borrow GraphicsTexture,
     toPeer: Bool
 ) -> Bool {
-    if !vulkanRequireDevice(context, "vulkanTransferImported") || texture.id == 0 {
-        return false
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    let imageId = U32(texture.id)
-    if state.vulkan.frameActive {
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanTransferImported") || texture.id == 0 {
+            return false
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        let imageId = U32(texture.id)
+        if state.vulkan.frameActive {
+            if toPeer {
+                vulkanReleaseExternalImage(state.vulkan, imageId, VulkanVocabulary.aspectColor)
+            } else {
+                vulkanAcquireExternalImage(state.vulkan, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+            }
+            return true
+        }
+        let idle = vulkanResultOf(vkQueueWaitIdle(state.vulkan.queue))
+        if idle != .Success { return false }
+        match vulkanRestartCommandBuffer(state.vulkan, .OneTime) {
+            Ok -> {}
+            Error(failure) -> return false
+        }
         if toPeer {
             vulkanReleaseExternalImage(state.vulkan, imageId, VulkanVocabulary.aspectColor)
         } else {
             vulkanAcquireExternalImage(state.vulkan, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
         }
-        return true
-    }
-    let idle = vulkanResultOf(vkQueueWaitIdle(state.vulkan.queue))
-    if idle != .Success { return false }
-    match vulkanRestartCommandBuffer(state.vulkan, .OneTime) {
-        Ok -> {}
-        Error(failure) -> return false
-    }
-    if toPeer {
-        vulkanReleaseExternalImage(state.vulkan, imageId, VulkanVocabulary.aspectColor)
-    } else {
-        vulkanAcquireExternalImage(state.vulkan, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
-    }
-    match vulkanFlushCommands(state.vulkan) {
-        Ok -> return true
-        Error(failure) -> return false
+        match vulkanFlushCommands(state.vulkan) {
+            Ok -> return true
+            Error(failure) -> return false
+        }
     }
 }
 
@@ -276,41 +278,43 @@ public function vulkanImportTexture(
     context: RawPtr,
     memory: borrow ExportedMemory
 ) -> ImportedTextureResult {
-    if !vulkanRequireDevice(context, "vulkanImportTexture") {
-        return .Error(.Unimportable)
-    }
-    if memory.kind != .DmaBuf || memory.handle == 0 || memory.width == 0 || memory.height == 0 {
-        return .Error(.InvalidMemory)
-    }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    if !vulkanMemoryExportSupported(state.vulkan.device) {
-        return .Error(.Unimportable)
-    }
-    let imageId = match vulkanCreateImportedImage(state.vulkan, memory) {
-        Ok(imageId) -> imageId
-        Error(failure) -> return .Error(failure)
-    }
-    match vulkanReadyImported(state.vulkan, imageId) {
-        Ok -> {}
-        Error(failure) -> {
-            vulkanReleaseObject(state.vulkan, imageId)
-            log fault("could not ready an imported texture for sampling", failure)
-            return .Error(.DeviceRefused)
+    unsafe {
+        if !vulkanRequireDevice(context, "vulkanImportTexture") {
+            return .Error(.Unimportable)
         }
-    }
-    let views = match vulkanCreateTextureViews(state.vulkan, imageId, VulkanImport.usage) {
-        Ok(views) -> views
-        Error(failure) -> {
-            vulkanReleaseObject(state.vulkan, imageId)
-            log fault("could not create an imported texture's view", failure)
-            return .Error(.DeviceRefused)
+        if memory.kind != .DmaBuf || memory.handle == 0 || memory.width == 0 || memory.height == 0 {
+            return .Error(.InvalidMemory)
         }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if !vulkanMemoryExportSupported(state.vulkan.device) {
+            return .Error(.Unimportable)
+        }
+        let imageId = match vulkanCreateImportedImage(state.vulkan, memory) {
+            Ok(imageId) -> imageId
+            Error(failure) -> return .Error(failure)
+        }
+        match vulkanReadyImported(state.vulkan, imageId) {
+            Ok -> {}
+            Error(failure) -> {
+                vulkanReleaseObject(state.vulkan, imageId)
+                log fault("could not ready an imported texture for sampling", failure)
+                return .Error(.DeviceRefused)
+            }
+        }
+        let views = match vulkanCreateTextureViews(state.vulkan, imageId, VulkanImport.usage) {
+            Ok(views) -> views
+            Error(failure) -> {
+                vulkanReleaseObject(state.vulkan, imageId)
+                log fault("could not create an imported texture's view", failure)
+                return .Error(.DeviceRefused)
+            }
+        }
+        let descriptor = TextureDescriptor {
+            label: "imported",
+            width: memory.width,
+            height: memory.height,
+            usage: VulkanImport.usage
+        }
+        return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
     }
-    let descriptor = TextureDescriptor {
-        label: "imported",
-        width: memory.width,
-        height: memory.height,
-        usage: VulkanImport.usage
-    }
-    return .Ok(vulkanGraphicsTexture(descriptor, imageId, views))
 }

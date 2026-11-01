@@ -117,7 +117,9 @@ function registerWindowClass(windowClass: WindowClassPointer) -> U16
 // Whether the class is registered: `RegisterClassExA` answers a zero atom when
 // it refused.
 public function windowClassRegistered(windowClass: WindowClass) -> Bool {
-    return registerWindowClass(windowClass) != U16(0)
+    unsafe {
+        return registerWindowClass(windowClass) != U16(0)
+    }
 }
 
 public @FFI.Extern { library: user32, symbol: CreateWindowExA, abi: c }
@@ -184,7 +186,9 @@ namespace PeekMessageFlag {
 
 // Whether a message was waiting, taken off the queue into `messages`.
 public function messageWaiting(messages: WindowMessagePointer) -> Bool {
-    return peekMessage(messages, nullPointer(), U32(0), U32(0), PeekMessageFlag.remove) != 0
+    unsafe {
+        return peekMessage(messages, nullPointer(), U32(0), U32(0), PeekMessageFlag.remove) != 0
+    }
 }
 
 public @FFI.Extern { library: user32, symbol: TranslateMessage, abi: c }

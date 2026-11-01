@@ -72,39 +72,41 @@ function dawnAttachPlatformRuntime(
 }
 
 public function dawnRunApplication(app: borrow GraphicsApplication, runtimeUserData: RawPtr) {
-    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    state.dawn = dawnEmptyState()
-    readHarnessKnobs(state)
-    dawnReadGpuTraceKnob(state)
-    // System-DPI awareness before the window exists: a process that declares it
-    // later has already been told a scaled size for a window it has not opened.
-    // Declared only for an application that asked for a full-resolution
-    // framebuffer, which is what `highDpi` asks for; without it Windows renders
-    // the process at 96 DPI and upscales. Windows only: a Wayland surface is
-    // told its scale by the output it appears on.
-    if app.highDpi && targetPlatform!() == .Windows {
-        markProcessDpiAware()
-    }
-    match dawnStartRun(state, app, runtimeUserData) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault("could not start the Dawn run", failure)
-            dawnShutdown(state)
-            return
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        state.dawn = dawnEmptyState()
+        readHarnessKnobs(state)
+        dawnReadGpuTraceKnob(state)
+        // System-DPI awareness before the window exists: a process that declares it
+        // later has already been told a scaled size for a window it has not opened.
+        // Declared only for an application that asked for a full-resolution
+        // framebuffer, which is what `highDpi` asks for; without it Windows renders
+        // the process at 96 DPI and upscales. Windows only: a Wayland surface is
+        // told its scale by the output it appears on.
+        if app.highDpi && targetPlatform!() == .Windows {
+            markProcessDpiAware()
         }
+        match dawnStartRun(state, app, runtimeUserData) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not start the Dawn run", failure)
+                dawnShutdown(state)
+                return
+            }
+        }
+        emberLiveBackendInitialized()
+        let onInit: (Graphics) -> Void = state.app.initHandler
+        onInit(Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData })
+        dawnDriveFrames(state, runtimeUserData)
+        let onCleanup: (Graphics) -> Void = state.app.cleanupHandler
+        onCleanup(
+            Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData }
+        )
+        reportFrameCost(state)
+        dawnReportGpuTrace(state)
+        dawnReleaseDepthTarget(state)
+        dawnShutdown(state)
     }
-    emberLiveBackendInitialized()
-    let onInit: (Graphics) -> Void = state.app.initHandler
-    onInit(Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData })
-    dawnDriveFrames(state, runtimeUserData)
-    let onCleanup: (Graphics) -> Void = state.app.cleanupHandler
-    onCleanup(
-        Graphics { userData: state.userData, backend: .Dawn, backendContext: runtimeUserData }
-    )
-    reportFrameCost(state)
-    dawnReportGpuTrace(state)
-    dawnReleaseDepthTarget(state)
-    dawnShutdown(state)
 }
 
 // Moves the window's size on by a step, when a run asked to measure resizing.
@@ -245,14 +247,16 @@ public function dawnResizeIfNeeded(
 // one against an encoder the first still holds. The dropped frame costs a
 // repeated size; running it would corrupt the one in flight.
 public function dawnDriveResizeFrame(runtimeUserData: RawPtr) {
-    var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
-    if state.dawn.inFrame || state.dawn.quitRequested || isNull(state.dawn.device) {
-        return
+    unsafe {
+        var state = nativeRecover<GraphicsRuntimeState>(runtimeUserData)
+        if state.dawn.inFrame || state.dawn.quitRequested || isNull(state.dawn.device) {
+            return
+        }
+        state.dawn.inFrame = true
+        dawnResizeIfNeeded(state, runtimeUserData)
+        dawnRunFrame(state, runtimeUserData)
+        state.dawn.inFrame = false
     }
-    state.dawn.inFrame = true
-    dawnResizeIfNeeded(state, runtimeUserData)
-    dawnRunFrame(state, runtimeUserData)
-    state.dawn.inFrame = false
 }
 
 // Drains the message queue, turning what the application cares about into

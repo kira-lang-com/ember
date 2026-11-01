@@ -76,43 +76,51 @@ public function vulkanReleaseObject(state: borrow mut VulkanState, id: U32) {
 }
 
 public function vulkanDestroyBuffer(context: RawPtr, buffer: borrow GraphicsBuffer) {
-    if !vulkanHasDevice(context) {
-        return
+    unsafe {
+        if !vulkanHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        vulkanReleaseObject(state.vulkan, buffer.id.raw)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    vulkanReleaseObject(state.vulkan, buffer.id.raw)
 }
 
 public function vulkanDestroyUniform(context: RawPtr, uniform: borrow GraphicsUniform) {
-    if !vulkanHasDevice(context) {
-        return
+    unsafe {
+        if !vulkanHasDevice(context) {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        vulkanReleaseObject(state.vulkan, uniform.id.raw)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    vulkanReleaseObject(state.vulkan, uniform.id.raw)
 }
 
 public function vulkanDestroySampler(context: RawPtr, sampler: borrow GraphicsSampler) {
-    if !vulkanHasDevice(context) || sampler.id == 0 {
-        return
+    unsafe {
+        if !vulkanHasDevice(context) || sampler.id == 0 {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        vulkanReleaseObject(state.vulkan, sampler.id.raw)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    vulkanReleaseObject(state.vulkan, sampler.id.raw)
 }
 
 public function vulkanDestroyTexture(context: RawPtr, texture: borrow GraphicsTexture) {
-    if !vulkanHasDevice(context) || texture.id == 0 {
-        return
+    unsafe {
+        if !vulkanHasDevice(context) || texture.id == 0 {
+            return
+        }
+        var state = nativeRecover<GraphicsRuntimeState>(context)
+        if texture.storageViewId.raw != 0 {
+            vulkanReleaseObject(state.vulkan, texture.storageViewId.raw)
+        }
+        if texture.depthViewId.raw != 0 {
+            vulkanReleaseObject(state.vulkan, texture.depthViewId.raw)
+        }
+        if texture.colorViewId.raw != 0 {
+            vulkanReleaseObject(state.vulkan, texture.colorViewId.raw)
+        }
+        if texture.viewId.raw != 0 { vulkanReleaseObject(state.vulkan, texture.viewId.raw) }
+        vulkanReleaseObject(state.vulkan, texture.id.raw)
     }
-    var state = nativeRecover<GraphicsRuntimeState>(context)
-    if texture.storageViewId.raw != 0 {
-        vulkanReleaseObject(state.vulkan, texture.storageViewId.raw)
-    }
-    if texture.depthViewId.raw != 0 {
-        vulkanReleaseObject(state.vulkan, texture.depthViewId.raw)
-    }
-    if texture.colorViewId.raw != 0 {
-        vulkanReleaseObject(state.vulkan, texture.colorViewId.raw)
-    }
-    if texture.viewId.raw != 0 { vulkanReleaseObject(state.vulkan, texture.viewId.raw) }
-    vulkanReleaseObject(state.vulkan, texture.id.raw)
 }
