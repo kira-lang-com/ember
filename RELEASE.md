@@ -1,27 +1,21 @@
-# 26.10.4
+# 26.11.1
 
 **Project:** Ember  
-**Release week:** 2026-10-26 – 2026-11-01
+**Release week:** 2026-11-02 – 2026-11-08
 
 ## Highlights
 
-The first source release of Ember includes:
+Updated Ember's native graphics integrations and added support for drawing a render pass into a defined area of its color attachment.
 
-- A graphics application lifecycle and APIs for buffers, textures, pipelines, render passes, and draw encoding.
-- Metal on Apple platforms and Vulkan on Windows and Linux, with Dawn available for WebGPU and compatibility runs.
-- Exportable render targets using Linux Vulkan dma-buf or Metal IOSurface; Dawn reports them as unexportable.
+## Added
 
+- `RenderPassDescriptor.drawArea`, which offsets and clips a pass's viewport and scissors inside a color attachment; the attachment clear still covers its full area.
+- `NativeLibs/Vulkan/vulkan.klffi` bindings for the Vulkan backend.
 
 ## Changed
 
-- Added `RenderPassDescriptor.drawArea`: a pass can draw into part of its color attachment. The viewport and every scissor are placed inside the area on Vulkan, Dawn and Metal, and a clear still covers the whole attachment. A compositor uses it to draw a smaller output at an offset.
-- Made low-level graphics backend, native callback state, and foreign memory operations explicit inside `unsafe` regions across Metal, Vulkan, and Dawn code paths.
-
-## Breaking changes
-
-- Source now requires Kira unsafe-block support for affected native graphics integration paths.
+- Updated Vulkan, Dawn, and Metal backend paths and their interop definitions to use the current native interfaces.
 
 ## Known limitations
 
-- Render-pass closures currently require local aliases for captured state members, pending compiler improvements.
-- Modern KLF-hosted Kira frontend parity for `unsafe` remains pending.
+- No new cross-platform graphics build or rendering test results are recorded for this release preparation; these changes are not claimed as validated across all backends.
