@@ -320,14 +320,16 @@ public function dawnCachedMergedGroup(
 }
 
 public function dawnReleaseMergedGroups(state: borrow mut GraphicsRuntimeState) {
-    for held in state.dawn.mergedGroups {
-        let handle = dawnObject(state, held.groupId)
-        if !isNull(handle) {
-            wgpuBindGroupRelease(handle)
-            dawnForgetObject(state, held.groupId)
+    unsafe {
+        for held in state.dawn.mergedGroups {
+            let handle = dawnObject(state, held.groupId)
+            if !isNull(handle) {
+                wgpuBindGroupRelease(handle)
+                dawnForgetObject(state, held.groupId)
+            }
         }
+        state.dawn.mergedGroups = []
     }
-    state.dawn.mergedGroups = []
 }
 
 // A device bind group over `entries`, made against the pipeline's layout for
@@ -339,38 +341,42 @@ function dawnMintBindGroup(
     index: UNumber,
     entries: borrow[WGPUBindGroupEntry]
 ) -> RawPtr? {
-    let layout = wgpuRenderPipelineGetBindGroupLayout(pipelineHandle, U32(index))
-    if isNull(layout) {
-        return .None
-    }
-    let handle = wgpuDeviceCreateBindGroup(
-        state.dawn.device,
-        WGPUBindGroupDescriptor {
-            label: dawnText("kira-bindings"),
-            layout: layout,
-            entryCount: U64(entries.count),
-            entries: WGPUBindGroupEntryArray16 { elements: entries }
+    unsafe {
+        let layout = wgpuRenderPipelineGetBindGroupLayout(pipelineHandle, U32(index))
+        if isNull(layout) {
+            return .None
         }
-    )
-    wgpuBindGroupLayoutRelease(layout)
-    if isNull(handle) {
-        return .None
+        let handle = wgpuDeviceCreateBindGroup(
+            state.dawn.device,
+            WGPUBindGroupDescriptor {
+                label: dawnText("kira-bindings"),
+                layout: layout,
+                entryCount: U64(entries.count),
+                entries: WGPUBindGroupEntryArray16 { elements: entries }
+            }
+        )
+        wgpuBindGroupLayoutRelease(layout)
+        if isNull(handle) {
+            return .None
+        }
+        if state.dawn.mergedGroups.count >= DawnBindLayout.maxMergedBindGroups {
+            dawnReleaseMergedGroups(state)
+        }
+        return .Some(handle)
     }
-    if state.dawn.mergedGroups.count >= DawnBindLayout.maxMergedBindGroups {
-        dawnReleaseMergedGroups(state)
-    }
-    return .Some(handle)
 }
 
 // Binds `handle` as group `index` of the open pass.
 function dawnSetGroup(state: borrow GraphicsRuntimeState, index: UNumber, handle: RawPtr) {
-    wgpuRenderPassEncoderSetBindGroup(
-        state.dawn.passEncoder,
-        U32(index),
-        handle,
-        U64(0),
-        nullPointer()
-    )
+    unsafe {
+        wgpuRenderPassEncoderSetBindGroup(
+            state.dawn.passEncoder,
+            U32(index),
+            handle,
+            U64(0),
+            nullPointer()
+        )
+    }
 }
 
 // Merges the encoder's slots, filters to what the pipeline reads, and binds the

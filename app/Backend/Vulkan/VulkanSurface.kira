@@ -93,7 +93,9 @@ public function vulkanCreateWin32Surface(
 }
 
 public function vulkanDestroySurface(instance: RawPtr, surface: RawPtr) {
-    vkDestroySurfaceKHR(instance, surface, nullPointer())
+    unsafe {
+        vkDestroySurfaceKHR(instance, surface, nullPointer())
+    }
 }
 
 @FFI.Extern { library: user32, symbol: ClientToScreen, abi: c }

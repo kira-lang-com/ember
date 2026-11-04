@@ -100,10 +100,12 @@ public function dawnReadGpuTimesKnob(state: borrow mut GraphicsRuntimeState) {
 
 // Whether this adapter can time a frame without stopping it.
 public function dawnAdapterTimesFrames(adapter: RawPtr) -> Bool {
-    if isNull(adapter) {
-        return false
+    unsafe {
+        if isNull(adapter) {
+            return false
+        }
+        return wgpuAdapterHasFeature(adapter, DawnTimestamps.featureTimestampQuery) != U32(0)
     }
-    return wgpuAdapterHasFeature(adapter, DawnTimestamps.featureTimestampQuery) != U32(0)
 }
 
 // Builds the query set and its buffers, once, on the first frame that records.
@@ -124,54 +126,58 @@ public function dawnClockEnsure(state: borrow mut GraphicsRuntimeState) {
 }
 
 function dawnClockBuild(state: borrow mut GraphicsRuntimeState) -> DawnClockObjects? {
-    let querySet = wgpuDeviceCreateQuerySet(
-        state.dawn.device,
-        WGPUQuerySetDescriptor {
-            label: dawnText("kira-gpu-clock"),
-            type_value: DawnTimestamps.queryTypeTimestamp,
-            count: U32(DawnTimestamps.maxTimestamps)
+    unsafe {
+        let querySet = wgpuDeviceCreateQuerySet(
+            state.dawn.device,
+            WGPUQuerySetDescriptor {
+                label: dawnText("kira-gpu-clock"),
+                type_value: DawnTimestamps.queryTypeTimestamp,
+                count: U32(DawnTimestamps.maxTimestamps)
+            }
+        )
+        if isNull(querySet) {
+            return .None
         }
-    )
-    if isNull(querySet) {
-        return .None
-    }
-    let querySetId = dawnRegisterObject(state, querySet, DawnVocabulary.formatUndefined)
-    let bytes = DawnTimestamps.maxTimestamps * sizeOf<U64>()
-    let resolveBufferId = match dawnMakeBuffer(
-        state,
-        "kira-gpu-clock-resolve",
-        DawnTimestamps.bufferUsageQueryResolve | DawnVocabulary.bufferUsageCopySource,
-        bytes,
-    ) {
-        Some(id) -> id
-        None -> return .None
-    }
-    for slot in 0..DawnTimestamps.timestampSlots {
-        let readbackId = match dawnMakeBuffer(
+        let querySetId = dawnRegisterObject(state, querySet, DawnVocabulary.formatUndefined)
+        let bytes = DawnTimestamps.maxTimestamps * sizeOf<U64>()
+        let resolveBufferId = match dawnMakeBuffer(
             state,
-            "kira-gpu-clock-readback",
-            DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+            "kira-gpu-clock-resolve",
+            DawnTimestamps.bufferUsageQueryResolve | DawnVocabulary.bufferUsageCopySource,
             bytes,
         ) {
             Some(id) -> id
             None -> return .None
         }
-        dawnClockAddSlot(state, slot, readbackId)
+        for slot in 0..DawnTimestamps.timestampSlots {
+            let readbackId = match dawnMakeBuffer(
+                state,
+                "kira-gpu-clock-readback",
+                DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+                bytes,
+            ) {
+                Some(id) -> id
+                None -> return .None
+            }
+            dawnClockAddSlot(state, slot, readbackId)
+        }
+        return .Some(DawnClockObjects { querySetId: querySetId, resolveBufferId: resolveBufferId })
     }
-    return .Some(DawnClockObjects { querySetId: querySetId, resolveBufferId: resolveBufferId })
 }
 
 // One idle readback slot, and the block its map callback is told its slot
 // number through.
 function dawnClockAddSlot(state: borrow mut GraphicsRuntimeState, slot: UNumber, readbackId: U32) {
-    state.dawn.clock.readbackIds.append(readbackId)
-    state.dawn.clock.readbackBusy.append(false)
-    state.dawn.clock.readbackUsed.append(0)
-    state.dawn.clock.readbackComposite.append(.None)
-    state.dawn.clock.readbackSerial.append(0)
-    let block = allocateZeroed(memoryLayout(sizeOf<U64>(), alignOf<U64>()))
-    writeDoubleWord(block, U64(0), U64(slot))
-    state.dawn.clock.slotBlocks.append(block)
+    unsafe {
+        state.dawn.clock.readbackIds.append(readbackId)
+        state.dawn.clock.readbackBusy.append(false)
+        state.dawn.clock.readbackUsed.append(0)
+        state.dawn.clock.readbackComposite.append(.None)
+        state.dawn.clock.readbackSerial.append(0)
+        let block = allocateZeroed(memoryLayout(sizeOf<U64>(), alignOf<U64>()))
+        writeDoubleWord(block, U64(0), U64(slot))
+        state.dawn.clock.slotBlocks.append(block)
+    }
 }
 
 // Opens a frame's recording. Nothing is written until a pass or a dispatch says
@@ -249,36 +255,38 @@ function dawnClockFreeSlot(clock: borrow DawnGpuClock) -> UNumber? {
 // makes. Answers the readback slot the results will arrive in, or nothing when
 // this frame goes unmeasured.
 public function dawnClockResolve(state: borrow mut GraphicsRuntimeState) -> UNumber? {
-    if !state.dawn.clock.supported || state.dawn.clock.used < DawnTimestamps.pairStamps {
-        return .None
+    unsafe {
+        if !state.dawn.clock.supported || state.dawn.clock.used < DawnTimestamps.pairStamps {
+            return .None
+        }
+        let objects = match state.dawn.clock.objects {
+            Some(objects) -> objects
+            None -> return .None
+        }
+        // Every slot still waiting on a map leaves the frame unmeasured rather than
+        // waiting for one, which is the whole point of measuring this way.
+        let slot = match dawnClockFreeSlot(state.dawn.clock) {
+            Some(slot) -> slot
+            None -> return .None
+        }
+        let count = state.dawn.clock.used
+        let resolve = dawnObject(state, objects.resolveBufferId)
+        let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+        if isNull(resolve) || isNull(readback) {
+            return .None
+        }
+        let encoder = dawnFrameEncoder(state)
+        let querySet = dawnObject(state, objects.querySetId)
+        wgpuCommandEncoderResolveQuerySet(encoder, querySet, U32(0), U32(count), resolve, U64(0))
+        let bytes = U64(count * sizeOf<U64>())
+        wgpuCommandEncoderCopyBufferToBuffer(encoder, resolve, U64(0), readback, U64(0), bytes)
+        state.dawn.clock.readbackBusy[slot] = true
+        state.dawn.clock.readbackUsed[slot] = count
+        state.dawn.clock.readbackComposite[slot] = state.dawn.clock.compositeAt
+        state.dawn.clock.readbackSerial[slot] = state.dawn.stats.frameSerial
+        state.dawn.clock.nextSlot = (slot + 1) % state.dawn.clock.readbackIds.count
+        return .Some(slot)
     }
-    let objects = match state.dawn.clock.objects {
-        Some(objects) -> objects
-        None -> return .None
-    }
-    // Every slot still waiting on a map leaves the frame unmeasured rather than
-    // waiting for one, which is the whole point of measuring this way.
-    let slot = match dawnClockFreeSlot(state.dawn.clock) {
-        Some(slot) -> slot
-        None -> return .None
-    }
-    let count = state.dawn.clock.used
-    let resolve = dawnObject(state, objects.resolveBufferId)
-    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
-    if isNull(resolve) || isNull(readback) {
-        return .None
-    }
-    let encoder = dawnFrameEncoder(state)
-    let querySet = dawnObject(state, objects.querySetId)
-    wgpuCommandEncoderResolveQuerySet(encoder, querySet, U32(0), U32(count), resolve, U64(0))
-    let bytes = U64(count * sizeOf<U64>())
-    wgpuCommandEncoderCopyBufferToBuffer(encoder, resolve, U64(0), readback, U64(0), bytes)
-    state.dawn.clock.readbackBusy[slot] = true
-    state.dawn.clock.readbackUsed[slot] = count
-    state.dawn.clock.readbackComposite[slot] = state.dawn.clock.compositeAt
-    state.dawn.clock.readbackSerial[slot] = state.dawn.stats.frameSerial
-    state.dawn.clock.nextSlot = (slot + 1) % state.dawn.clock.readbackIds.count
-    return .Some(slot)
 }
 
 // Asks for the slot's bytes. Called after the frame has been submitted, and it
@@ -288,23 +296,25 @@ public function dawnClockRequest(
     context: RawPtr,
     slot: UNumber
 ) {
-    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
-    if isNull(readback) {
-        state.dawn.clock.readbackBusy[slot] = false
-        return
-    }
-    wgpuBufferMapAsync(
-        readback,
-        DawnVocabulary.mapModeRead,
-        U64(0),
-        U64(state.dawn.clock.readbackUsed[slot] * sizeOf<U64>()),
-        WGPUBufferMapCallbackInfo {
-            mode: DawnVocabulary.callbackOnProcessEvents,
-            callback: dawnClockMapped,
-            userdata1: context,
-            userdata2: state.dawn.clock.slotBlocks[slot]
+    unsafe {
+        let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+        if isNull(readback) {
+            state.dawn.clock.readbackBusy[slot] = false
+            return
         }
-    )
+        wgpuBufferMapAsync(
+            readback,
+            DawnVocabulary.mapModeRead,
+            U64(0),
+            U64(state.dawn.clock.readbackUsed[slot] * sizeOf<U64>()),
+            WGPUBufferMapCallbackInfo {
+                mode: DawnVocabulary.callbackOnProcessEvents,
+                callback: dawnClockMapped,
+                userdata1: context,
+                userdata2: state.dawn.clock.slotBlocks[slot]
+            }
+        )
+    }
 }
 
 // One frame's timestamps, arriving.
@@ -348,49 +358,53 @@ struct DawnClockSpans {
 // the GPU's clock can be reset under the driver, and a negative span is a
 // reading that did not happen, not a segment that took no time.
 function dawnClockSpans(mapped: RawPtr, count: UNumber, compositeFrom: UNumber) -> DawnClockSpans {
-    var spans = DawnClockSpans()
-    let stampBytes = sizeOf<U64>()
-    for pair in 0..count / DawnTimestamps.pairStamps {
-        let index = pair * DawnTimestamps.pairStamps
-        let begin = readDoubleWord(mapped, U64(index * stampBytes))
-        let end = readDoubleWord(mapped, U64((index + 1) * stampBytes))
-        if end > begin {
-            if index >= compositeFrom {
-                spans.compositeNanoseconds = spans.compositeNanoseconds + Number(end - begin)
-            } else {
-                spans.prepNanoseconds = spans.prepNanoseconds + Number(end - begin)
+    unsafe {
+        var spans = DawnClockSpans()
+        let stampBytes = sizeOf<U64>()
+        for pair in 0..count / DawnTimestamps.pairStamps {
+            let index = pair * DawnTimestamps.pairStamps
+            let begin = readDoubleWord(mapped, U64(index * stampBytes))
+            let end = readDoubleWord(mapped, U64((index + 1) * stampBytes))
+            if end > begin {
+                if index >= compositeFrom {
+                    spans.compositeNanoseconds = spans.compositeNanoseconds + Number(end - begin)
+                } else {
+                    spans.prepNanoseconds = spans.prepNanoseconds + Number(end - begin)
+                }
             }
         }
+        return spans
     }
-    return spans
 }
 
 // Turns one slot's nanosecond ticks into the frame's two numbers.
 public function dawnClockReadSlot(state: borrow mut GraphicsRuntimeState, slot: Number) {
-    let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
-    let count = state.dawn.clock.readbackUsed[slot]
-    let mapped = wgpuBufferGetConstMappedRange(readback, U64(0), U64(count * sizeOf<U64>()))
-    if isNull(mapped) {
-        return
-    }
-    // A frame with no swapchain pass recorded is all preparation.
-    let compositeFrom = match state.dawn.clock.readbackComposite[slot] {
-        Some(at) -> at
-        None -> count
-    }
-    let spans = dawnClockSpans(mapped, count, compositeFrom)
-    state.dawn.clock.prepMilliseconds = millisecondsFromNanoseconds(spans.prepNanoseconds)
-    state.dawn.clock.compositeMilliseconds = millisecondsFromNanoseconds(spans.compositeNanoseconds)
-    state.dawn.clock.frameMilliseconds = state.dawn.clock.prepMilliseconds + state.dawn.clock.compositeMilliseconds
-    state.dawn.clock.measured = true
-    if state.dawn.clock.logging {
-        log info(
-            "timed a live GPU frame",
-            frameSerial: state.dawn.clock.readbackSerial[slot],
-            prepMilliseconds: state.dawn.clock.prepMilliseconds,
-            compositeMilliseconds: state.dawn.clock.compositeMilliseconds,
-            frameMilliseconds: state.dawn.clock.frameMilliseconds
-        )
+    unsafe {
+        let readback = dawnObject(state, state.dawn.clock.readbackIds[slot])
+        let count = state.dawn.clock.readbackUsed[slot]
+        let mapped = wgpuBufferGetConstMappedRange(readback, U64(0), U64(count * sizeOf<U64>()))
+        if isNull(mapped) {
+            return
+        }
+        // A frame with no swapchain pass recorded is all preparation.
+        let compositeFrom = match state.dawn.clock.readbackComposite[slot] {
+            Some(at) -> at
+            None -> count
+        }
+        let spans = dawnClockSpans(mapped, count, compositeFrom)
+        state.dawn.clock.prepMilliseconds = millisecondsFromNanoseconds(spans.prepNanoseconds)
+        state.dawn.clock.compositeMilliseconds = millisecondsFromNanoseconds(spans.compositeNanoseconds)
+        state.dawn.clock.frameMilliseconds = state.dawn.clock.prepMilliseconds + state.dawn.clock.compositeMilliseconds
+        state.dawn.clock.measured = true
+        if state.dawn.clock.logging {
+            log info(
+                "timed a live GPU frame",
+                frameSerial: state.dawn.clock.readbackSerial[slot],
+                prepMilliseconds: state.dawn.clock.prepMilliseconds,
+                compositeMilliseconds: state.dawn.clock.compositeMilliseconds,
+                frameMilliseconds: state.dawn.clock.frameMilliseconds
+            )
+        }
     }
 }
 

@@ -102,65 +102,69 @@ public function vulkanCreateInstance(
     state: borrow mut VulkanState,
     presentation: borrow VulkanPresentation
 ) -> Result<Void, VulkanSetupFailure> {
-    let application = VkApplicationInfo {
-        sType: VulkanVocabulary.structureApplicationInfo,
-        pApplicationName: cStringKept("Ember Vulkan").address,
-        applicationVersion: U32(1),
-        pEngineName: cStringKept("Kira").address,
-        engineVersion: U32(1),
-        apiVersion: VulkanVocabulary.apiVersion12
-    }
-    // A headless instance enables no extension, so its table is empty.
-    let extensions = match presentation {
-        Windowed -> vulkanNameTable(vulkanInstanceExtensionNames())
-        Headless -> vulkanNameTable([])
-    }
-    let createInfo = match presentation {
-        Windowed -> VkInstanceCreateInfo {
-            sType: VulkanVocabulary.structureInstanceCreateInfo,
-            pApplicationInfo: application,
-            enabledExtensionCount: U32(extensions.count),
-            ppEnabledExtensionNames: extensions.pointer()
+    unsafe {
+        let application = VkApplicationInfo {
+            sType: VulkanVocabulary.structureApplicationInfo,
+            pApplicationName: cStringKept("Ember Vulkan").address,
+            applicationVersion: U32(1),
+            pEngineName: cStringKept("Kira").address,
+            engineVersion: U32(1),
+            apiVersion: VulkanVocabulary.apiVersion12
         }
-        Headless -> VkInstanceCreateInfo {
-            sType: VulkanVocabulary.structureInstanceCreateInfo,
-            pApplicationInfo: application
+        // A headless instance enables no extension, so its table is empty.
+        let extensions = match presentation {
+            Windowed -> vulkanNameTable(vulkanInstanceExtensionNames())
+            Headless -> vulkanNameTable([])
         }
+        let createInfo = match presentation {
+            Windowed -> VkInstanceCreateInfo {
+                sType: VulkanVocabulary.structureInstanceCreateInfo,
+                pApplicationInfo: application,
+                enabledExtensionCount: U32(extensions.count),
+                ppEnabledExtensionNames: extensions.pointer()
+            }
+            Headless -> VkInstanceCreateInfo {
+                sType: VulkanVocabulary.structureInstanceCreateInfo,
+                pApplicationInfo: application
+            }
+        }
+        let instance = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(vkCreateInstance(createInfo, nullPointer(), instance.pointer()))
+        if result != .Success {
+            return .Error(.InstanceRefused(result))
+        }
+        state.instance = boxedValue<RawPtr>(instance)
+        return .Ok
     }
-    let instance = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(vkCreateInstance(createInfo, nullPointer(), instance.pointer()))
-    if result != .Success {
-        return .Error(.InstanceRefused(result))
-    }
-    state.instance = boxedValue<RawPtr>(instance)
-    return .Ok
 }
 
 // Every physical device the instance can see.
 function vulkanPhysicalDevices(state: borrow VulkanState) -> Result<[RawPtr], VulkanSetupFailure> {
-    let count = boxed<U32>(U32(0))
-    let countResult = vulkanResultOf(
-        vkEnumeratePhysicalDevices(state.instance, count.pointer(), nullPointer())
-    )
-    if countResult != .Success {
-        return .Error(.PhysicalDevicesUnreadable(countResult))
+    unsafe {
+        let count = boxed<U32>(U32(0))
+        let countResult = vulkanResultOf(
+            vkEnumeratePhysicalDevices(state.instance, count.pointer(), nullPointer())
+        )
+        if countResult != .Success {
+            return .Error(.PhysicalDevicesUnreadable(countResult))
+        }
+        let listed = Number(boxedValue<U32>(count))
+        if listed == 0 {
+            return .Error(.NoPhysicalDevice)
+        }
+        let block = zeroedBlock(listed * sizeOf<RawPtr>(), alignOf<RawPtr>())
+        let result = vulkanResultOf(
+            vkEnumeratePhysicalDevices(state.instance, count.pointer(), block.pointer())
+        )
+        if result != .Success {
+            return .Error(.PhysicalDevicesUnreadable(result))
+        }
+        var devices: [RawPtr] = []
+        for index in 0..Number(boxedValue<U32>(count)) {
+            devices.append(viewElement<RawPtr>(block.view(), index))
+        }
+        return .Ok(devices)
     }
-    let listed = Number(boxedValue<U32>(count))
-    if listed == 0 {
-        return .Error(.NoPhysicalDevice)
-    }
-    let block = zeroedBlock(listed * sizeOf<RawPtr>(), alignOf<RawPtr>())
-    let result = vulkanResultOf(
-        vkEnumeratePhysicalDevices(state.instance, count.pointer(), block.pointer())
-    )
-    if result != .Success {
-        return .Error(.PhysicalDevicesUnreadable(result))
-    }
-    var devices: [RawPtr] = []
-    for index in 0..Number(boxedValue<U32>(count)) {
-        devices.append(viewElement<RawPtr>(block.view(), index))
-    }
-    return .Ok(devices)
 }
 
 // The first physical device that supports this presentation and has a queue
@@ -204,30 +208,32 @@ function vulkanQueueFamily(
     device: RawPtr,
     presentation: borrow VulkanPresentation
 ) -> U32? {
-    let count = boxed<U32>(U32(0))
-    vkGetPhysicalDeviceQueueFamilyProperties(device, count.pointer(), nullPointer())
-    let listed = Number(boxedValue<U32>(count))
-    if listed == 0 {
+    unsafe {
+        let count = boxed<U32>(U32(0))
+        vkGetPhysicalDeviceQueueFamilyProperties(device, count.pointer(), nullPointer())
+        let listed = Number(boxedValue<U32>(count))
+        if listed == 0 {
+            return .None
+        }
+        let block = zeroedBlock(
+            listed * sizeOf<VkQueueFamilyProperties>(),
+            alignOf<VkQueueFamilyProperties>()
+        )
+        vkGetPhysicalDeviceQueueFamilyProperties(device, count.pointer(), block.pointer())
+        for index in 0..Number(boxedValue<U32>(count)) {
+            let family = U32(index)
+            let properties = viewElement<VkQueueFamilyProperties>(block.view(), index)
+            if vulkanQueueRenders(properties.queueFlags) && vulkanQueueServes(
+                state,
+                device,
+                family,
+                presentation
+            ) {
+                return .Some(family)
+            }
+        }
         return .None
     }
-    let block = zeroedBlock(
-        listed * sizeOf<VkQueueFamilyProperties>(),
-        alignOf<VkQueueFamilyProperties>()
-    )
-    vkGetPhysicalDeviceQueueFamilyProperties(device, count.pointer(), block.pointer())
-    for index in 0..Number(boxedValue<U32>(count)) {
-        let family = U32(index)
-        let properties = viewElement<VkQueueFamilyProperties>(block.view(), index)
-        if vulkanQueueRenders(properties.queueFlags) && vulkanQueueServes(
-            state,
-            device,
-            family,
-            presentation
-        ) {
-            return .Some(family)
-        }
-    }
-    return .None
 }
 
 // Whether a family's `VkQueueFlags` carry both graphics and compute.
@@ -251,11 +257,13 @@ function vulkanQueueServes(
 // Whether `family` can present to the window's surface. A family whose
 // support cannot be read is not chosen, the same as one that cannot present.
 function vulkanQueuePresents(state: borrow VulkanState, device: RawPtr, family: U32) -> Bool {
-    let supported = boxed<U32>(U32(0))
-    let result = vulkanResultOf(
-        vkGetPhysicalDeviceSurfaceSupportKHR(device, family, state.surface, supported.pointer())
-    )
-    return result == .Success && boxedValue<U32>(supported) != U32(0)
+    unsafe {
+        let supported = boxed<U32>(U32(0))
+        let result = vulkanResultOf(
+            vkGetPhysicalDeviceSurfaceSupportKHR(device, family, state.surface, supported.pointer())
+        )
+        return result == .Success && boxedValue<U32>(supported) != U32(0)
+    }
 }
 
 // What a device's create info points at, held so that it outlives the create
@@ -309,33 +317,35 @@ public function vulkanCreateDevice(
     state: borrow mut VulkanState,
     presentation: borrow VulkanPresentation
 ) -> Result<Void, VulkanSetupFailure> {
-    let choices = vulkanDeviceChoices(presentation)
-    let createInfo = vulkanDeviceCreateInfo(state, choices)
-    let device = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateDevice(state.physicalDevice, createInfo, nullPointer(), device.pointer())
-    )
-    if result != .Success {
-        return .Error(.DeviceRefused(result))
+    unsafe {
+        let choices = vulkanDeviceChoices(presentation)
+        let createInfo = vulkanDeviceCreateInfo(state, choices)
+        let device = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateDevice(state.physicalDevice, createInfo, nullPointer(), device.pointer())
+        )
+        if result != .Success {
+            return .Error(.DeviceRefused(result))
+        }
+        state.device = boxedValue<RawPtr>(device)
+        if !vulkanHasDynamicRendering(state.device) {
+            return .Error(.NoDynamicRendering)
+        }
+        let queue = boxed<RawPtr>(nullPointer())
+        vkGetDeviceQueue(state.device, state.queueFamilyIndex, VulkanSetup.queueIndex, queue.pointer())
+        state.queue = boxedValue<RawPtr>(queue)
+        let unmapped = vulkanFindMemoryTypeWithout(
+            state,
+            U32(0xFFFFFFFF),
+            VulkanVocabulary.memoryDeviceLocal,
+            VulkanVocabulary.memoryHostVisible
+        )
+        match unmapped {
+            Some(found) -> log debug("images take memory nothing maps", memoryType: found)
+            None -> log warn("the device has no memory that nothing maps; images share mappable memory")
+        }
+        return .Ok
     }
-    state.device = boxedValue<RawPtr>(device)
-    if !vulkanHasDynamicRendering(state.device) {
-        return .Error(.NoDynamicRendering)
-    }
-    let queue = boxed<RawPtr>(nullPointer())
-    vkGetDeviceQueue(state.device, state.queueFamilyIndex, VulkanSetup.queueIndex, queue.pointer())
-    state.queue = boxedValue<RawPtr>(queue)
-    let unmapped = vulkanFindMemoryTypeWithout(
-        state,
-        U32(0xFFFFFFFF),
-        VulkanVocabulary.memoryDeviceLocal,
-        VulkanVocabulary.memoryHostVisible
-    )
-    match unmapped {
-        Some(found) -> log debug("images take memory nothing maps", memoryType: found)
-        None -> log warn("the device has no memory that nothing maps; images share mappable memory")
-    }
-    return .Ok
 }
 
 // The command pool and the frame's command buffer, then its descriptor pool
@@ -343,36 +353,38 @@ public function vulkanCreateDevice(
 public function vulkanCreateCommandState(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanSetupFailure> {
-    let poolInfo = VkCommandPoolCreateInfo {
-        sType: VulkanVocabulary.structureCommandPoolCreateInfo,
-        flags: VulkanVocabulary.commandPoolResettable,
-        queueFamilyIndex: state.queueFamilyIndex
-    }
-    let pool = boxed<RawPtr>(nullPointer())
-    let poolResult = vulkanResultOf(
-        vkCreateCommandPool(state.device, poolInfo, nullPointer(), pool.pointer())
-    )
-    if poolResult != .Success {
-        return .Error(.CommandPoolRefused(poolResult))
-    }
-    state.commandPool = boxedValue<RawPtr>(pool)
-    let allocation = VkCommandBufferAllocateInfo {
-        sType: VulkanVocabulary.structureCommandBufferAllocateInfo,
-        commandPool: state.commandPool,
-        level: VulkanVocabulary.commandBufferPrimary,
-        commandBufferCount: U32(1)
-    }
-    let commandBuffer = boxed<RawPtr>(nullPointer())
-    let commandResult = vulkanResultOf(
-        vkAllocateCommandBuffers(state.device, allocation, commandBuffer.pointer())
-    )
-    if commandResult != .Success {
-        return .Error(.CommandBufferRefused(commandResult))
-    }
-    state.commandBuffer = boxedValue<RawPtr>(commandBuffer)
-    return match vulkanCreateDescriptorPool(state) {
-        Ok -> vulkanCreateSyncObjects(state)
-        Error(failure) -> .Error(failure)
+    unsafe {
+        let poolInfo = VkCommandPoolCreateInfo {
+            sType: VulkanVocabulary.structureCommandPoolCreateInfo,
+            flags: VulkanVocabulary.commandPoolResettable,
+            queueFamilyIndex: state.queueFamilyIndex
+        }
+        let pool = boxed<RawPtr>(nullPointer())
+        let poolResult = vulkanResultOf(
+            vkCreateCommandPool(state.device, poolInfo, nullPointer(), pool.pointer())
+        )
+        if poolResult != .Success {
+            return .Error(.CommandPoolRefused(poolResult))
+        }
+        state.commandPool = boxedValue<RawPtr>(pool)
+        let allocation = VkCommandBufferAllocateInfo {
+            sType: VulkanVocabulary.structureCommandBufferAllocateInfo,
+            commandPool: state.commandPool,
+            level: VulkanVocabulary.commandBufferPrimary,
+            commandBufferCount: U32(1)
+        }
+        let commandBuffer = boxed<RawPtr>(nullPointer())
+        let commandResult = vulkanResultOf(
+            vkAllocateCommandBuffers(state.device, allocation, commandBuffer.pointer())
+        )
+        if commandResult != .Success {
+            return .Error(.CommandBufferRefused(commandResult))
+        }
+        state.commandBuffer = boxedValue<RawPtr>(commandBuffer)
+        return match vulkanCreateDescriptorPool(state) {
+            Ok -> vulkanCreateSyncObjects(state)
+            Error(failure) -> .Error(failure)
+        }
     }
 }
 
@@ -386,58 +398,62 @@ function vulkanPoolSize(kind: VulkanDescriptorType) -> VkDescriptorPoolSize {
 function vulkanCreateDescriptorPool(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanSetupFailure> {
-    let sizes = VulkanDescriptorPoolSizeArray5 {
-        elements: [vulkanPoolSize(.UniformBuffer), vulkanPoolSize(.StorageBuffer), vulkanPoolSize(
-            .SampledImage
-        ), vulkanPoolSize(.Sampler), vulkanPoolSize(.StorageImage)]
+    unsafe {
+        let sizes = VulkanDescriptorPoolSizeArray5 {
+            elements: [vulkanPoolSize(.UniformBuffer), vulkanPoolSize(.StorageBuffer), vulkanPoolSize(
+                .SampledImage
+            ), vulkanPoolSize(.Sampler), vulkanPoolSize(.StorageImage)]
+        }
+        // No set is freed on its own: the pool is reset whole as each frame's
+        // commands restart. Without FREE_DESCRIPTOR_SET a driver may allocate
+        // without asking the device, and venus does, where each allocation from
+        // a pool that frees sets is a synchronous round trip to the host.
+        let info = VkDescriptorPoolCreateInfo {
+            sType: VulkanVocabulary.structureDescriptorPoolCreateInfo,
+            flags: U32(0),
+            maxSets: VulkanSetup.descriptorSets,
+            poolSizeCount: VulkanSetup.descriptorKinds,
+            pPoolSizes: sizes
+        }
+        let pool = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateDescriptorPool(state.device, info, nullPointer(), pool.pointer())
+        )
+        if result != .Success {
+            return .Error(.DescriptorPoolRefused(result))
+        }
+        state.descriptorPool = boxedValue<RawPtr>(pool)
+        return .Ok
     }
-    // No set is freed on its own: the pool is reset whole as each frame's
-    // commands restart. Without FREE_DESCRIPTOR_SET a driver may allocate
-    // without asking the device, and venus does, where each allocation from
-    // a pool that frees sets is a synchronous round trip to the host.
-    let info = VkDescriptorPoolCreateInfo {
-        sType: VulkanVocabulary.structureDescriptorPoolCreateInfo,
-        flags: U32(0),
-        maxSets: VulkanSetup.descriptorSets,
-        poolSizeCount: VulkanSetup.descriptorKinds,
-        pPoolSizes: sizes
-    }
-    let pool = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateDescriptorPool(state.device, info, nullPointer(), pool.pointer())
-    )
-    if result != .Success {
-        return .Error(.DescriptorPoolRefused(result))
-    }
-    state.descriptorPool = boxedValue<RawPtr>(pool)
-    return .Ok
 }
 
 function vulkanCreateSyncObjects(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanSetupFailure> {
-    let semaphoreInfo = VkSemaphoreCreateInfo {
-        sType: VulkanVocabulary.structureSemaphoreCreateInfo
+    unsafe {
+        let semaphoreInfo = VkSemaphoreCreateInfo {
+            sType: VulkanVocabulary.structureSemaphoreCreateInfo
+        }
+        let semaphore = boxed<RawPtr>(nullPointer())
+        let semaphoreResult = vulkanResultOf(
+            vkCreateSemaphore(state.device, semaphoreInfo, nullPointer(), semaphore.pointer())
+        )
+        if semaphoreResult != .Success {
+            return .Error(.SemaphoreRefused(semaphoreResult))
+        }
+        state.imageAvailable = boxedValue<RawPtr>(semaphore)
+        let fenceInfo = VkFenceCreateInfo {
+            sType: VulkanVocabulary.structureFenceCreateInfo,
+            flags: VulkanVocabulary.fenceSignaled
+        }
+        let fence = boxed<RawPtr>(nullPointer())
+        let fenceResult = vulkanResultOf(
+            vkCreateFence(state.device, fenceInfo, nullPointer(), fence.pointer())
+        )
+        if fenceResult != .Success {
+            return .Error(.FenceRefused(fenceResult))
+        }
+        state.inFlightFence = boxedValue<RawPtr>(fence)
+        return .Ok
     }
-    let semaphore = boxed<RawPtr>(nullPointer())
-    let semaphoreResult = vulkanResultOf(
-        vkCreateSemaphore(state.device, semaphoreInfo, nullPointer(), semaphore.pointer())
-    )
-    if semaphoreResult != .Success {
-        return .Error(.SemaphoreRefused(semaphoreResult))
-    }
-    state.imageAvailable = boxedValue<RawPtr>(semaphore)
-    let fenceInfo = VkFenceCreateInfo {
-        sType: VulkanVocabulary.structureFenceCreateInfo,
-        flags: VulkanVocabulary.fenceSignaled
-    }
-    let fence = boxed<RawPtr>(nullPointer())
-    let fenceResult = vulkanResultOf(
-        vkCreateFence(state.device, fenceInfo, nullPointer(), fence.pointer())
-    )
-    if fenceResult != .Success {
-        return .Error(.FenceRefused(fenceResult))
-    }
-    state.inFlightFence = boxedValue<RawPtr>(fence)
-    return .Ok
 }

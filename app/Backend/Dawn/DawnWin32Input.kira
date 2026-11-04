@@ -302,24 +302,26 @@ public function win32DrainMessages(
     input: borrow mut WindowInput,
     onEvent: borrow (borrow AppEvent) -> Void
 ) -> Win32Drain {
-    while messageWaiting(messages) {
-        let queued = Win32Queued {
-            message: messages.message,
-            wparam: messages.wparam,
-            lparam: messages.lparam
+    unsafe {
+        while messageWaiting(messages) {
+            let queued = Win32Queued {
+                message: messages.message,
+                wparam: messages.wparam,
+                lparam: messages.lparam
+            }
+            if fromCode<Win32Message>(queued.message) == .Quit {
+                onEvent(AppEvent { kind: .QuitRequested, modifiers: dawnModifierState() })
+                return .QuitPosted
+            }
+            match win32Event(queued, scale, input) {
+                Some(event) -> onEvent(event)
+                // Nothing the application has a word for; the window procedure
+                // still sees it below.
+                None -> {}
+            }
+            translateMessage(messages)
+            dispatchMessage(messages)
         }
-        if fromCode<Win32Message>(queued.message) == .Quit {
-            onEvent(AppEvent { kind: .QuitRequested, modifiers: dawnModifierState() })
-            return .QuitPosted
-        }
-        match win32Event(queued, scale, input) {
-            Some(event) -> onEvent(event)
-            // Nothing the application has a word for; the window procedure
-            // still sees it below.
-            None -> {}
-        }
-        translateMessage(messages)
-        dispatchMessage(messages)
+        return .Empty
     }
-    return .Empty
 }

@@ -134,31 +134,33 @@ function metalDriveWindow(
     opened: MetalWindowRun,
     liveStorage: NativeState<MetalLiveState>
 ) {
-    var run = move opened
-    // Bound ONCE for the whole loop: calling a closure does not consume it, but
-    // re-taking it from the app each frame would move its captured environment
-    // out and leave later fetches dangling.
-    let onFrame: (borrow mut RenderFrame) -> Void = app.frameHandler
-    let onWindowEvent: (borrow AppEvent) -> Void = app.eventHandler
-    let windowDragRegion: (Number, Number) -> Bool = app.windowDragRegion
-    let renderNextFrame: () -> Bool = { in
-        return metalRenderWindowFrame(run, onFrame, onWindowEvent, windowDragRegion)
-    }
-    let onCleanup: (Graphics) -> Void = app.cleanupHandler
-    let cleanup: () -> Void = { in
-        metalEndWindowRun(run)
-        onCleanup(Graphics { userData: run.userData, backend: .Metal, backendContext: run.ctx })
-        metalContextFree(run.ctx)
-        if !metalUsesUIKit!() {
-            metalAutoreleasePoolPop(run.pool)
+    unsafe {
+        var run = move opened
+        // Bound ONCE for the whole loop: calling a closure does not consume it, but
+        // re-taking it from the app each frame would move its captured environment
+        // out and leave later fetches dangling.
+        let onFrame: (borrow mut RenderFrame) -> Void = app.frameHandler
+        let onWindowEvent: (borrow AppEvent) -> Void = app.eventHandler
+        let windowDragRegion: (Number, Number) -> Bool = app.windowDragRegion
+        let renderNextFrame: () -> Bool = { in
+            return metalRenderWindowFrame(run, onFrame, onWindowEvent, windowDragRegion)
         }
-        return
+        let onCleanup: (Graphics) -> Void = app.cleanupHandler
+        let cleanup: () -> Void = { in
+            metalEndWindowRun(run)
+            onCleanup(Graphics { userData: run.userData, backend: .Metal, backendContext: run.ctx })
+            metalContextFree(run.ctx)
+            if !metalUsesUIKit!() {
+                unsafe { metalAutoreleasePoolPop(run.pool) }
+            }
+            return
+        }
+        if metalUsesUIKit!() {
+            metalAutoreleasePoolPop(run.pool)
+            metalUIKitStartFrames(move renderNextFrame, move cleanup, move liveStorage)
+            return
+        }
+        while renderNextFrame() {}
+        cleanup()
     }
-    if metalUsesUIKit!() {
-        metalAutoreleasePoolPop(run.pool)
-        metalUIKitStartFrames(move renderNextFrame, move cleanup, move liveStorage)
-        return
-    }
-    while renderNextFrame() {}
-    cleanup()
 }

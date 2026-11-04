@@ -12,29 +12,31 @@ function vulkanOpenWindow(
     app: borrow GraphicsApplication,
     runtimeUserData: RawPtr
 ) -> Result<RawPtr, WindowFailure> {
-    let window = match vulkanWindowFor(vulkanWindowPlatformForHost()).open(app.windowRequest()) {
-        Ok(window) -> window
-        Error(failure) -> return .Error(failure)
-    }
-    runtime.vulkan.window = window
-    if targetPlatform!() == .Windows {
-        runtime.vulkan.messageBlock = allocateZeroed(
-            memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
-        )
-        dawnAttachWindowRuntime(window, runtimeUserData)
-    }
-    if targetPlatform!() == .Linux {
-        runtime.dawn.window = window
-        if runtime.scale > 0 {
-            kira_wayland_surface_set_scale(window, I32(runtime.scale))
+    unsafe {
+        let window = match vulkanWindowFor(vulkanWindowPlatformForHost()).open(app.windowRequest()) {
+            Ok(window) -> window
+            Error(failure) -> return .Error(failure)
         }
-        dawnWaylandAttachInput(runtime, runtimeUserData)
-        kira_wayland_surface_commit(window)
-        if kira_wayland_display_roundtrip(kira_wayland_proxy_get_display(window)) < I32(0) {
-            return .Error(.NoDisplay)
+        runtime.vulkan.window = window
+        if targetPlatform!() == .Windows {
+            runtime.vulkan.messageBlock = allocateZeroed(
+                memoryLayout(sizeOf<WindowMessage>(), alignOf<WindowMessage>())
+            )
+            dawnAttachWindowRuntime(window, runtimeUserData)
         }
+        if targetPlatform!() == .Linux {
+            runtime.dawn.window = window
+            if runtime.scale > 0 {
+                kira_wayland_surface_set_scale(window, I32(runtime.scale))
+            }
+            dawnWaylandAttachInput(runtime, runtimeUserData)
+            kira_wayland_surface_commit(window)
+            if kira_wayland_display_roundtrip(kira_wayland_proxy_get_display(window)) < I32(0) {
+                return .Error(.NoDisplay)
+            }
+        }
+        return .Ok(window)
     }
-    return .Ok(window)
 }
 
 function vulkanGraphics(runtime: borrow GraphicsRuntimeState, runtimeUserData: RawPtr) -> Graphics {

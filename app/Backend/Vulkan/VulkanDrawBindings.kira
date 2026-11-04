@@ -112,7 +112,9 @@ function vulkanBoundBuffer(
 }
 
 function vulkanWriteSetEntry(state: borrow VulkanState, write: borrow VkWriteDescriptorSet) {
-    vkUpdateDescriptorSets(state.device, U32(1), write, U32(0), nullPointer())
+    unsafe {
+        vkUpdateDescriptorSets(state.device, U32(1), write, U32(0), nullPointer())
+    }
 }
 
 // A uniform or storage buffer written into `set`. Answers its dynamic offset.
@@ -231,24 +233,26 @@ function vulkanAllocateSet(
     state: borrow VulkanState,
     layout: RawPtr
 ) -> Result<RawPtr, VulkanBindingFailure> {
-    let layouts = boxed<RawPtr>(layout)
-    let set = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkAllocateDescriptorSets(
-            state.device,
-            VkDescriptorSetAllocateInfo {
-                sType: VulkanVocabulary.structureDescriptorSetAllocateInfo,
-                descriptorPool: state.descriptorPool,
-                descriptorSetCount: U32(1),
-                pSetLayouts: layouts.pointer()
-            },
-            set.pointer()
+    unsafe {
+        let layouts = boxed<RawPtr>(layout)
+        let set = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkAllocateDescriptorSets(
+                state.device,
+                VkDescriptorSetAllocateInfo {
+                    sType: VulkanVocabulary.structureDescriptorSetAllocateInfo,
+                    descriptorPool: state.descriptorPool,
+                    descriptorSetCount: U32(1),
+                    pSetLayouts: layouts.pointer()
+                },
+                set.pointer()
+            )
         )
-    )
-    if result != .Success {
-        return .Error(.PoolExhausted(result))
+        if result != .Success {
+            return .Error(.PoolExhausted(result))
+        }
+        return .Ok(boxedValue<RawPtr>(set))
     }
-    return .Ok(boxedValue<RawPtr>(set))
 }
 
 // A written descriptor set, the group it binds at, and the dynamic offsets its
@@ -264,27 +268,29 @@ function vulkanBindSet(
     pipeline: borrow VulkanPipelineRecord,
     written: borrow VulkanWrittenSet
 ) {
-    let groupIndex = written.groupIndex
-    let offsets = written.offsets
-    let sets = boxed<RawPtr>(written.set)
-    let offsetWords = allocateZeroed(
-        memoryLayout(max(offsets.count, 1) * sizeOf<U32>(), alignOf<U32>())
-    )
-    for index in 0..offsets.count {
-        heapStore<U32>(offsetWords, index * sizeOf<U32>(), offsets[index])
+    unsafe {
+        let groupIndex = written.groupIndex
+        let offsets = written.offsets
+        let sets = boxed<RawPtr>(written.set)
+        let offsetWords = allocateZeroed(
+            memoryLayout(max(offsets.count, 1) * sizeOf<U32>(), alignOf<U32>())
+        )
+        for index in 0..offsets.count {
+            heapStore<U32>(offsetWords, index * sizeOf<U32>(), offsets[index])
+        }
+        let bindPoint = pipeline.compute ? VulkanVocabulary.pipelineCompute : VulkanVocabulary.pipelineGraphics
+        vkCmdBindDescriptorSets(
+            state.commandBuffer,
+            bindPoint,
+            pipeline.layout,
+            U32(groupIndex),
+            U32(1),
+            sets.pointer(),
+            U32(offsets.count),
+            offsetWords
+        )
+        deallocate(offsetWords)
     }
-    let bindPoint = pipeline.compute ? VulkanVocabulary.pipelineCompute : VulkanVocabulary.pipelineGraphics
-    vkCmdBindDescriptorSets(
-        state.commandBuffer,
-        bindPoint,
-        pipeline.layout,
-        U32(groupIndex),
-        U32(1),
-        sets.pointer(),
-        U32(offsets.count),
-        offsetWords
-    )
-    deallocate(offsetWords)
 }
 
 // The group's resources written into a fresh set and bound at `groupIndex`.

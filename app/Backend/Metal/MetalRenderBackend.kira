@@ -421,11 +421,15 @@ construct MetalRenderBackend(context: RawPtr) extends RenderBackend {
     }
 
     function windowMode() -> WindowMode {
-        return metalViewWindowMode(metalMemReadPtr(context, MetalContext.offsetHostView))
+        unsafe {
+            return metalViewWindowMode(metalMemReadPtr(context, MetalContext.offsetHostView))
+        }
     }
 
     function setWindowMode(mode: borrow WindowMode) -> Void {
-        metalViewSetWindowMode(metalMemReadPtr(context, MetalContext.offsetHostView), mode)
+        unsafe {
+            metalViewSetWindowMode(metalMemReadPtr(context, MetalContext.offsetHostView), mode)
+        }
     }
 
     function minimizeWindow() -> Void { return }

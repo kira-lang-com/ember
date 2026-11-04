@@ -98,10 +98,12 @@ function vulkanDeviceSupports(device: RawPtr, presentation: borrow VulkanPresent
 }
 
 function vulkanDeviceVersionSupported(device: RawPtr) -> Bool {
-    let properties = boxed<VkPhysicalDeviceProperties>(VkPhysicalDeviceProperties())
-    vkGetPhysicalDeviceProperties(device, properties.pointer())
-    return boxedValue<VkPhysicalDeviceProperties>(properties).apiVersion
-        >= VulkanVocabulary.apiVersion12
+    unsafe {
+        let properties = boxed<VkPhysicalDeviceProperties>(VkPhysicalDeviceProperties())
+        vkGetPhysicalDeviceProperties(device, properties.pointer())
+        return boxedValue<VkPhysicalDeviceProperties>(properties).apiVersion
+            >= VulkanVocabulary.apiVersion12
+    }
 }
 
 // The names of the extensions the device offers, or nothing when it will not
@@ -141,23 +143,25 @@ function vulkanDeviceExtensions(device: RawPtr) -> Optional<[String]> {
 // Whether the device's dynamic rendering feature can be turned on: the
 // extension being listed is not enough.
 function vulkanDeviceRendersDynamically(device: RawPtr) -> Bool {
-    let rendering = boxed<VkPhysicalDeviceDynamicRenderingFeatures>(
-        VkPhysicalDeviceDynamicRenderingFeatures {
-            sType: VulkanVocabulary.structureDynamicRenderingFeatures,
-            pNext: nullPointer(),
-            dynamicRendering: U32(0)
-        }
-    )
-    let features = boxed<VkPhysicalDeviceFeatures2>(
-        VkPhysicalDeviceFeatures2 {
-            sType: I32(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2),
-            pNext: rendering.pointer(),
-            features: VkPhysicalDeviceFeatures {}
-        }
-    )
-    vkGetPhysicalDeviceFeatures2(device, features.pointer())
-    return boxedValue<VkPhysicalDeviceDynamicRenderingFeatures>(rendering).dynamicRendering
-        != U32(0)
+    unsafe {
+        let rendering = boxed<VkPhysicalDeviceDynamicRenderingFeatures>(
+            VkPhysicalDeviceDynamicRenderingFeatures {
+                sType: VulkanVocabulary.structureDynamicRenderingFeatures,
+                pNext: nullPointer(),
+                dynamicRendering: U32(0)
+            }
+        )
+        let features = boxed<VkPhysicalDeviceFeatures2>(
+            VkPhysicalDeviceFeatures2 {
+                sType: I32(VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_FEATURES_2),
+                pNext: rendering.pointer(),
+                features: VkPhysicalDeviceFeatures {}
+            }
+        )
+        vkGetPhysicalDeviceFeatures2(device, features.pointer())
+        return boxedValue<VkPhysicalDeviceDynamicRenderingFeatures>(rendering).dynamicRendering
+            != U32(0)
+    }
 }
 
 // The feature chain a device is created with, turning dynamic rendering on.

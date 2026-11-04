@@ -101,8 +101,11 @@ public struct DawnState {
     var encoder: RawPtr
     var passEncoder: RawPtr
     var passActive: Bool = false
+    // The open pass's draw area: its size, and its corner in the attachment.
     var passWidth: UN32 = 0
     var passHeight: UN32 = 0
+    var passOriginX: UN32 = 0
+    var passOriginY: UN32 = 0
     // The color format the open pass writes, so a pipeline built with the
     // `Swapchain` sentinel resolves to what this pass actually has.
     var passFormat: I32 = 0
@@ -276,7 +279,9 @@ public function dawnForgetObject(state: borrow mut GraphicsRuntimeState, id: U32
 // account of why a shader, a pipeline or a bind group was refused, so reading
 // them is not optional.
 public function dawnViewText(view: WGPUStringViewPointer) -> String {
-    return stringFromCBytes(heapLoad<RawPtr>(view, 0), Int(view.length))
+    unsafe {
+        return stringFromCBytes(heapLoad<RawPtr>(view, 0), Int(view.length))
+    }
 }
 
 // Dawn's answer to `wgpuInstanceRequestAdapter`.
@@ -387,32 +392,34 @@ function dawnRequestAdapter(
     state: borrow mut GraphicsRuntimeState,
     runtimeUserData: RawPtr
 ) -> Result<Void, DawnSetupFailure> {
-    state.dawn.adapterResolved = false
-    if state.tracing.device {
-        log debug("Ember asking Dawn for an adapter", instance: state.dawn.instance)
-    }
-    let request = wgpuInstanceRequestAdapter(
-        state.dawn.instance,
-        WGPURequestAdapterOptions {
-            featureLevel: DawnVocabulary.featureLevelCore,
-            powerPreference: DawnVocabulary.powerPreferenceHighPerformance
-        },
-        WGPURequestAdapterCallbackInfo {
-            mode: DawnVocabulary.callbackWaitAnyOnly,
-            callback: dawnAdapterReady,
-            userdata1: runtimeUserData
+    unsafe {
+        state.dawn.adapterResolved = false
+        if state.tracing.device {
+            log debug("Ember asking Dawn for an adapter", instance: state.dawn.instance)
         }
-    )
-    if !dawnWaitFor(state, request, DawnWait.setupNanoseconds) || !state.dawn.adapterResolved {
-        return .Error(.AdapterNeverAnswered)
+        let request = wgpuInstanceRequestAdapter(
+            state.dawn.instance,
+            WGPURequestAdapterOptions {
+                featureLevel: DawnVocabulary.featureLevelCore,
+                powerPreference: DawnVocabulary.powerPreferenceHighPerformance
+            },
+            WGPURequestAdapterCallbackInfo {
+                mode: DawnVocabulary.callbackWaitAnyOnly,
+                callback: dawnAdapterReady,
+                userdata1: runtimeUserData
+            }
+        )
+        if !dawnWaitFor(state, request, DawnWait.setupNanoseconds) || !state.dawn.adapterResolved {
+            return .Error(.AdapterNeverAnswered)
+        }
+        if isNull(state.dawn.adapter) {
+            return .Error(.NoAdapter)
+        }
+        if state.tracing.device {
+            log debug("Ember chose an adapter", adapter: state.dawn.adapter)
+        }
+        return .Ok
     }
-    if isNull(state.dawn.adapter) {
-        return .Error(.NoAdapter)
-    }
-    if state.tracing.device {
-        log debug("Ember chose an adapter", adapter: state.dawn.adapter)
-    }
-    return .Ok
 }
 
 // The features a device asks for: half floats in shaders where the adapter
@@ -420,59 +427,70 @@ function dawnRequestAdapter(
 // queries where the adapter can time its own frames, so a frame's GPU cost
 // can be reported.
 function dawnDeviceFeatures(state: borrow mut GraphicsRuntimeState) -> [I32] {
-    var features: [I32] = []
-    let adapter = state.dawn.adapter
-    if !isNull(adapter) && wgpuAdapterHasFeature(adapter, DawnVocabulary.featureShaderF16) != U32(
-        0
-    ) {
-        features.append(DawnVocabulary.featureShaderF16)
-    } else {
-        log warn("this adapter has no half floats in shaders, so shaders using them will not build")
-    }
-    state.dawn.strictMath = !isNull(adapter)
-        && wgpuAdapterHasFeature(adapter, DawnVocabulary.featureCompilationOptions) != U32(0)
-    if state.dawn.strictMath {
-        features.append(DawnVocabulary.featureCompilationOptions)
-    } else {
-        log warn("this adapter cannot build shaders with strict math, so halves may hold floats")
-    }
-    state.dawn.clock.supported = dawnAdapterTimesFrames(adapter)
-    if !state.dawn.clock.supported {
-        log warn("this adapter cannot time its own frames, so GPU frame time will not be reported")
+    unsafe {
+        var features: [I32] = []
+        let adapter = state.dawn.adapter
+        if !isNull(adapter) && wgpuAdapterHasFeature(
+            adapter,
+            DawnVocabulary.featureShaderF16
+        ) != U32(0) {
+            features.append(DawnVocabulary.featureShaderF16)
+        } else {
+            log warn(
+                "this adapter has no half floats in shaders, so shaders using them will not build"
+            )
+        }
+        state.dawn.strictMath = !isNull(adapter)
+            && wgpuAdapterHasFeature(adapter, DawnVocabulary.featureCompilationOptions) != U32(0)
+        if state.dawn.strictMath {
+            features.append(DawnVocabulary.featureCompilationOptions)
+        } else {
+            log warn(
+                "this adapter cannot build shaders with strict math, so halves may hold floats"
+            )
+        }
+        state.dawn.clock.supported = dawnAdapterTimesFrames(adapter)
+        if !state.dawn.clock.supported {
+            log warn(
+                "this adapter cannot time its own frames, so GPU frame time will not be reported"
+            )
+            return features
+        }
+        features.append(DawnTimestamps.featureTimestampQuery)
         return features
     }
-    features.append(DawnTimestamps.featureTimestampQuery)
-    return features
 }
 
 function dawnCreateDevice(
     state: borrow mut GraphicsRuntimeState
 ) -> Result<Void, DawnSetupFailure> {
-    let features = dawnDeviceFeatures(state)
-    if state.tracing.device {
-        log debug("Ember requested device features", requested: features.count)
+    unsafe {
+        let features = dawnDeviceFeatures(state)
+        if state.tracing.device {
+            log debug("Ember requested device features", requested: features.count)
+        }
+        state.dawn.device = wgpuAdapterCreateDevice(
+            WGPUAdapterImpl_ptr(state.dawn.adapter),
+            dawnDeviceDescriptor(features)
+        )
+        if isNull(state.dawn.device) {
+            return .Error(.DeviceRefused)
+        }
+        if state.tracing.device {
+            log debug("Ember created a device", device: state.dawn.device)
+        }
+        dawnReadGpuTimesKnob(state)
+        // The format a `Swapchain` color target resolves to is settled with the
+        // device, not a surface, so a headless device's offscreen pipelines name a
+        // format Dawn accepts. BGRA8 is what every Windows swapchain presents and
+        // what Dawn's D3D12 backend reports first.
+        state.dawn.surfaceFormat = DawnVocabulary.formatBgra8Unorm
+        state.dawn.queue = wgpuDeviceGetQueue(state.dawn.device)
+        if isNull(state.dawn.queue) {
+            return .Error(.NoQueue)
+        }
+        return .Ok
     }
-    state.dawn.device = wgpuAdapterCreateDevice(
-        WGPUAdapterImpl_ptr(state.dawn.adapter),
-        dawnDeviceDescriptor(features)
-    )
-    if isNull(state.dawn.device) {
-        return .Error(.DeviceRefused)
-    }
-    if state.tracing.device {
-        log debug("Ember created a device", device: state.dawn.device)
-    }
-    dawnReadGpuTimesKnob(state)
-    // The format a `Swapchain` color target resolves to is settled with the
-    // device, not a surface, so a headless device's offscreen pipelines name a
-    // format Dawn accepts. BGRA8 is what every Windows swapchain presents and
-    // what Dawn's D3D12 backend reports first.
-    state.dawn.surfaceFormat = DawnVocabulary.formatBgra8Unorm
-    state.dawn.queue = wgpuDeviceGetQueue(state.dawn.device)
-    if isNull(state.dawn.queue) {
-        return .Error(.NoQueue)
-    }
-    return .Ok
 }
 
 // Creates the surface for the window this run opened, chaining the HWND source
@@ -513,67 +531,71 @@ public function dawnConfigureSurface(
     width: Int,
     height: Int
 ) -> Bool {
-    // A window that does not measure itself reports nothing, which means
-    // "unchanged" rather than "failed". Win32 answers a client rectangle
-    // whenever it is asked; a Wayland surface is told its size by a configure
-    // and has none to report between them. Either way a surface already
-    // configured once stays at the size it was given.
-    if width <= 0 || height <= 0 {
-        return state.dawn.surfaceWidth > 0 && state.dawn.surfaceHeight > 0
-    }
-    if state.dawn.surfaceWidth == width && state.dawn.surfaceHeight == height {
+    unsafe {
+        // A window that does not measure itself reports nothing, which means
+        // "unchanged" rather than "failed". Win32 answers a client rectangle
+        // whenever it is asked; a Wayland surface is told its size by a configure
+        // and has none to report between them. Either way a surface already
+        // configured once stays at the size it was given.
+        if width <= 0 || height <= 0 {
+            return state.dawn.surfaceWidth > 0 && state.dawn.surfaceHeight > 0
+        }
+        if state.dawn.surfaceWidth == width && state.dawn.surfaceHeight == height {
+            return true
+        }
+        wgpuSurfaceConfigure(
+            state.dawn.surface,
+            WGPUSurfaceConfiguration {
+                device: state.dawn.device,
+                format: state.dawn.surfaceFormat,
+                // `CopySrc` beside the attachment bit, so a presented frame can be read
+                // back into a capture. That readback is what proves a frame contains
+                // anything; every other signal a run can emit is equally true of a
+                // frame that came out blank.
+                usage: DawnVocabulary.textureUsageRenderAttachment | DawnVocabulary.textureUsageCopySource,
+                width: U32(width),
+                height: U32(height),
+                alphaMode: DawnVocabulary.compositeAlphaAuto,
+                presentMode: dawnPresentModeFromEnvironment()
+            }
+        )
+        state.dawn.surfaceWidth = width
+        state.dawn.surfaceHeight = height
         return true
     }
-    wgpuSurfaceConfigure(
-        state.dawn.surface,
-        WGPUSurfaceConfiguration {
-            device: state.dawn.device,
-            format: state.dawn.surfaceFormat,
-            // `CopySrc` beside the attachment bit, so a presented frame can be read
-            // back into a capture. That readback is what proves a frame contains
-            // anything; every other signal a run can emit is equally true of a
-            // frame that came out blank.
-            usage: DawnVocabulary.textureUsageRenderAttachment | DawnVocabulary.textureUsageCopySource,
-            width: U32(width),
-            height: U32(height),
-            alphaMode: DawnVocabulary.compositeAlphaAuto,
-            presentMode: dawnPresentModeFromEnvironment()
-        }
-    )
-    state.dawn.surfaceWidth = width
-    state.dawn.surfaceHeight = height
-    return true
 }
 
 // The device and everything it made, then the adapter and the instance, in the
 // order WebGPU's ownership implies.
 function dawnReleaseDevice(state: borrow mut GraphicsRuntimeState) {
-    for slot in 0..state.dawn.objects.count {
-        state.dawn.objects[slot] = nullPointer()
-    }
-    state.dawn.freeCount = 0
-    state.dawn.mergedGroups = []
-    state.dawn.pipelineBindings = []
-    if !isNull(state.dawn.surface) {
-        wgpuSurfaceUnconfigure(state.dawn.surface)
-        wgpuSurfaceRelease(state.dawn.surface)
-        state.dawn.surface = nullPointer()
-    }
-    if !isNull(state.dawn.queue) {
-        wgpuQueueRelease(state.dawn.queue)
-        state.dawn.queue = nullPointer()
-    }
-    if !isNull(state.dawn.device) {
-        wgpuDeviceRelease(state.dawn.device)
-        state.dawn.device = nullPointer()
-    }
-    if !isNull(state.dawn.adapter) {
-        wgpuAdapterRelease(state.dawn.adapter)
-        state.dawn.adapter = nullPointer()
-    }
-    if !isNull(state.dawn.instance) {
-        wgpuInstanceRelease(state.dawn.instance)
-        state.dawn.instance = nullPointer()
+    unsafe {
+        for slot in 0..state.dawn.objects.count {
+            state.dawn.objects[slot] = nullPointer()
+        }
+        state.dawn.freeCount = 0
+        state.dawn.mergedGroups = []
+        state.dawn.pipelineBindings = []
+        if !isNull(state.dawn.surface) {
+            wgpuSurfaceUnconfigure(state.dawn.surface)
+            wgpuSurfaceRelease(state.dawn.surface)
+            state.dawn.surface = nullPointer()
+        }
+        if !isNull(state.dawn.queue) {
+            wgpuQueueRelease(state.dawn.queue)
+            state.dawn.queue = nullPointer()
+        }
+        if !isNull(state.dawn.device) {
+            wgpuDeviceRelease(state.dawn.device)
+            state.dawn.device = nullPointer()
+        }
+        if !isNull(state.dawn.adapter) {
+            wgpuAdapterRelease(state.dawn.adapter)
+            state.dawn.adapter = nullPointer()
+        }
+        if !isNull(state.dawn.instance) {
+            wgpuInstanceRelease(state.dawn.instance)
+            state.dawn.instance = nullPointer()
+        }
     }
 }
 

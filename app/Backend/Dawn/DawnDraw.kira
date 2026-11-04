@@ -67,82 +67,88 @@ public function dawnApplyBindGroup(
     slot: UN32,
     group: borrow BindGroup
 ) {
-    let layout = wgpuRenderPipelineGetBindGroupLayout(pipeline.handle, U32(slot))
-    if isNull(layout) {
-        log fault("the pipeline has no layout for a bound group", slot: slot)
-        return
-    }
-    let target = DawnGroupTarget { pipelineId: pipeline.id, slot: slot, layout: layout }
-    let handle = dawnDeviceBindGroup(state, group, target)
-    wgpuBindGroupLayoutRelease(layout)
-    match handle {
-        Some(handle) -> dawnSetGroup(state, slot, handle)
-        // `dawnDeviceBindGroup` reported why.
-        None -> {}
+    unsafe {
+        let layout = wgpuRenderPipelineGetBindGroupLayout(pipeline.handle, U32(slot))
+        if isNull(layout) {
+            log fault("the pipeline has no layout for a bound group", slot: slot)
+            return
+        }
+        let target = DawnGroupTarget { pipelineId: pipeline.id, slot: slot, layout: layout }
+        let handle = dawnDeviceBindGroup(state, group, target)
+        wgpuBindGroupLayoutRelease(layout)
+        match handle {
+            Some(handle) -> dawnSetGroup(state, slot, handle)
+            // `dawnDeviceBindGroup` reported why.
+            None -> {}
+        }
     }
 }
 
-// The viewport over the whole pass and the scissor the encoder set, both on
-// every draw rather than once per pass: the pass may be an offscreen target of
-// its own size, and one draw's scissor must not leak into the next. Answers
-// false where the scissor misses the pass.
+// The viewport over the pass's draw area and the scissor the encoder set,
+// inside that area, both on every draw rather than once per pass: the pass may
+// be an offscreen target of its own size, and one draw's scissor must not leak
+// into the next. Answers false where the scissor misses the area.
 function dawnSetDrawArea(state: borrow GraphicsRuntimeState, scissor: borrow ScissorRect?) -> Bool {
-    let pass = state.dawn.passEncoder
-    wgpuRenderPassEncoderSetViewport(
-        pass,
-        F32(0),
-        F32(0),
-        F32(state.dawn.passWidth),
-        F32(state.dawn.passHeight),
-        F32(0),
-        F32(1)
-    )
-    match scissorWithinPass(scissor, state.dawn.passWidth, state.dawn.passHeight) {
-        Some(area) -> {
-            wgpuRenderPassEncoderSetScissorRect(
-                pass,
-                U32(area.x),
-                U32(area.y),
-                U32(area.width),
-                U32(area.height)
-            )
-            return true
+    unsafe {
+        let pass = state.dawn.passEncoder
+        wgpuRenderPassEncoderSetViewport(
+            pass,
+            F32(state.dawn.passOriginX),
+            F32(state.dawn.passOriginY),
+            F32(state.dawn.passWidth),
+            F32(state.dawn.passHeight),
+            F32(0),
+            F32(1)
+        )
+        match scissorWithinPass(scissor, state.dawn.passWidth, state.dawn.passHeight) {
+            Some(area) -> {
+                wgpuRenderPassEncoderSetScissorRect(
+                    pass,
+                    U32(area.x + state.dawn.passOriginX),
+                    U32(area.y + state.dawn.passOriginY),
+                    U32(area.width),
+                    U32(area.height)
+                )
+                return true
+            }
+            None -> return false
         }
-        None -> return false
     }
 }
 
 function dawnBindBuffers(state: borrow GraphicsRuntimeState, encoder: borrow RenderEncoderState) {
-    let pass = state.dawn.passEncoder
-    match encoder.vertexBuffer {
-        Some(id) -> {
-            let buffer = dawnObject(state, id.raw)
-            if !isNull(buffer) {
-                wgpuRenderPassEncoderSetVertexBuffer(
-                    pass,
-                    U32(0),
-                    buffer,
-                    U64(0),
-                    wgpuBufferGetSize(buffer)
-                )
+    unsafe {
+        let pass = state.dawn.passEncoder
+        match encoder.vertexBuffer {
+            Some(id) -> {
+                let buffer = dawnObject(state, id.raw)
+                if !isNull(buffer) {
+                    wgpuRenderPassEncoderSetVertexBuffer(
+                        pass,
+                        U32(0),
+                        buffer,
+                        U64(0),
+                        wgpuBufferGetSize(buffer)
+                    )
+                }
             }
+            None -> {}
         }
-        None -> {}
-    }
-    match encoder.indexBuffer {
-        Some(index) -> {
-            let buffer = dawnObject(state, index.buffer.raw)
-            if !isNull(buffer) {
-                wgpuRenderPassEncoderSetIndexBuffer(
-                    pass,
-                    buffer,
-                    dawnIndexFormat(index.format),
-                    U64(0),
-                    wgpuBufferGetSize(buffer)
-                )
+        match encoder.indexBuffer {
+            Some(index) -> {
+                let buffer = dawnObject(state, index.buffer.raw)
+                if !isNull(buffer) {
+                    wgpuRenderPassEncoderSetIndexBuffer(
+                        pass,
+                        buffer,
+                        dawnIndexFormat(index.format),
+                        U64(0),
+                        wgpuBufferGetSize(buffer)
+                    )
+                }
             }
+            None -> {}
         }
-        None -> {}
     }
 }
 
@@ -152,28 +158,30 @@ function dawnPrepareDraw(
     state: borrow mut GraphicsRuntimeState,
     encoder: borrow RenderEncoderState
 ) -> U32? {
-    let pipelineId = match encoder.pipeline {
-        Some(pipeline) -> pipeline.id.raw
-        None -> return .None
-    }
-    let pipelineHandle = dawnObject(state, pipelineId)
-    if isNull(pipelineHandle) {
-        return .None
-    }
-    wgpuRenderPassEncoderSetPipeline(state.dawn.passEncoder, pipelineHandle)
-    if !dawnSetDrawArea(state, encoder.scissor) {
-        return .None
-    }
-    dawnBindBuffers(state, encoder)
-    let pipeline = DawnDrawPipeline { handle: pipelineHandle, id: pipelineId }
-    match dawnApplyBindings(state, pipeline, encoder.bindGroups) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault("a draw's groups could not be bound, so it was skipped", failure)
+    unsafe {
+        let pipelineId = match encoder.pipeline {
+            Some(pipeline) -> pipeline.id.raw
+            None -> return .None
+        }
+        let pipelineHandle = dawnObject(state, pipelineId)
+        if isNull(pipelineHandle) {
             return .None
         }
+        wgpuRenderPassEncoderSetPipeline(state.dawn.passEncoder, pipelineHandle)
+        if !dawnSetDrawArea(state, encoder.scissor) {
+            return .None
+        }
+        dawnBindBuffers(state, encoder)
+        let pipeline = DawnDrawPipeline { handle: pipelineHandle, id: pipelineId }
+        match dawnApplyBindings(state, pipeline, encoder.bindGroups) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("a draw's groups could not be bound, so it was skipped", failure)
+                return .None
+            }
+        }
+        return .Some(pipelineId)
     }
-    return .Some(pipelineId)
 }
 
 public function dawnDrawWithBindings(

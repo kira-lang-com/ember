@@ -121,29 +121,31 @@ public function waylandPointerButtonOf(code: U32) -> PointerButton {
 }
 
 public function waylandResizeEdge(state: borrow GraphicsRuntimeState, x: Number, y: Number) -> U32 {
-    if state.dawn.pointerResizeEdge != U32(0) {
-        return state.dawn.pointerResizeEdge
+    unsafe {
+        if state.dawn.pointerResizeEdge != U32(0) {
+            return state.dawn.pointerResizeEdge
+        }
+        // Keep a slim inside fallback for compositors missing one of the optional
+        // protocols used by the transparent outside frame.
+        let grip = 4
+        // The pointer is in points, and the surface's size in pixels.
+        let scale = waylandSurfaceScale(state)
+        let width = Number(state.dawn.surfaceWidth) / scale
+        let height = Number(state.dawn.surfaceHeight) / scale
+        let left = x >= 0 && x < grip
+        let right = x <= width && x >= width - grip
+        let top = y >= 0 && y < grip
+        let bottom = y <= height && y >= height - grip
+        if top && left { return kira_wayland_resize_edge_top_left() }
+        if top && right { return kira_wayland_resize_edge_top_right() }
+        if bottom && left { return kira_wayland_resize_edge_bottom_left() }
+        if bottom && right { return kira_wayland_resize_edge_bottom_right() }
+        if top { return kira_wayland_resize_edge_top() }
+        if bottom { return kira_wayland_resize_edge_bottom() }
+        if left { return kira_wayland_resize_edge_left() }
+        if right { return kira_wayland_resize_edge_right() }
+        return U32(0)
     }
-    // Keep a slim inside fallback for compositors missing one of the optional
-    // protocols used by the transparent outside frame.
-    let grip = 4
-    // The pointer is in points, and the surface's size in pixels.
-    let scale = waylandSurfaceScale(state)
-    let width = Number(state.dawn.surfaceWidth) / scale
-    let height = Number(state.dawn.surfaceHeight) / scale
-    let left = x >= 0 && x < grip
-    let right = x <= width && x >= width - grip
-    let top = y >= 0 && y < grip
-    let bottom = y <= height && y >= height - grip
-    if top && left { return kira_wayland_resize_edge_top_left() }
-    if top && right { return kira_wayland_resize_edge_top_right() }
-    if bottom && left { return kira_wayland_resize_edge_bottom_left() }
-    if bottom && right { return kira_wayland_resize_edge_bottom_right() }
-    if top { return kira_wayland_resize_edge_top() }
-    if bottom { return kira_wayland_resize_edge_bottom() }
-    if left { return kira_wayland_resize_edge_left() }
-    if right { return kira_wayland_resize_edge_right() }
-    return U32(0)
 }
 
 public function waylandOnPointerButton(
@@ -186,7 +188,9 @@ public function waylandOnPointerButton(
 }
 
 function waylandToplevelStateSet(states: RawPtr, toplevelState: U32) -> Bool {
-    return kira_wayland_toplevel_states_contains(states, toplevelState) != I32(0)
+    unsafe {
+        return kira_wayland_toplevel_states_contains(states, toplevelState) != I32(0)
+    }
 }
 
 // Records the compositor's focus, and tells the application when it changed.
@@ -212,10 +216,12 @@ function waylandNoteFocus(
 // The pixels the surface draws for each of its points: the scale the run set
 // on a Vulkan surface, and 1 on any other.
 function waylandSurfaceScale(state: borrow GraphicsRuntimeState) -> Number {
-    if state.app.backend == .Vulkan {
-        return Int(kira_wayland_surface_scale(state.vulkan.window))
+    unsafe {
+        if state.app.backend == .Vulkan {
+            return Int(kira_wayland_surface_scale(state.vulkan.window))
+        }
+        return 1
     }
-    return 1
 }
 
 // Resizes the surface to the configured size, in points. Whether the size
@@ -226,21 +232,23 @@ function waylandApplyConfiguredSize(
     width: Number,
     height: Number
 ) -> Bool {
-    if width <= 0 || height <= 0 {
-        return false
+    unsafe {
+        if width <= 0 || height <= 0 {
+            return false
+        }
+        let scale = waylandSurfaceScale(state)
+        if width * scale == state.dawn.surfaceWidth && height * scale == state.dawn.surfaceHeight {
+            return false
+        }
+        if state.app.backend == .Vulkan {
+            kira_wayland_surface_note_size(state.vulkan.window, I32(width), I32(height))
+            state.dawn.surfaceWidth = width * scale
+            state.dawn.surfaceHeight = height * scale
+        } else {
+            dawnConfigureSurface(state, width, height)
+        }
+        return true
     }
-    let scale = waylandSurfaceScale(state)
-    if width * scale == state.dawn.surfaceWidth && height * scale == state.dawn.surfaceHeight {
-        return false
-    }
-    if state.app.backend == .Vulkan {
-        kira_wayland_surface_note_size(state.vulkan.window, I32(width), I32(height))
-        state.dawn.surfaceWidth = width * scale
-        state.dawn.surfaceHeight = height * scale
-    } else {
-        dawnConfigureSurface(state, width, height)
-    }
-    return true
 }
 
 public function waylandOnToplevelConfigure(
@@ -275,20 +283,24 @@ public function waylandOnToplevelConfigure(
 // Client-side titlebar actions. xdg-shell keeps the policy in the compositor:
 // these are requests, and configure events above are the authoritative state.
 public function dawnWaylandMinimize(state: borrow GraphicsRuntimeState) {
-    if !isNull(state.dawn.toplevel) {
-        kira_wayland_toplevel_set_minimized(state.dawn.toplevel)
+    unsafe {
+        if !isNull(state.dawn.toplevel) {
+            kira_wayland_toplevel_set_minimized(state.dawn.toplevel)
+        }
     }
 }
 
 public function dawnWaylandToggleMaximize(state: borrow GraphicsRuntimeState) {
-    if isNull(state.dawn.toplevel) {
-        return
+    unsafe {
+        if isNull(state.dawn.toplevel) {
+            return
+        }
+        if state.dawn.maximized {
+            kira_wayland_toplevel_unset_maximized(state.dawn.toplevel)
+            return
+        }
+        kira_wayland_toplevel_set_maximized(state.dawn.toplevel)
     }
-    if state.dawn.maximized {
-        kira_wayland_toplevel_unset_maximized(state.dawn.toplevel)
-        return
-    }
-    kira_wayland_toplevel_set_maximized(state.dawn.toplevel)
 }
 
 public function waylandOnToplevelClose(data: RawPtr, toplevel: RawPtr) {
@@ -467,25 +479,27 @@ function waylandListenToplevel(
     display: RawPtr,
     runtimeUserData: RawPtr
 ) -> Result<Void, WaylandToplevelFailure> {
-    let toplevel = kira_wayland_proxy_get_user_data(state.dawn.window)
-    if isNull(toplevel) {
-        return .Error(.NoToplevelRole)
+    unsafe {
+        let toplevel = kira_wayland_proxy_get_user_data(state.dawn.window)
+        if isNull(toplevel) {
+            return .Error(.NoToplevelRole)
+        }
+        state.dawn.toplevel = toplevel
+        var listener = kira_wayland_toplevel_listener {
+            configure: waylandOnToplevelConfigure,
+            close: waylandOnToplevelClose,
+            configure_bounds: waylandOnToplevelConfigureBounds,
+            wm_capabilities: waylandOnToplevelWmCapabilities
+        }
+        if kira_wayland_toplevel_add_listener(toplevel, move listener, runtimeUserData) != I32(0) {
+            return .Error(.ListenerTaken)
+        }
+        kira_wayland_surface_commit(state.dawn.window)
+        if kira_wayland_display_roundtrip(display) < I32(0) {
+            return .Error(.ConfigureFailed)
+        }
+        return .Ok
     }
-    state.dawn.toplevel = toplevel
-    var listener = kira_wayland_toplevel_listener {
-        configure: waylandOnToplevelConfigure,
-        close: waylandOnToplevelClose,
-        configure_bounds: waylandOnToplevelConfigureBounds,
-        wm_capabilities: waylandOnToplevelWmCapabilities
-    }
-    if kira_wayland_toplevel_add_listener(toplevel, move listener, runtimeUserData) != I32(0) {
-        return .Error(.ListenerTaken)
-    }
-    kira_wayland_surface_commit(state.dawn.window)
-    if kira_wayland_display_roundtrip(display) < I32(0) {
-        return .Error(.ConfigureFailed)
-    }
-    return .Ok
 }
 
 // Binds the seat, and through its capabilities the pointer.
@@ -495,22 +509,24 @@ function waylandListenToplevel(
 // which is what the pointer is taken in. One round trip returns with a seat
 // bound and no pointer on it.
 function waylandBindSeat(display: RawPtr, runtimeUserData: RawPtr) {
-    let registry = kira_wayland_display_get_registry(display)
-    if isNull(registry) {
-        log fault("the Wayland display refused a registry for the seat")
-        return
-    }
-    var listener = kira_wayland_registry_listener {
-        global: waylandOnSeatGlobal,
-        global_remove: waylandOnGlobalRemove
-    }
-    if kira_wayland_registry_add_listener(registry, move listener, runtimeUserData) != I32(0) {
-        log fault("the seat's Wayland registry already has a listener")
-        return
-    }
-    if kira_wayland_display_roundtrip(display) < I32(0)
-        || kira_wayland_display_roundtrip(display) < I32(0) {
-        log fault("the Wayland display failed while binding the seat")
+    unsafe {
+        let registry = kira_wayland_display_get_registry(display)
+        if isNull(registry) {
+            log fault("the Wayland display refused a registry for the seat")
+            return
+        }
+        var listener = kira_wayland_registry_listener {
+            global: waylandOnSeatGlobal,
+            global_remove: waylandOnGlobalRemove
+        }
+        if kira_wayland_registry_add_listener(registry, move listener, runtimeUserData) != I32(0) {
+            log fault("the seat's Wayland registry already has a listener")
+            return
+        }
+        if kira_wayland_display_roundtrip(display) < I32(0)
+            || kira_wayland_display_roundtrip(display) < I32(0) {
+            log fault("the Wayland display failed while binding the seat")
+        }
     }
 }
 
@@ -523,22 +539,24 @@ public function dawnWaylandAttachInput(
     state: borrow mut GraphicsRuntimeState,
     runtimeUserData: RawPtr
 ) {
-    if isNull(state.dawn.window) {
-        return
-    }
-    let display = kira_wayland_proxy_get_display(state.dawn.window)
-    if isNull(display) {
-        return
-    }
-    match waylandListenToplevel(state, display, runtimeUserData) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault("could not listen to the Wayland toplevel", failure)
+    unsafe {
+        if isNull(state.dawn.window) {
             return
         }
-    }
-    waylandBindSeat(display, runtimeUserData)
-    if isNull(state.dawn.pointer) {
-        log warn("this Wayland seat offers no pointer, so the window answers no mouse")
+        let display = kira_wayland_proxy_get_display(state.dawn.window)
+        if isNull(display) {
+            return
+        }
+        match waylandListenToplevel(state, display, runtimeUserData) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not listen to the Wayland toplevel", failure)
+                return
+            }
+        }
+        waylandBindSeat(display, runtimeUserData)
+        if isNull(state.dawn.pointer) {
+            log warn("this Wayland seat offers no pointer, so the window answers no mouse")
+        }
     }
 }

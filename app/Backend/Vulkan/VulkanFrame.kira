@@ -31,78 +31,82 @@ public function vulkanSubmitFrameCommands(
     state: borrow mut VulkanState,
     present: borrow VulkanPresentSync?
 ) -> Result<Void, VulkanFrameFailure> {
-    vulkanGpuTimingSubmit(state)
-    let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
-    if endResult != .Success {
-        return .Error(.CommandBufferNotEnded(endResult))
+    unsafe {
+        vulkanGpuTimingSubmit(state)
+        let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
+        if endResult != .Success {
+            return .Error(.CommandBufferNotEnded(endResult))
+        }
+        let fence = boxed<RawPtr>(state.inFlightFence)
+        let resetResult = vulkanResultOf(vkResetFences(state.device, U32(1), fence.pointer()))
+        if resetResult != .Success {
+            return .Error(.FenceResetFailed(resetResult))
+        }
+        let commands = boxed<RawPtr>(state.commandBuffer)
+        let waitSemaphore = boxed<RawPtr>(state.imageAvailable)
+        let waitStage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
+        let signalSemaphore = boxed<RawPtr>(nullPointer())
+        match present {
+            Some(sync) -> { setBoxedValue<RawPtr>(signalSemaphore, sync.signal) }
+            None -> {}
+        }
+        let waitCount = match present {
+            Some(_) -> state.acquireWaitPending ? U32(1) : U32(0)
+            None -> U32(0)
+        }
+        let signalCount = match present {
+            Some(_) -> U32(1)
+            None -> U32(0)
+        }
+        let info = VkSubmitInfo {
+            sType: VulkanVocabulary.structureSubmitInfo,
+            waitSemaphoreCount: waitCount,
+            pWaitSemaphores: waitSemaphore.pointer(),
+            pWaitDstStageMask: waitStage.pointer(),
+            commandBufferCount: U32(1),
+            pCommandBuffers: commands.pointer(),
+            signalSemaphoreCount: signalCount,
+            pSignalSemaphores: signalSemaphore.pointer()
+        }
+        let submitResult = vulkanResultOf(vkQueueSubmit(state.queue, U32(1), info, state.inFlightFence))
+        if submitResult != .Success {
+            return .Error(.SubmitFailed(submitResult))
+        }
+        state.acquireWaitPending = false
+        return .Ok
     }
-    let fence = boxed<RawPtr>(state.inFlightFence)
-    let resetResult = vulkanResultOf(vkResetFences(state.device, U32(1), fence.pointer()))
-    if resetResult != .Success {
-        return .Error(.FenceResetFailed(resetResult))
-    }
-    let commands = boxed<RawPtr>(state.commandBuffer)
-    let waitSemaphore = boxed<RawPtr>(state.imageAvailable)
-    let waitStage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
-    let signalSemaphore = boxed<RawPtr>(nullPointer())
-    match present {
-        Some(sync) -> { setBoxedValue<RawPtr>(signalSemaphore, sync.signal) }
-        None -> {}
-    }
-    let waitCount = match present {
-        Some(_) -> state.acquireWaitPending ? U32(1) : U32(0)
-        None -> U32(0)
-    }
-    let signalCount = match present {
-        Some(_) -> U32(1)
-        None -> U32(0)
-    }
-    let info = VkSubmitInfo {
-        sType: VulkanVocabulary.structureSubmitInfo,
-        waitSemaphoreCount: waitCount,
-        pWaitSemaphores: waitSemaphore.pointer(),
-        pWaitDstStageMask: waitStage.pointer(),
-        commandBufferCount: U32(1),
-        pCommandBuffers: commands.pointer(),
-        signalSemaphoreCount: signalCount,
-        pSignalSemaphores: signalSemaphore.pointer()
-    }
-    let submitResult = vulkanResultOf(vkQueueSubmit(state.queue, U32(1), info, state.inFlightFence))
-    if submitResult != .Success {
-        return .Error(.SubmitFailed(submitResult))
-    }
-    state.acquireWaitPending = false
-    return .Ok
 }
 
 // The acquired image handed to the compositor once `signal` is signalled. An
 // out-of-date or suboptimal swapchain is recreated on the next acquire, so
 // neither is a failure here.
 function vulkanPresentImage(state: borrow mut VulkanState, signal: RawPtr) {
-    let semaphore = boxed<RawPtr>(signal)
-    let swapchain = boxed<RawPtr>(state.swapchain)
-    let imageIndex = boxed<U32>(state.currentImageIndex)
-    let presentResult = vulkanResultOf(
-        vkQueuePresentKHR(
-            state.queue,
-            VkPresentInfoKHR {
-                sType: VulkanVocabulary.structurePresentInfo,
-                waitSemaphoreCount: U32(1),
-                pWaitSemaphores: semaphore.pointer(),
-                swapchainCount: U32(1),
-                pSwapchains: swapchain.pointer(),
-                pImageIndices: imageIndex.pointer()
-            }
+    unsafe {
+        let semaphore = boxed<RawPtr>(signal)
+        let swapchain = boxed<RawPtr>(state.swapchain)
+        let imageIndex = boxed<U32>(state.currentImageIndex)
+        let presentResult = vulkanResultOf(
+            vkQueuePresentKHR(
+                state.queue,
+                VkPresentInfoKHR {
+                    sType: VulkanVocabulary.structurePresentInfo,
+                    waitSemaphoreCount: U32(1),
+                    pWaitSemaphores: semaphore.pointer(),
+                    swapchainCount: U32(1),
+                    pSwapchains: swapchain.pointer(),
+                    pImageIndices: imageIndex.pointer()
+                }
+            )
         )
-    )
-    if presentResult != .Success && presentResult != .Suboptimal && presentResult != .OutOfDate {
-        log fault("could not present the frame", result: presentResult)
-    }
-    state.presentedThisFrame = true
-    if !state.announcedFramePresented {
-        state.announcedFramePresented = true
-        emberLiveFramePresented()
-        emberLiveFirstFrame()
+        if presentResult != .Success && presentResult != .Suboptimal && presentResult != .OutOfDate {
+            log fault("could not present the frame", result: presentResult)
+        }
+        state.presentedThisFrame = true
+        if !state.announcedFramePresented {
+            state.announcedFramePresented = true
+            emberLiveFramePresented()
+            emberLiveFirstFrame()
+        }
     }
 }
 

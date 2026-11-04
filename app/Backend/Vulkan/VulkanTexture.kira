@@ -35,9 +35,11 @@ function vulkanImageFormat(state: borrow VulkanState, format: borrow TextureForm
 }
 
 function vulkanImageRequirements(state: borrow VulkanState, image: RawPtr) -> VkMemoryRequirements {
-    let requirements = boxed<VkMemoryRequirements>(VkMemoryRequirements())
-    vkGetImageMemoryRequirements(state.device, image, requirements.pointer())
-    return boxedValue<VkMemoryRequirements>(requirements)
+    unsafe {
+        let requirements = boxed<VkMemoryRequirements>(VkMemoryRequirements())
+        vkGetImageMemoryRequirements(state.device, image, requirements.pointer())
+        return boxedValue<VkMemoryRequirements>(requirements)
+    }
 }
 
 function vulkanNewImage(
@@ -46,31 +48,33 @@ function vulkanNewImage(
     format: I32,
     samples: I32
 ) -> Result<RawPtr, VulkanResourceFailure> {
-    let info = VkImageCreateInfo {
-        sType: VulkanVocabulary.structureImageCreateInfo,
-        imageType: VulkanVocabulary.imageType2d,
-        format: format,
-        extent: VkExtent3D {
-            width: U32(descriptor.width),
-            height: U32(descriptor.height),
-            depth: U32(1)
-        },
-        mipLevels: U32(1),
-        arrayLayers: U32(1),
-        samples: samples,
-        tiling: VulkanImage.tilingOptimal,
-        usage: vulkanImageUsage(descriptor.usage),
-        sharingMode: VulkanVocabulary.sharingExclusive,
-        initialLayout: VulkanVocabulary.imageLayoutUndefined
+    unsafe {
+        let info = VkImageCreateInfo {
+            sType: VulkanVocabulary.structureImageCreateInfo,
+            imageType: VulkanVocabulary.imageType2d,
+            format: format,
+            extent: VkExtent3D {
+                width: U32(descriptor.width),
+                height: U32(descriptor.height),
+                depth: U32(1)
+            },
+            mipLevels: U32(1),
+            arrayLayers: U32(1),
+            samples: samples,
+            tiling: VulkanImage.tilingOptimal,
+            usage: vulkanImageUsage(descriptor.usage),
+            sharingMode: VulkanVocabulary.sharingExclusive,
+            initialLayout: VulkanVocabulary.imageLayoutUndefined
+        }
+        let imageSlot = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
+        )
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(imageSlot))
     }
-    let imageSlot = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
-    }
-    return .Ok(boxedValue<RawPtr>(imageSlot))
 }
 
 // Allocates and binds device-local memory behind `image`. An image is never
@@ -83,67 +87,71 @@ function vulkanBackImage(
     state: borrow VulkanState,
     image: RawPtr
 ) -> Result<VulkanAllocation, VulkanResourceFailure> {
-    let requirements = vulkanImageRequirements(state, image)
-    let local = VulkanVocabulary.memoryDeviceLocal
-    let memoryType = match vulkanFindMemoryTypeWithout(
-        state,
-        requirements.memoryTypeBits,
-        local,
-        VulkanVocabulary.memoryHostVisible
-    ) {
-        Some(found) -> found
-        None -> match vulkanFindMemoryType(state, requirements.memoryTypeBits, local) {
+    unsafe {
+        let requirements = vulkanImageRequirements(state, image)
+        let local = VulkanVocabulary.memoryDeviceLocal
+        let memoryType = match vulkanFindMemoryTypeWithout(
+            state,
+            requirements.memoryTypeBits,
+            local,
+            VulkanVocabulary.memoryHostVisible
+        ) {
             Some(found) -> found
-            None -> return .Error(.NoMemoryType)
+            None -> match vulkanFindMemoryType(state, requirements.memoryTypeBits, local) {
+                Some(found) -> found
+                None -> return .Error(.NoMemoryType)
+            }
         }
+        let allocation = match vulkanAllocateOfType(state, requirements, memoryType) {
+            Ok(allocation) -> allocation
+            Error(failure) -> return .Error(failure)
+        }
+        let bindResult = vulkanResultOf(
+            vkBindImageMemory(state.device, image, allocation.memory, U64(0))
+        )
+        if bindResult != .Success {
+            vkFreeMemory(state.device, allocation.memory, nullPointer())
+            return .Error(.BindRefused(bindResult))
+        }
+        return .Ok(allocation)
     }
-    let allocation = match vulkanAllocateOfType(state, requirements, memoryType) {
-        Ok(allocation) -> allocation
-        Error(failure) -> return .Error(failure)
-    }
-    let bindResult = vulkanResultOf(
-        vkBindImageMemory(state.device, image, allocation.memory, U64(0))
-    )
-    if bindResult != .Success {
-        vkFreeMemory(state.device, allocation.memory, nullPointer())
-        return .Error(.BindRefused(bindResult))
-    }
-    return .Ok(allocation)
 }
 
 public function vulkanCreateImageHandle(
     state: borrow mut VulkanState,
     descriptor: borrow TextureDescriptor
 ) -> Result<U32, VulkanResourceFailure> {
-    let samples = match vulkanSampleCount(max(descriptor.sampleCount, 1)) {
-        Some(samples) -> samples
-        None -> return .Error(.UnsupportedSampleCount(descriptor.sampleCount))
-    }
-    let format = vulkanImageFormat(state, descriptor.format)
-    let image = match vulkanNewImage(state, descriptor, format, samples) {
-        Ok(image) -> image
-        Error(failure) -> return .Error(failure)
-    }
-    let allocation = match vulkanBackImage(state, image) {
-        Ok(allocation) -> allocation
-        Error(failure) -> {
-            vkDestroyImage(state.device, image, nullPointer())
-            return .Error(failure)
+    unsafe {
+        let samples = match vulkanSampleCount(max(descriptor.sampleCount, 1)) {
+            Some(samples) -> samples
+            None -> return .Error(.UnsupportedSampleCount(descriptor.sampleCount))
         }
-    }
-    return .Ok(
-        vulkanRegisterObject(
-            state,
-            VulkanObject {
-                kind: .Image,
-                handle: image,
-                memory: .Some(allocation.memory),
-                size: allocation.size,
-                allocationSize: allocation.size,
-                format: format
+        let format = vulkanImageFormat(state, descriptor.format)
+        let image = match vulkanNewImage(state, descriptor, format, samples) {
+            Ok(image) -> image
+            Error(failure) -> return .Error(failure)
+        }
+        let allocation = match vulkanBackImage(state, image) {
+            Ok(allocation) -> allocation
+            Error(failure) -> {
+                vkDestroyImage(state.device, image, nullPointer())
+                return .Error(failure)
             }
+        }
+        return .Ok(
+            vulkanRegisterObject(
+                state,
+                VulkanObject {
+                    kind: .Image,
+                    handle: image,
+                    memory: .Some(allocation.memory),
+                    size: allocation.size,
+                    allocationSize: allocation.size,
+                    format: format
+                }
+            )
         )
-    )
+    }
 }
 
 public function vulkanCreateImageView(
@@ -152,35 +160,37 @@ public function vulkanCreateImageView(
     format: I32,
     aspect: U32
 ) -> Result<U32, VulkanResourceFailure> {
-    let image = match vulkanObjectRecord(state, imageId) {
-        Some(object) -> object.handle
-        None -> return .Error(.ImageNotLive)
-    }
-    let info = VkImageViewCreateInfo {
-        sType: VulkanVocabulary.structureImageViewCreateInfo,
-        image: image,
-        viewType: VulkanVocabulary.imageViewType2d,
-        format: format,
-        components: VkComponentMapping {},
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: aspect,
-            levelCount: U32(1),
-            layerCount: U32(1)
+    unsafe {
+        let image = match vulkanObjectRecord(state, imageId) {
+            Some(object) -> object.handle
+            None -> return .Error(.ImageNotLive)
         }
-    }
-    let view = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateImageView(state.device, info, nullPointer(), view.pointer())
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
-    }
-    return .Ok(
-        vulkanRegisterObject(
-            state,
-            VulkanObject { kind: .ImageView, handle: boxedValue<RawPtr>(view), format: format }
+        let info = VkImageViewCreateInfo {
+            sType: VulkanVocabulary.structureImageViewCreateInfo,
+            image: image,
+            viewType: VulkanVocabulary.imageViewType2d,
+            format: format,
+            components: VkComponentMapping {},
+            subresourceRange: VkImageSubresourceRange {
+                aspectMask: aspect,
+                levelCount: U32(1),
+                layerCount: U32(1)
+            }
+        }
+        let view = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateImageView(state.device, info, nullPointer(), view.pointer())
         )
-    )
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        return .Ok(
+            vulkanRegisterObject(
+                state,
+                VulkanObject { kind: .ImageView, handle: boxedValue<RawPtr>(view), format: format }
+            )
+        )
+    }
 }
 
 // The views a texture's usage needs of its image.
@@ -559,34 +569,36 @@ public function vulkanRecordBufferToImage(
     texture: borrow GraphicsTexture,
     rows: borrow VulkanRowRange
 ) {
-    let imageId = texture.id.raw
-    let source = vulkanObject(state, stagingId)
-    let target = vulkanObject(state, imageId)
-    if isNull(source) || isNull(target) {
-        return
-    }
-    vulkanTransitionImage(state, imageId, .TransferDestination, VulkanVocabulary.aspectColor)
-    let region = VkBufferImageCopy {
-        imageSubresource: VkImageSubresourceLayers {
-            aspectMask: VulkanVocabulary.aspectColor,
-            layerCount: U32(1)
-        },
-        imageOffset: VkOffset3D { y: I32(rows.first) },
-        imageExtent: VkExtent3D {
-            width: U32(texture.width),
-            height: U32(rows.count),
-            depth: U32(1)
+    unsafe {
+        let imageId = texture.id.raw
+        let source = vulkanObject(state, stagingId)
+        let target = vulkanObject(state, imageId)
+        if isNull(source) || isNull(target) {
+            return
         }
+        vulkanTransitionImage(state, imageId, .TransferDestination, VulkanVocabulary.aspectColor)
+        let region = VkBufferImageCopy {
+            imageSubresource: VkImageSubresourceLayers {
+                aspectMask: VulkanVocabulary.aspectColor,
+                layerCount: U32(1)
+            },
+            imageOffset: VkOffset3D { y: I32(rows.first) },
+            imageExtent: VkExtent3D {
+                width: U32(texture.width),
+                height: U32(rows.count),
+                depth: U32(1)
+            }
+        }
+        vkCmdCopyBufferToImage(
+            state.commandBuffer,
+            source,
+            target,
+            VulkanVocabulary.imageLayoutTransferDestination,
+            U32(1),
+            region
+        )
+        vulkanTransitionImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
     }
-    vkCmdCopyBufferToImage(
-        state.commandBuffer,
-        source,
-        target,
-        VulkanVocabulary.imageLayoutTransferDestination,
-        U32(1),
-        region
-    )
-    vulkanTransitionImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
 }
 
 // The copy recorded and submitted on its own, and waited for: an upload made
@@ -597,14 +609,16 @@ function vulkanCopyBufferToImageNow(
     texture: borrow GraphicsTexture,
     rows: borrow VulkanRowRange
 ) -> Result<Void, VulkanFrameFailure> {
-    let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
-    if idle != .Success {
-        return .Error(.QueueWaitFailed(idle))
+    unsafe {
+        let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
+        if idle != .Success {
+            return .Error(.QueueWaitFailed(idle))
+        }
+        match vulkanRestartCommandBuffer(state, .OneTime) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        vulkanRecordBufferToImage(state, stagingId, texture, rows)
+        return vulkanFlushCommands(state)
     }
-    match vulkanRestartCommandBuffer(state, .OneTime) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    vulkanRecordBufferToImage(state, stagingId, texture, rows)
-    return vulkanFlushCommands(state)
 }

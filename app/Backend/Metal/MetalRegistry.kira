@@ -27,12 +27,14 @@ import Heap
 // Retain it here (releasing the previous frame's committed buffer) so it survives the
 // pool pop; metalContextFree releases the last one.
 public function metalStashCommandBuffer(ctx: RawPtr, commandBuffer: RawPtr) {
-    let previous = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
-    if !isNull(previous) {
-        metalMsgSend(previous, metalSel("release"))
+    unsafe {
+        let previous = metalMemReadPtr(ctx, MetalContext.offsetCommandBuffer)
+        if !isNull(previous) {
+            metalMsgSend(previous, metalSel("release"))
+        }
+        metalMsgSend(commandBuffer, metalSel("retain"))
+        metalMemWritePtr(ctx, MetalContext.offsetCommandBuffer, commandBuffer)
     }
-    metalMsgSend(commandBuffer, metalSel("retain"))
-    metalMemWritePtr(ctx, MetalContext.offsetCommandBuffer, commandBuffer)
 }
 
 // Allocate one command buffer for the whole logical application frame. Render-pass
@@ -40,15 +42,17 @@ public function metalStashCommandBuffer(ctx: RawPtr, commandBuffer: RawPtr) {
 // encoders), but capture/blur/composite no longer pay a commit and pacing wait per
 // pass. The frame submission hook commits this buffer once.
 public function metalContextActiveCommandBuffer(ctx: RawPtr) -> RawPtr {
-    var commandBuffer = metalMemReadPtr(ctx, MetalContext.offsetActiveCommandBuffer)
-    if !isNull(commandBuffer) {
+    unsafe {
+        var commandBuffer = metalMemReadPtr(ctx, MetalContext.offsetActiveCommandBuffer)
+        if !isNull(commandBuffer) {
+            return commandBuffer
+        }
+        metalPacingBeginPass(ctx)
+        let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
+        commandBuffer = metalMsgSend(queue, metalSel("commandBuffer"))
+        metalMemWritePtr(ctx, MetalContext.offsetActiveCommandBuffer, commandBuffer)
         return commandBuffer
     }
-    metalPacingBeginPass(ctx)
-    let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
-    commandBuffer = metalMsgSend(queue, metalSel("commandBuffer"))
-    metalMemWritePtr(ctx, MetalContext.offsetActiveCommandBuffer, commandBuffer)
-    return commandBuffer
 }
 
 // The resource registry maps small integer handle ids (stored as U32 in the public
@@ -69,54 +73,58 @@ public function metalContextActiveCommandBuffer(ctx: RawPtr) -> RawPtr {
 // scene that registers n resources copies O(n) entries in total rather than per
 // registration.
 public function metalRegistryReserve(ctx: RawPtr, needed: U64) {
-    let cap = metalMemReadU64(ctx, MetalContext.offsetRegistryCap)
-    if needed < cap {
-        return
+    unsafe {
+        let cap = metalMemReadU64(ctx, MetalContext.offsetRegistryCap)
+        if needed < cap {
+            return
+        }
+        var grown = cap
+        if grown == 0 {
+            grown = MetalRegistry.registryInitialCapacity
+        }
+        while needed >= grown {
+            grown = grown * U64(2)
+        }
+        let oldRegistry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        let oldKinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+        let oldRings = metalMemReadPtr(ctx, MetalContext.offsetSlotRing)
+        let registry = metalMemAlloc(grown * MetalRegistry.slotBytes)
+        let kinds = metalMemAlloc(grown)
+        let rings = metalMemAlloc(grown * MetalRegistry.slotBytes)
+        for id in U64(0)..cap {
+            metalMemWritePtr(
+                registry,
+                id * MetalRegistry.slotBytes,
+                metalMemReadPtr(oldRegistry, id * MetalRegistry.slotBytes)
+            )
+            metalMemWriteU8(kinds, id, metalMemReadU8(oldKinds, id))
+            metalMemWriteU64(
+                rings,
+                id * MetalRegistry.slotBytes,
+                metalMemReadU64(oldRings, id * MetalRegistry.slotBytes)
+            )
+        }
+        metalMemFree(oldRegistry)
+        metalMemFree(oldKinds)
+        metalMemFree(oldRings)
+        metalMemWritePtr(ctx, MetalContext.offsetRegistry, registry)
+        metalMemWritePtr(ctx, MetalContext.offsetRegistryKinds, kinds)
+        metalMemWritePtr(ctx, MetalContext.offsetSlotRing, rings)
+        metalMemWriteU64(ctx, MetalContext.offsetRegistryCap, grown)
     }
-    var grown = cap
-    if grown == 0 {
-        grown = MetalRegistry.registryInitialCapacity
-    }
-    while needed >= grown {
-        grown = grown * U64(2)
-    }
-    let oldRegistry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    let oldKinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
-    let oldRings = metalMemReadPtr(ctx, MetalContext.offsetSlotRing)
-    let registry = metalMemAlloc(grown * MetalRegistry.slotBytes)
-    let kinds = metalMemAlloc(grown)
-    let rings = metalMemAlloc(grown * MetalRegistry.slotBytes)
-    for id in U64(0)..cap {
-        metalMemWritePtr(
-            registry,
-            id * MetalRegistry.slotBytes,
-            metalMemReadPtr(oldRegistry, id * MetalRegistry.slotBytes)
-        )
-        metalMemWriteU8(kinds, id, metalMemReadU8(oldKinds, id))
-        metalMemWriteU64(
-            rings,
-            id * MetalRegistry.slotBytes,
-            metalMemReadU64(oldRings, id * MetalRegistry.slotBytes)
-        )
-    }
-    metalMemFree(oldRegistry)
-    metalMemFree(oldKinds)
-    metalMemFree(oldRings)
-    metalMemWritePtr(ctx, MetalContext.offsetRegistry, registry)
-    metalMemWritePtr(ctx, MetalContext.offsetRegistryKinds, kinds)
-    metalMemWritePtr(ctx, MetalContext.offsetSlotRing, rings)
-    metalMemWriteU64(ctx, MetalContext.offsetRegistryCap, grown)
 }
 
 // Register a +1-owned Objective-C resource pointer and return its handle id. The
 // entry is tagged as an object so teardown releases it.
 public function metalRegister(ctx: RawPtr, object: RawPtr) -> Number {
-    let id = metalTakeId(ctx)
-    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    metalMemWritePtr(registry, id * MetalRegistry.slotBytes, object)
-    let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
-    metalMemWriteU8(kinds, id, MetalRegistry.registryKindObject)
-    return id
+    unsafe {
+        let id = metalTakeId(ctx)
+        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        metalMemWritePtr(registry, id * MetalRegistry.slotBytes, object)
+        let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+        metalMemWriteU8(kinds, id, MetalRegistry.registryKindObject)
+        return id
+    }
 }
 
 // Registers what a `new…` message answered, or nothing where Metal answered
@@ -132,12 +140,14 @@ public function metalRegisterNew(ctx: RawPtr, object: RawPtr) -> Number? {
 // The entry is tagged as a raw block so teardown frees it with metalMemFree rather
 // than sending it an Objective-C `release` (which would crash on a non-object).
 public function metalRegisterRawBlock(ctx: RawPtr, block: RawPtr) -> Number {
-    let id = metalTakeId(ctx)
-    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    metalMemWritePtr(registry, id * MetalRegistry.slotBytes, block)
-    let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
-    metalMemWriteU8(kinds, id, MetalRegistry.registryKindRawBlock)
-    return id
+    unsafe {
+        let id = metalTakeId(ctx)
+        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        metalMemWritePtr(registry, id * MetalRegistry.slotBytes, block)
+        let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+        metalMemWriteU8(kinds, id, MetalRegistry.registryKindRawBlock)
+        return id
+    }
 }
 
 // The id a new resource takes: a released one if any are waiting, otherwise the
@@ -153,30 +163,32 @@ public function metalRegisterRawBlock(ctx: RawPtr, block: RawPtr) -> Number {
 // Clearing on the way OUT (rather than trusting each creator to overwrite it) keeps
 // that true for every resource kind, ringed or not.
 public function metalTakeId(ctx: RawPtr) -> U64 {
-    let free = metalMemReadU64(ctx, MetalContext.offsetFreeId)
-    if free != 0 {
-        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-        metalMemWriteU64(
-            ctx,
-            MetalContext.offsetFreeId,
-            metalMemReadU64(registry, free * MetalRegistry.slotBytes)
-        )
+    unsafe {
+        let free = metalMemReadU64(ctx, MetalContext.offsetFreeId)
+        if free != 0 {
+            let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+            metalMemWriteU64(
+                ctx,
+                MetalContext.offsetFreeId,
+                metalMemReadU64(registry, free * MetalRegistry.slotBytes)
+            )
+            metalMemWriteU64(
+                metalMemReadPtr(ctx, MetalContext.offsetSlotRing),
+                free * MetalRegistry.slotBytes,
+                0
+            )
+            return free
+        }
+        let id = metalMemReadU64(ctx, MetalContext.offsetNextId)
+        metalRegistryReserve(ctx, id)
         metalMemWriteU64(
             metalMemReadPtr(ctx, MetalContext.offsetSlotRing),
-            free * MetalRegistry.slotBytes,
+            id * MetalRegistry.slotBytes,
             0
         )
-        return free
+        metalMemWriteU64(ctx, MetalContext.offsetNextId, id + U64(1))
+        return id
     }
-    let id = metalMemReadU64(ctx, MetalContext.offsetNextId)
-    metalRegistryReserve(ctx, id)
-    metalMemWriteU64(
-        metalMemReadPtr(ctx, MetalContext.offsetSlotRing),
-        id * MetalRegistry.slotBytes,
-        0
-    )
-    metalMemWriteU64(ctx, MetalContext.offsetNextId, id + U64(1))
-    return id
 }
 
 // Release the resource behind a handle id and put the id back in circulation.
@@ -187,49 +199,55 @@ public function metalTakeId(ctx: RawPtr) -> U64 {
 // double `destroyUniform` would otherwise over-release an Objective-C object and
 // take the process down some frames later.
 public function metalUnregister(ctx: RawPtr, id: Number) {
-    if id <= 0 {
-        return
-    }
-    let slot = U64(id)
-    if slot >= metalMemReadU64(ctx, MetalContext.offsetNextId) {
-        return
-    }
-    let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
-    let kind = metalMemReadU8(kinds, slot)
-    if kind == MetalRegistry.registryKindFree {
-        return
-    }
-    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    let entry = metalMemReadPtr(registry, slot * MetalRegistry.slotBytes)
-    if !isNull(entry) {
-        if kind == MetalRegistry.registryKindRawBlock {
-            metalMemFree(entry)
-        } else {
-            metalMsgSend(entry, metalSel("release"))
+    unsafe {
+        if id <= 0 {
+            return
         }
+        let slot = U64(id)
+        if slot >= metalMemReadU64(ctx, MetalContext.offsetNextId) {
+            return
+        }
+        let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+        let kind = metalMemReadU8(kinds, slot)
+        if kind == MetalRegistry.registryKindFree {
+            return
+        }
+        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        let entry = metalMemReadPtr(registry, slot * MetalRegistry.slotBytes)
+        if !isNull(entry) {
+            if kind == MetalRegistry.registryKindRawBlock {
+                metalMemFree(entry)
+            } else {
+                metalMsgSend(entry, metalSel("release"))
+            }
+        }
+        // The slot's pointer word becomes the link to the next free id, which is why
+        // the kind has to say "free" before anything reads it as a resource again.
+        metalMemWriteU8(kinds, slot, MetalRegistry.registryKindFree)
+        metalMemWriteU64(
+            registry,
+            slot * MetalRegistry.slotBytes,
+            metalMemReadU64(ctx, MetalContext.offsetFreeId)
+        )
+        metalMemWriteU64(ctx, MetalContext.offsetFreeId, slot)
     }
-    // The slot's pointer word becomes the link to the next free id, which is why
-    // the kind has to say "free" before anything reads it as a resource again.
-    metalMemWriteU8(kinds, slot, MetalRegistry.registryKindFree)
-    metalMemWriteU64(
-        registry,
-        slot * MetalRegistry.slotBytes,
-        metalMemReadU64(ctx, MetalContext.offsetFreeId)
-    )
-    metalMemWriteU64(ctx, MetalContext.offsetFreeId, slot)
 }
 
 // Resolve a handle id back to its Objective-C resource pointer.
 public function metalLookup(ctx: RawPtr, id: Number) -> RawPtr {
-    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    return metalMemReadPtr(registry, id * MetalRegistry.slotBytes)
+    unsafe {
+        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        return metalMemReadPtr(registry, id * MetalRegistry.slotBytes)
+    }
 }
 
 // Resolve a handle id (as U64) to its Objective-C resource pointer. Used by the
 // bind-group apply loop, which carries ids as U64 in its raw entry block.
 public function metalLookupU64(ctx: RawPtr, id: U64) -> RawPtr {
-    let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
-    return metalMemReadPtr(registry, id * MetalRegistry.slotBytes)
+    unsafe {
+        let registry = metalMemReadPtr(ctx, MetalContext.offsetRegistry)
+        return metalMemReadPtr(registry, id * MetalRegistry.slotBytes)
+    }
 }
 
 // Metal enum constants we reference (kept local and explicit, not magic numbers

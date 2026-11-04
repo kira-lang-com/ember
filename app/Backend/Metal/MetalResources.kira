@@ -13,91 +13,99 @@ import Heap
 // Compile an MSL source library and register it as a shader handle, or nothing
 // where Metal rejected the source.
 public function metalCreateShader(ctx: RawPtr, source: borrow String) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let nsstr: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        source
-    )
-    let opts: RawPtr = metalMsgSend(
-        metalMsgSend(metalObjcGetClass("MTLCompileOptions"), metalSel("alloc")),
-        metalSel("init")
-    )
-    metalMsgSend(opts, metalSel("setMathMode:"), MetalRegistry.mathModeRelaxed)
-    let errSlot = boxed<RawPtr>(nullPointer())
-    let library: RawPtr = metalMsgSend(
-        device,
-        metalSel("newLibraryWithSource:options:error:"),
-        nsstr,
-        opts,
-        errSlot.pointer()
-    )
-    // MTLCompileOptions is a +1-owned alloc/init temporary; the compiled library keeps
-    // no reference to it, so release it here rather than leaking one per shader.
-    metalMsgSend(opts, metalSel("release"))
-    // A shader that does not compile leaves a nil library and an NSError nobody
-    // was reading. The next thing to fail is the pipeline, reporting only that
-    // its vertex function is nil — which says nothing about why. Say why.
-    if isNull(library) {
-        log fault("ember: Metal rejected a shader library")
-        metalPrintError(boxedValue<RawPtr>(errSlot))
-        return .None
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let nsstr: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            source
+        )
+        let opts: RawPtr = metalMsgSend(
+            metalMsgSend(metalObjcGetClass("MTLCompileOptions"), metalSel("alloc")),
+            metalSel("init")
+        )
+        metalMsgSend(opts, metalSel("setMathMode:"), MetalRegistry.mathModeRelaxed)
+        let errSlot = boxed<RawPtr>(nullPointer())
+        let library: RawPtr = metalMsgSend(
+            device,
+            metalSel("newLibraryWithSource:options:error:"),
+            nsstr,
+            opts,
+            errSlot.pointer()
+        )
+        // MTLCompileOptions is a +1-owned alloc/init temporary; the compiled library keeps
+        // no reference to it, so release it here rather than leaking one per shader.
+        metalMsgSend(opts, metalSel("release"))
+        // A shader that does not compile leaves a nil library and an NSError nobody
+        // was reading. The next thing to fail is the pipeline, reporting only that
+        // its vertex function is nil — which says nothing about why. Say why.
+        if isNull(library) {
+            log fault("ember: Metal rejected a shader library")
+            metalPrintError(boxedValue<RawPtr>(errSlot))
+            return .None
+        }
+        return .Some(metalRegister(ctx, library))
     }
-    return .Some(metalRegister(ctx, library))
 }
 
 // The description of an NSError a Metal call wrote back, printed where there
 // is one.
 function metalPrintError(error: RawPtr) {
-    if isNull(error) {
-        return
-    }
-    let described: RawPtr = metalMsgSend(error, metalSel("localizedDescription"))
-    if isNull(described) {
-        return
-    }
-    let utf8: RawPtr = metalMsgSend(described, metalSel("UTF8String"))
-    if !isNull(utf8) {
-        metalPutsRaw(utf8)
+    unsafe {
+        if isNull(error) {
+            return
+        }
+        let described: RawPtr = metalMsgSend(error, metalSel("localizedDescription"))
+        if isNull(described) {
+            return
+        }
+        let utf8: RawPtr = metalMsgSend(described, metalSel("UTF8String"))
+        if !isNull(utf8) {
+            metalPutsRaw(utf8)
+        }
     }
 }
 
 // Upload float vertex data into a new MTLBuffer and register it.
 public function metalCreateVertexBuffer(ctx: RawPtr, data: borrow[F32]) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let count = data.count
-    let bytes = metalMemAlloc(count * sizeOf<F32>())
-    for (i, value) in data.enumerated() {
-        metalMemWriteF32(bytes, i * sizeOf<F32>(), value)
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let count = data.count
+        let bytes = metalMemAlloc(count * sizeOf<F32>())
+        for (i, value) in data.enumerated() {
+            metalMemWriteF32(bytes, i * sizeOf<F32>(), value)
+        }
+        let buffer: RawPtr = metalMsgSend(
+            device,
+            metalSel("newBufferWithBytes:length:options:"),
+            bytes,
+            count * sizeOf<F32>(),
+            0
+        )
+        metalMemFree(bytes)
+        return metalRegisterNew(ctx, buffer)
     }
-    let buffer: RawPtr = metalMsgSend(
-        device,
-        metalSel("newBufferWithBytes:length:options:"),
-        bytes,
-        count * sizeOf<F32>(),
-        0
-    )
-    metalMemFree(bytes)
-    return metalRegisterNew(ctx, buffer)
 }
 
 // Upload index data into a new MTLBuffer and register it.
 public function metalCreateIndexBuffer(ctx: RawPtr, data: borrow[U32]) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let count = data.count
-    let bytes = metalMemAlloc(count * sizeOf<U32>())
-    for (i, value) in data.enumerated() {
-        metalMemWriteU32(bytes, i * sizeOf<U32>(), value)
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let count = data.count
+        let bytes = metalMemAlloc(count * sizeOf<U32>())
+        for (i, value) in data.enumerated() {
+            metalMemWriteU32(bytes, i * sizeOf<U32>(), value)
+        }
+        let buffer: RawPtr = metalMsgSend(
+            device,
+            metalSel("newBufferWithBytes:length:options:"),
+            bytes,
+            count * sizeOf<F32>(),
+            0
+        )
+        metalMemFree(bytes)
+        return metalRegisterNew(ctx, buffer)
     }
-    let buffer: RawPtr = metalMsgSend(
-        device,
-        metalSel("newBufferWithBytes:length:options:"),
-        bytes,
-        count * sizeOf<F32>(),
-        0
-    )
-    metalMemFree(bytes)
-    return metalRegisterNew(ctx, buffer)
 }
 
 // MTLBlendFactor's raw value.
@@ -129,43 +137,45 @@ function metalBlendOperation(operation: BlendOperation) -> U64 {
 
 // One color attachment's blending, set to what `blend` names.
 public function metalApplyBlend(colorAttachment: RawPtr, blend: borrow BlendState) {
-    if !blend.enabled {
-        return
+    unsafe {
+        if !blend.enabled {
+            return
+        }
+        let resolved = blend.resolved()
+        let color = resolved.color
+        let alpha = resolved.alpha
+        metalMsgSend(colorAttachment, metalSel("setBlendingEnabled:"), true)
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setRgbBlendOperation:"),
+            metalBlendOperation(color.operation)
+        )
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setAlphaBlendOperation:"),
+            metalBlendOperation(alpha.operation)
+        )
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setSourceRGBBlendFactor:"),
+            metalBlendFactor(color.source)
+        )
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setSourceAlphaBlendFactor:"),
+            metalBlendFactor(alpha.source)
+        )
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setDestinationRGBBlendFactor:"),
+            metalBlendFactor(color.destination)
+        )
+        metalMsgSend(
+            colorAttachment,
+            metalSel("setDestinationAlphaBlendFactor:"),
+            metalBlendFactor(alpha.destination)
+        )
     }
-    let resolved = blend.resolved()
-    let color = resolved.color
-    let alpha = resolved.alpha
-    metalMsgSend(colorAttachment, metalSel("setBlendingEnabled:"), true)
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setRgbBlendOperation:"),
-        metalBlendOperation(color.operation)
-    )
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setAlphaBlendOperation:"),
-        metalBlendOperation(alpha.operation)
-    )
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setSourceRGBBlendFactor:"),
-        metalBlendFactor(color.source)
-    )
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setSourceAlphaBlendFactor:"),
-        metalBlendFactor(alpha.source)
-    )
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setDestinationRGBBlendFactor:"),
-        metalBlendFactor(color.destination)
-    )
-    metalMsgSend(
-        colorAttachment,
-        metalSel("setDestinationAlphaBlendFactor:"),
-        metalBlendFactor(alpha.destination)
-    )
 }
 
 // Build an MTLRenderPipelineState from a shader library and a color pixel format,
@@ -214,41 +224,45 @@ public struct MetalPipelineRecipe {
 
 // The `name`d function out of `library`, +1-owned.
 function metalLibraryFunction(library: RawPtr, name: borrow String) -> RawPtr {
-    let text: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        name
-    )
-    return metalMsgSend(library, metalSel("newFunctionWithName:"), text)
+    unsafe {
+        let text: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            name
+        )
+        return metalMsgSend(library, metalSel("newFunctionWithName:"), text)
+    }
 }
 
 // The MTLVertexDescriptor a `[[stage_in]]` shader reads its one interleaved
 // buffer through.
 function metalVertexDescriptor(recipe: borrow MetalPipelineRecipe) -> RawPtr {
-    let descriptor: RawPtr = metalMsgSend(
-        metalObjcGetClass("MTLVertexDescriptor"),
-        metalSel("vertexDescriptor")
-    )
-    let attributes: RawPtr = metalMsgSend(descriptor, metalSel("attributes"))
-    for index in 0..recipe.attributeFormats.count {
-        let attribute: RawPtr = metalMsgSend(
-            attributes,
-            metalSel("objectAtIndexedSubscript:"),
-            U64(index)
+    unsafe {
+        let descriptor: RawPtr = metalMsgSend(
+            metalObjcGetClass("MTLVertexDescriptor"),
+            metalSel("vertexDescriptor")
         )
-        metalMsgSend(
-            attribute,
-            metalSel("setFormat:"),
-            metalVertexFormat(recipe.attributeFormats[index])
-        )
-        metalMsgSend(attribute, metalSel("setOffset:"), U64(recipe.attributeOffsets[index]))
-        metalMsgSend(attribute, metalSel("setBufferIndex:"), 0)
+        let attributes: RawPtr = metalMsgSend(descriptor, metalSel("attributes"))
+        for index in 0..recipe.attributeFormats.count {
+            let attribute: RawPtr = metalMsgSend(
+                attributes,
+                metalSel("objectAtIndexedSubscript:"),
+                U64(index)
+            )
+            metalMsgSend(
+                attribute,
+                metalSel("setFormat:"),
+                metalVertexFormat(recipe.attributeFormats[index])
+            )
+            metalMsgSend(attribute, metalSel("setOffset:"), U64(recipe.attributeOffsets[index]))
+            metalMsgSend(attribute, metalSel("setBufferIndex:"), 0)
+        }
+        let layouts: RawPtr = metalMsgSend(descriptor, metalSel("layouts"))
+        let layout: RawPtr = metalMsgSend(layouts, metalSel("objectAtIndexedSubscript:"), 0)
+        metalMsgSend(layout, metalSel("setStride:"), U64(recipe.stride))
+        metalMsgSend(layout, metalSel("setStepFunction:"), MetalPipelineRecipeCode.stepPerVertex)
+        return descriptor
     }
-    let layouts: RawPtr = metalMsgSend(descriptor, metalSel("layouts"))
-    let layout: RawPtr = metalMsgSend(layouts, metalSel("objectAtIndexedSubscript:"), 0)
-    metalMsgSend(layout, metalSel("setStride:"), U64(recipe.stride))
-    metalMsgSend(layout, metalSel("setStepFunction:"), MetalPipelineRecipeCode.stepPerVertex)
-    return descriptor
 }
 
 namespace MetalPipelineRecipeCode {
@@ -263,30 +277,36 @@ function metalPipelineDescriptor(
     vertex: RawPtr,
     fragment: RawPtr
 ) -> RawPtr {
-    let descriptor: RawPtr = metalMsgSend(
-        metalMsgSend(metalObjcGetClass("MTLRenderPipelineDescriptor"), metalSel("alloc")),
-        metalSel("init")
-    )
-    metalMsgSend(descriptor, metalSel("setVertexFunction:"), vertex)
-    metalMsgSend(descriptor, metalSel("setFragmentFunction:"), fragment)
-    if recipe.attributeFormats.count > 0 {
-        metalMsgSend(descriptor, metalSel("setVertexDescriptor:"), metalVertexDescriptor(recipe))
-    }
-    let colorAttachment: RawPtr = metalMsgSend(
-        metalMsgSend(descriptor, metalSel("colorAttachments")),
-        metalSel("objectAtIndexedSubscript:"),
-        0
-    )
-    metalMsgSend(colorAttachment, metalSel("setPixelFormat:"), recipe.colorFormat)
-    metalApplyBlend(colorAttachment, recipe.blend)
-    if recipe.depthEnabled {
-        metalMsgSend(
-            descriptor,
-            metalSel("setDepthAttachmentPixelFormat:"),
-            MetalRegistry.pixelFormatDepth32Float
+    unsafe {
+        let descriptor: RawPtr = metalMsgSend(
+            metalMsgSend(metalObjcGetClass("MTLRenderPipelineDescriptor"), metalSel("alloc")),
+            metalSel("init")
         )
+        metalMsgSend(descriptor, metalSel("setVertexFunction:"), vertex)
+        metalMsgSend(descriptor, metalSel("setFragmentFunction:"), fragment)
+        if recipe.attributeFormats.count > 0 {
+            metalMsgSend(
+                descriptor,
+                metalSel("setVertexDescriptor:"),
+                metalVertexDescriptor(recipe)
+            )
+        }
+        let colorAttachment: RawPtr = metalMsgSend(
+            metalMsgSend(descriptor, metalSel("colorAttachments")),
+            metalSel("objectAtIndexedSubscript:"),
+            0
+        )
+        metalMsgSend(colorAttachment, metalSel("setPixelFormat:"), recipe.colorFormat)
+        metalApplyBlend(colorAttachment, recipe.blend)
+        if recipe.depthEnabled {
+            metalMsgSend(
+                descriptor,
+                metalSel("setDepthAttachmentPixelFormat:"),
+                MetalRegistry.pixelFormatDepth32Float
+            )
+        }
+        return descriptor
     }
-    return descriptor
 }
 
 // The pipeline `recipe` describes, compiled and registered.
@@ -294,30 +314,32 @@ public function metalCreateRenderPipelineWithEntries(
     ctx: RawPtr,
     recipe: borrow MetalPipelineRecipe
 ) -> Number? {
-    let library = metalLookup(ctx, recipe.shaderId)
-    let vertex = metalLibraryFunction(library, recipe.vertexEntry)
-    let fragment = metalLibraryFunction(library, recipe.fragmentEntry)
-    let descriptor = metalPipelineDescriptor(recipe, vertex, fragment)
-    let errorSlot = boxed<RawPtr>(nullPointer())
-    let pipeline: RawPtr = metalMsgSend(
-        metalMemReadPtr(ctx, MetalContext.offsetDevice),
-        metalSel("newRenderPipelineStateWithDescriptor:error:"),
-        descriptor,
-        errorSlot.pointer()
-    )
-    // The functions (newFunctionWithName:) and the descriptor (alloc/init) are
-    // +1-owned transients: the compiled pipeline state retains what it needs, so
-    // they are released here rather than leaking one MTLFunction pair and one
-    // MTLRenderPipelineDescriptor per pipeline.
-    metalMsgSend(vertex, metalSel("release"))
-    metalMsgSend(fragment, metalSel("release"))
-    metalMsgSend(descriptor, metalSel("release"))
-    if isNull(pipeline) {
-        log fault("ember: Metal rejected a render pipeline")
-        metalPrintError(boxedValue<RawPtr>(errorSlot))
-        return .None
+    unsafe {
+        let library = metalLookup(ctx, recipe.shaderId)
+        let vertex = metalLibraryFunction(library, recipe.vertexEntry)
+        let fragment = metalLibraryFunction(library, recipe.fragmentEntry)
+        let descriptor = metalPipelineDescriptor(recipe, vertex, fragment)
+        let errorSlot = boxed<RawPtr>(nullPointer())
+        let pipeline: RawPtr = metalMsgSend(
+            metalMemReadPtr(ctx, MetalContext.offsetDevice),
+            metalSel("newRenderPipelineStateWithDescriptor:error:"),
+            descriptor,
+            errorSlot.pointer()
+        )
+        // The functions (newFunctionWithName:) and the descriptor (alloc/init) are
+        // +1-owned transients: the compiled pipeline state retains what it needs, so
+        // they are released here rather than leaking one MTLFunction pair and one
+        // MTLRenderPipelineDescriptor per pipeline.
+        metalMsgSend(vertex, metalSel("release"))
+        metalMsgSend(fragment, metalSel("release"))
+        metalMsgSend(descriptor, metalSel("release"))
+        if isNull(pipeline) {
+            log fault("ember: Metal rejected a render pipeline")
+            metalPrintError(boxedValue<RawPtr>(errorSlot))
+            return .None
+        }
+        return .Some(metalRegister(ctx, pipeline))
     }
-    return .Some(metalRegister(ctx, pipeline))
 }
 
 // Create a persistent, CPU-writable MTLBuffer for `floatCount` f32 slots and register
@@ -333,20 +355,22 @@ public function metalCreateDynamicBuffer(ctx: RawPtr, floatCount: Number) -> Num
 // A CPU-writable MTLBuffer holding a ring of `floatCount`-float slots,
 // registered with its ring stride, or nothing where Metal refused it.
 function metalCreateRingBuffer(ctx: RawPtr, floatCount: Number) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let byteCount = U64(floatCount * sizeOf<F32>())
-    let buffer: RawPtr = metalMsgSend(
-        device,
-        metalSel("newBufferWithLength:options:"),
-        metalRingBytes(byteCount),
-        0
-    )
-    let id = match metalRegisterNew(ctx, buffer) {
-        Some(id) -> id
-        None -> return .None
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let byteCount = U64(floatCount * sizeOf<F32>())
+        let buffer: RawPtr = metalMsgSend(
+            device,
+            metalSel("newBufferWithLength:options:"),
+            metalRingBytes(byteCount),
+            0
+        )
+        let id = match metalRegisterNew(ctx, buffer) {
+            Some(id) -> id
+            None -> return .None
+        }
+        metalRingInit(ctx, U64(id), metalRingSlotStride(byteCount))
+        return .Some(id)
     }
-    metalRingInit(ctx, U64(id), metalRingSlotStride(byteCount))
-    return .Some(id)
 }
 
 // The CPU-visible base of a dynamic buffer's whole ring. Stable for the buffer's
@@ -355,8 +379,10 @@ function metalCreateRingBuffer(ctx: RawPtr, floatCount: Number) -> Number? {
 // the GPU is reading. The pointer is the base rather than the current slot precisely
 // so that a stale cached copy cannot silently mean the wrong slot.
 public function metalDynamicBufferContents(ctx: RawPtr, bufferId: Number) -> RawPtr {
-    let buffer = metalLookup(ctx, bufferId)
-    return metalMsgSend(buffer, metalSel("contents"))
+    unsafe {
+        let buffer = metalLookup(ctx, bufferId)
+        return metalMsgSend(buffer, metalSel("contents"))
+    }
 }
 
 // Claim this frame's slot and return the byte offset every write this frame adds to
@@ -379,22 +405,26 @@ public function metalCreateUniform(ctx: RawPtr, floatCount: Number) -> Number? {
 // bound is left untouched, so a frame still on the GPU keeps the values it was
 // drawn with.
 public function metalUpdateUniform(ctx: RawPtr, uniformId: Number, data: borrow[F32]) {
-    metalRaceProbeUniformWrite(ctx)
-    let buffer = metalLookup(ctx, uniformId)
-    let contents: RawPtr = metalMsgSend(buffer, metalSel("contents"))
-    let base = Number(metalRingAdvance(ctx, U64(uniformId)))
-    for i in 0..data.count {
-        metalMemWriteF32(contents, base + i * sizeOf<F32>(), data[i])
+    unsafe {
+        metalRaceProbeUniformWrite(ctx)
+        let buffer = metalLookup(ctx, uniformId)
+        let contents: RawPtr = metalMsgSend(buffer, metalSel("contents"))
+        let base = Number(metalRingAdvance(ctx, U64(uniformId)))
+        for i in 0..data.count {
+            metalMemWriteF32(contents, base + i * sizeOf<F32>(), data[i])
+        }
     }
 }
 
 // Bind a uniform buffer to a fragment-shader buffer slot on the active encoder, at
 // the ring slot its most recent write went to.
 public function metalEncoderBindFragmentUniform(ctx: RawPtr, uniformId: Number, index: Number) {
-    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
-    let buffer = metalLookup(ctx, uniformId)
-    let offset = metalRingOffset(ctx, U64(uniformId))
-    metalMsgSend(encoder, metalSel("setFragmentBuffer:offset:atIndex:"), buffer, offset, index)
+    unsafe {
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        let buffer = metalLookup(ctx, uniformId)
+        let offset = metalRingOffset(ctx, U64(uniformId))
+        metalMsgSend(encoder, metalSel("setFragmentBuffer:offset:atIndex:"), buffer, offset, index)
+    }
 }
 
 // What a draw reads from: the pipeline it runs and, where it has one, the
@@ -407,20 +437,26 @@ public struct MetalDrawSource {
 // Binds the source's pipeline state and vertex buffer on the active
 // render-command encoder, and answers that encoder.
 function metalBindDrawSource(ctx: RawPtr, source: borrow MetalDrawSource) -> RawPtr {
-    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
-    metalMsgSend(encoder, metalSel("setRenderPipelineState:"), metalLookup(ctx, source.pipelineId))
-    match source.vertexBufferId {
-        Some(id) -> metalMsgSend(
+    unsafe {
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        metalMsgSend(
             encoder,
-            metalSel("setVertexBuffer:offset:atIndex:"),
-            metalLookup(ctx, id),
-            metalRingOffset(ctx, U64(id)),
-            0
+            metalSel("setRenderPipelineState:"),
+            metalLookup(ctx, source.pipelineId)
         )
-        // A draw whose vertex shader generates its own positions binds none.
-        None -> {}
+        match source.vertexBufferId {
+            Some(id) -> metalMsgSend(
+                encoder,
+                metalSel("setVertexBuffer:offset:atIndex:"),
+                metalLookup(ctx, id),
+                metalRingOffset(ctx, U64(id)),
+                0
+            )
+            // A draw whose vertex shader generates its own positions binds none.
+            None -> {}
+        }
+        return encoder
     }
-    return encoder
 }
 
 // Encode a non-indexed draw: `counts.vertexCount` triangle vertices,
@@ -430,29 +466,31 @@ public function metalEncoderDraw(
     source: borrow MetalDrawSource,
     counts: borrow DrawCounts
 ) {
-    let encoder = metalBindDrawSource(ctx, source)
-    metalContextCountDraw(
-        ctx,
-        floor(counts.vertexCount / MetalResources.triangleVertices) * counts.instanceCount
-    )
-    if counts.instanceCount > 1 {
+    unsafe {
+        let encoder = metalBindDrawSource(ctx, source)
+        metalContextCountDraw(
+            ctx,
+            floor(counts.vertexCount / MetalResources.triangleVertices) * counts.instanceCount
+        )
+        if counts.instanceCount > 1 {
+            metalMsgSend(
+                encoder,
+                metalSel("drawPrimitives:vertexStart:vertexCount:instanceCount:"),
+                MetalResources.primitiveTriangle,
+                0,
+                counts.vertexCount,
+                counts.instanceCount
+            )
+            return
+        }
         metalMsgSend(
             encoder,
-            metalSel("drawPrimitives:vertexStart:vertexCount:instanceCount:"),
+            metalSel("drawPrimitives:vertexStart:vertexCount:"),
             MetalResources.primitiveTriangle,
             0,
-            counts.vertexCount,
-            counts.instanceCount
+            counts.vertexCount
         )
-        return
     }
-    metalMsgSend(
-        encoder,
-        metalSel("drawPrimitives:vertexStart:vertexCount:"),
-        MetalResources.primitiveTriangle,
-        0,
-        counts.vertexCount
-    )
 }
 
 // Encode an INDIRECT draw: bind pipeline + vertex buffer, then let the GPU read
@@ -463,15 +501,17 @@ public function metalEncoderDrawIndirect(
     source: borrow MetalDrawSource,
     indirectBufferId: UNumber
 ) {
-    let encoder = metalBindDrawSource(ctx, source)
-    metalContextCountDraw(ctx, 0)
-    metalMsgSend(
-        encoder,
-        metalSel("drawPrimitives:indirectBuffer:indirectBufferOffset:"),
-        MetalResources.primitiveTriangle,
-        metalLookup(ctx, indirectBufferId),
-        0
-    )
+    unsafe {
+        let encoder = metalBindDrawSource(ctx, source)
+        metalContextCountDraw(ctx, 0)
+        metalMsgSend(
+            encoder,
+            metalSel("drawPrimitives:indirectBuffer:indirectBufferOffset:"),
+            MetalResources.primitiveTriangle,
+            metalLookup(ctx, indirectBufferId),
+            0
+        )
+    }
 }
 
 // Encode an indexed draw: `counts.indexCount` triangle indices (uint32) from
@@ -482,20 +522,22 @@ public function metalEncoderDrawIndexed(
     indexBufferId: UNumber,
     counts: borrow DrawCounts
 ) {
-    let encoder = metalBindDrawSource(ctx, source)
-    metalContextCountDraw(
-        ctx,
-        floor(counts.indexCount / MetalResources.triangleVertices) * counts.instanceCount
-    )
-    metalMsgSend(
-        encoder,
-        metalSel("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:"),
-        MetalResources.primitiveTriangle,
-        counts.indexCount,
-        MetalResources.indexTypeUInt32,
-        metalLookup(ctx, indexBufferId),
-        counts.firstIndex * UN32(sizeOf<U32>())
-    )
+    unsafe {
+        let encoder = metalBindDrawSource(ctx, source)
+        metalContextCountDraw(
+            ctx,
+            floor(counts.indexCount / MetalResources.triangleVertices) * counts.instanceCount
+        )
+        metalMsgSend(
+            encoder,
+            metalSel("drawIndexedPrimitives:indexCount:indexType:indexBuffer:indexBufferOffset:"),
+            MetalResources.primitiveTriangle,
+            counts.indexCount,
+            MetalResources.indexTypeUInt32,
+            metalLookup(ctx, indexBufferId),
+            counts.firstIndex * UN32(sizeOf<U32>())
+        )
+    }
 }
 
 // `MTLScissorRect`: four NSUIntegers, passed indirectly on arm64 just like
@@ -508,21 +550,24 @@ struct MetalScissorRect {
     var height: U64 = U64(0)
 }
 
-// Limit fill work without changing vertex coordinates or UVs.
+// Limit fill work without changing vertex coordinates or UVs. The rect is in
+// the pass's draw area, so it moves by the area's corner.
 public function metalEncoderSetScissorRect(ctx: RawPtr, rect: borrow ScissorRect) {
-    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
-    if isNull(encoder) || rect.width <= 0 || rect.height <= 0 {
-        return
-    }
-    let block = boxed<MetalScissorRect>(
-        MetalScissorRect {
-            x: U64(rect.x),
-            y: U64(rect.y),
-            width: U64(rect.width),
-            height: U64(rect.height)
+    unsafe {
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        if isNull(encoder) || rect.width <= 0 || rect.height <= 0 {
+            return
         }
-    )
-    metalMsgSend(encoder, metalSel("setScissorRect:"), block.pointer())
+        let block = boxed<MetalScissorRect>(
+            MetalScissorRect {
+                x: U64(rect.x) + metalMemReadU64(ctx, MetalContext.offsetPassOriginX),
+                y: U64(rect.y) + metalMemReadU64(ctx, MetalContext.offsetPassOriginY),
+                width: U64(rect.width),
+                height: U64(rect.height)
+            }
+        )
+        metalMsgSend(encoder, metalSel("setScissorRect:"), block.pointer())
+    }
 }
 
 public namespace MetalResources {

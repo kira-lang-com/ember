@@ -45,8 +45,11 @@ public struct VulkanState {
     var mouseVisible: Bool = true
     var mouseLocked: Bool = false
     var passActive: Bool = false
+    // The open pass's draw area: its size, and its corner in the attachment.
     var passWidth: UN32 = 0
     var passHeight: UN32 = 0
+    var passOriginX: UN32 = 0
+    var passOriginY: UN32 = 0
     var passColorImage: RawPtr = nullPointer()
     var passResolveImage: RawPtr = nullPointer()
     var passSampleCount: UNumber = 1

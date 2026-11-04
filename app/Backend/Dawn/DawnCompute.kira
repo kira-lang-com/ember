@@ -93,46 +93,50 @@ function dawnComputeGroup(
     pipeline: RawPtr,
     entries: borrow [WGPUBindGroupEntry]
 ) -> Result<RawPtr, DawnDispatchFailure> {
-    if entries.count == 0 {
-        return .Error(.NothingBound)
-    }
-    let layout = wgpuComputePipelineGetBindGroupLayout(pipeline, U32(0))
-    if isNull(layout) {
-        return .Error(.NoLayout)
-    }
-    let group = wgpuDeviceCreateBindGroup(
-        state.dawn.device,
-        WGPUBindGroupDescriptor {
-            label: dawnText("kira-compute-bindings"),
-            layout: layout,
-            entryCount: U64(entries.count),
-            entries: WGPUBindGroupEntryArray12 { elements: entries }
+    unsafe {
+        if entries.count == 0 {
+            return .Error(.NothingBound)
         }
-    )
-    wgpuBindGroupLayoutRelease(layout)
-    if isNull(group) {
-        return .Error(.GroupRefused)
+        let layout = wgpuComputePipelineGetBindGroupLayout(pipeline, U32(0))
+        if isNull(layout) {
+            return .Error(.NoLayout)
+        }
+        let group = wgpuDeviceCreateBindGroup(
+            state.dawn.device,
+            WGPUBindGroupDescriptor {
+                label: dawnText("kira-compute-bindings"),
+                layout: layout,
+                entryCount: U64(entries.count),
+                entries: WGPUBindGroupEntryArray12 { elements: entries }
+            }
+        )
+        wgpuBindGroupLayoutRelease(layout)
+        if isNull(group) {
+            return .Error(.GroupRefused)
+        }
+        return .Ok(group)
     }
-    return .Ok(group)
 }
 
 // A compute pass on the frame's encoder, timed where the GPU clock is on.
 function dawnBeginComputePass(state: borrow mut GraphicsRuntimeState) -> RawPtr {
-    let encoder = dawnFrameEncoder(state)
-    // A frame that is not being timed opens no pair, and the descriptor then
-    // leaves the timestamp pointer out rather than naming an index of -1.
-    return match dawnClockOpenPair(state, false) {
-        None -> wgpuCommandEncoderBeginComputePass(
-            encoder,
-            WGPUComputePassDescriptor { label: dawnText("kira-compute-pass") }
-        )
-        Some(pair) -> wgpuCommandEncoderBeginComputePass(
-            encoder,
-            WGPUComputePassDescriptor {
-                label: dawnText("kira-compute-pass"),
-                timestampWrites: dawnClockWrites(pair)
-            }
-        )
+    unsafe {
+        let encoder = dawnFrameEncoder(state)
+        // A frame that is not being timed opens no pair, and the descriptor then
+        // leaves the timestamp pointer out rather than naming an index of -1.
+        return match dawnClockOpenPair(state, false) {
+            None -> wgpuCommandEncoderBeginComputePass(
+                encoder,
+                WGPUComputePassDescriptor { label: dawnText("kira-compute-pass") }
+            )
+            Some(pair) -> wgpuCommandEncoderBeginComputePass(
+                encoder,
+                WGPUComputePassDescriptor {
+                    label: dawnText("kira-compute-pass"),
+                    timestampWrites: dawnClockWrites(pair)
+                }
+            )
+        }
     }
 }
 
@@ -144,26 +148,28 @@ function dawnRecordDispatch(
     entries: borrow [WGPUBindGroupEntry],
     groups: borrow DawnGroupCount
 ) -> Result<Void, DawnDispatchFailure> {
-    dawnTraceOpenSegment(state)
-    if state.dawn.passActive {
-        return .Error(.PassOpen)
+    unsafe {
+        dawnTraceOpenSegment(state)
+        if state.dawn.passActive {
+            return .Error(.PassOpen)
+        }
+        let pipeline = dawnObject(state, pipelineId.raw)
+        if isNull(pipeline) {
+            return .Error(.PipelineNotLive(pipelineId.raw))
+        }
+        let group = match dawnComputeGroup(state, pipeline, entries) {
+            Ok(group) -> group
+            Error(failure) -> return .Error(failure)
+        }
+        let pass = dawnBeginComputePass(state)
+        wgpuComputePassEncoderSetPipeline(pass, pipeline)
+        wgpuComputePassEncoderSetBindGroup(pass, U32(0), group, U64(0), nullPointer())
+        wgpuComputePassEncoderDispatchWorkgroups(pass, U32(groups.x), U32(groups.y), U32(1))
+        wgpuComputePassEncoderEnd(pass)
+        wgpuComputePassEncoderRelease(pass)
+        wgpuBindGroupRelease(group)
+        return .Ok
     }
-    let pipeline = dawnObject(state, pipelineId.raw)
-    if isNull(pipeline) {
-        return .Error(.PipelineNotLive(pipelineId.raw))
-    }
-    let group = match dawnComputeGroup(state, pipeline, entries) {
-        Ok(group) -> group
-        Error(failure) -> return .Error(failure)
-    }
-    let pass = dawnBeginComputePass(state)
-    wgpuComputePassEncoderSetPipeline(pass, pipeline)
-    wgpuComputePassEncoderSetBindGroup(pass, U32(0), group, U64(0), nullPointer())
-    wgpuComputePassEncoderDispatchWorkgroups(pass, U32(groups.x), U32(groups.y), U32(1))
-    wgpuComputePassEncoderEnd(pass)
-    wgpuComputePassEncoderRelease(pass)
-    wgpuBindGroupRelease(group)
-    return .Ok
 }
 
 // The separable blur pair. Each axis is one dispatch: the sources are read
@@ -243,23 +249,25 @@ function dawnBlurExtentBuffer(
     pair: borrow TextureComputePair,
     region: borrow TextureComputeRegion
 ) -> RawPtr? {
-    let extent = narrowFloats(textureComputeExtent(pair, region))
-    let bytes = extent.count * sizeOf<F32>()
-    var id: U32 = U32(0)
-    if state.dawn.blurExtentsUsed < state.dawn.blurExtentBuffers.count {
-        id = state.dawn.blurExtentBuffers[state.dawn.blurExtentsUsed]
-    } else {
-        id = match dawnMakeBuffer(state, "kira-blur-extent", dawnBufferUsage(.Uniform), bytes) {
-            Some(made) -> made
-            None -> return .None
+    unsafe {
+        let extent = narrowFloats(textureComputeExtent(pair, region))
+        let bytes = extent.count * sizeOf<F32>()
+        var id: U32 = U32(0)
+        if state.dawn.blurExtentsUsed < state.dawn.blurExtentBuffers.count {
+            id = state.dawn.blurExtentBuffers[state.dawn.blurExtentsUsed]
+        } else {
+            id = match dawnMakeBuffer(state, "kira-blur-extent", dawnBufferUsage(.Uniform), bytes) {
+                Some(made) -> made
+                None -> return .None
+            }
+            state.dawn.blurExtentBuffers.append(id)
         }
-        state.dawn.blurExtentBuffers.append(id)
+        state.dawn.blurExtentsUsed += 1
+        let buffer = dawnObject(state, id)
+        if isNull(buffer) { return .None }
+        wgpuQueueWriteBuffer(state.dawn.queue, buffer, U64(0), extent, U64(bytes))
+        return .Some(buffer)
     }
-    state.dawn.blurExtentsUsed += 1
-    let buffer = dawnObject(state, id)
-    if isNull(buffer) { return .None }
-    wgpuQueueWriteBuffer(state.dawn.queue, buffer, U64(0), extent, U64(bytes))
-    return .Some(buffer)
 }
 
 // One half's bindings: the target extent, the sampler the filter reads through,
@@ -293,23 +301,25 @@ function dawnBufferEntries(
     bufferIds: borrow [BufferId],
     firstBinding: UNumber
 ) -> [WGPUBindGroupEntry] {
-    var entries: [WGPUBindGroupEntry] = []
-    // The binding each buffer takes is its position past the first, so the
-    // index is part of the value rather than a counter.
-    for (index, bufferId) in bufferIds.enumerated() {
-        let buffer = dawnObject(state, bufferId.raw)
-        if !isNull(buffer) {
-            entries.append(
-                WGPUBindGroupEntry {
-                    binding: U32(firstBinding + index),
-                    buffer: buffer,
-                    offset: U64(0),
-                    size: wgpuBufferGetSize(buffer)
-                }
-            )
+    unsafe {
+        var entries: [WGPUBindGroupEntry] = []
+        // The binding each buffer takes is its position past the first, so the
+        // index is part of the value rather than a counter.
+        for (index, bufferId) in bufferIds.enumerated() {
+            let buffer = dawnObject(state, bufferId.raw)
+            if !isNull(buffer) {
+                entries.append(
+                    WGPUBindGroupEntry {
+                        binding: U32(firstBinding + index),
+                        buffer: buffer,
+                        offset: U64(0),
+                        size: wgpuBufferGetSize(buffer)
+                    }
+                )
+            }
         }
+        return entries
     }
-    return entries
 }
 
 // The depth texture at binding 0 and the buffers after it.

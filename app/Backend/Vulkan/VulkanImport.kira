@@ -40,34 +40,36 @@ function vulkanNewImportImage(
     memory: borrow ExportedMemory,
     format: I32
 ) -> Result<RawPtr, VulkanResourceFailure> {
-    let external = boxed<VkExternalMemoryImageCreateInfo>(
-        VkExternalMemoryImageCreateInfo {
-            sType: VulkanImport.structureExternalImage,
-            handleTypes: VulkanExport.dmaBuf
+    unsafe {
+        let external = boxed<VkExternalMemoryImageCreateInfo>(
+            VkExternalMemoryImageCreateInfo {
+                sType: VulkanImport.structureExternalImage,
+                handleTypes: VulkanExport.dmaBuf
+            }
+        )
+        let info = VkImageCreateInfo {
+            sType: VulkanVocabulary.structureImageCreateInfo,
+            pNext: external.pointer(),
+            imageType: VulkanVocabulary.imageType2d,
+            format: format,
+            extent: VkExtent3D { width: U32(memory.width), height: U32(memory.height), depth: U32(1) },
+            mipLevels: U32(1),
+            arrayLayers: U32(1),
+            samples: I32(1),
+            tiling: VulkanExport.tilingLinear,
+            usage: vulkanImageUsage(VulkanImport.usage),
+            sharingMode: VulkanVocabulary.sharingExclusive,
+            initialLayout: VulkanVocabulary.imageLayoutPreinitialized
         }
-    )
-    let info = VkImageCreateInfo {
-        sType: VulkanVocabulary.structureImageCreateInfo,
-        pNext: external.pointer(),
-        imageType: VulkanVocabulary.imageType2d,
-        format: format,
-        extent: VkExtent3D { width: U32(memory.width), height: U32(memory.height), depth: U32(1) },
-        mipLevels: U32(1),
-        arrayLayers: U32(1),
-        samples: I32(1),
-        tiling: VulkanExport.tilingLinear,
-        usage: vulkanImageUsage(VulkanImport.usage),
-        sharingMode: VulkanVocabulary.sharingExclusive,
-        initialLayout: VulkanVocabulary.imageLayoutPreinitialized
+        let imageSlot = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
+        )
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(imageSlot))
     }
-    let imageSlot = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateImage(state.device, info, nullPointer(), imageSlot.pointer())
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
-    }
-    return .Ok(boxedValue<RawPtr>(imageSlot))
 }
 
 // The dma-buf `fd` taken in as `image`'s dedicated memory. On success the
@@ -78,62 +80,64 @@ function vulkanImportMemory(
     requirements: borrow VkMemoryRequirements,
     fd: I32
 ) -> Result<RawPtr, VulkanResourceFailure> {
-    // A dma-buf names the memory types that can import it, and those are not
-    // always every type the image accepts. Where the device answers the query,
-    // its types narrow the image's. Where it refuses the query for this handle
-    // (venus forwards the dma-buf to the host, which answers
-    // VK_ERROR_INVALID_EXTERNAL_HANDLE), the image's own types are used, as
-    // before the query was made, and the allocation below decides.
-    let properties = boxed<VkMemoryFdPropertiesKHR>(
-        VkMemoryFdPropertiesKHR {
-            sType: VulkanImport.structureFdProperties,
-            memoryTypeBits: U32(0)
-        }
-    )
-    let queried = vulkanResultOf(
-        vulkanMemoryFdProperties(
-            state.device,
-            I32(VulkanExport.dmaBuf),
-            fd,
-            properties.pointer()
+    unsafe {
+        // A dma-buf names the memory types that can import it, and those are not
+        // always every type the image accepts. Where the device answers the query,
+        // its types narrow the image's. Where it refuses the query for this handle
+        // (venus forwards the dma-buf to the host, which answers
+        // VK_ERROR_INVALID_EXTERNAL_HANDLE), the image's own types are used, as
+        // before the query was made, and the allocation below decides.
+        let properties = boxed<VkMemoryFdPropertiesKHR>(
+            VkMemoryFdPropertiesKHR {
+                sType: VulkanImport.structureFdProperties,
+                memoryTypeBits: U32(0)
+            }
         )
-    )
-    var acceptable = requirements.memoryTypeBits
-    if queried == .Success {
-        acceptable = requirements.memoryTypeBits & boxedValue<VkMemoryFdPropertiesKHR>(properties).memoryTypeBits
-    }
-    let memoryType = match vulkanFindMemoryType(state, acceptable, U32(0)) {
-        Some(memoryType) -> memoryType
-        None -> return .Error(.NoMemoryType)
-    }
-    let dedicated = boxed<VkMemoryDedicatedAllocateInfo>(
-        VkMemoryDedicatedAllocateInfo {
-            sType: VulkanImport.structureDedicatedAllocate,
-            image: image
+        let queried = vulkanResultOf(
+            vulkanMemoryFdProperties(
+                state.device,
+                I32(VulkanExport.dmaBuf),
+                fd,
+                properties.pointer()
+            )
+        )
+        var acceptable = requirements.memoryTypeBits
+        if queried == .Success {
+            acceptable = requirements.memoryTypeBits & boxedValue<VkMemoryFdPropertiesKHR>(properties).memoryTypeBits
         }
-    )
-    let importInfo = boxed<VkImportMemoryFdInfoKHR>(
-        VkImportMemoryFdInfoKHR {
-            sType: VulkanImport.structureImportMemoryFd,
-            pNext: dedicated.pointer(),
-            handleType: I32(VulkanExport.dmaBuf),
-            fd: fd
+        let memoryType = match vulkanFindMemoryType(state, acceptable, U32(0)) {
+            Some(memoryType) -> memoryType
+            None -> return .Error(.NoMemoryType)
         }
-    )
-    let allocate = VkMemoryAllocateInfo {
-        sType: VulkanVocabulary.structureMemoryAllocateInfo,
-        pNext: importInfo.pointer(),
-        allocationSize: requirements.size,
-        memoryTypeIndex: memoryType
+        let dedicated = boxed<VkMemoryDedicatedAllocateInfo>(
+            VkMemoryDedicatedAllocateInfo {
+                sType: VulkanImport.structureDedicatedAllocate,
+                image: image
+            }
+        )
+        let importInfo = boxed<VkImportMemoryFdInfoKHR>(
+            VkImportMemoryFdInfoKHR {
+                sType: VulkanImport.structureImportMemoryFd,
+                pNext: dedicated.pointer(),
+                handleType: I32(VulkanExport.dmaBuf),
+                fd: fd
+            }
+        )
+        let allocate = VkMemoryAllocateInfo {
+            sType: VulkanVocabulary.structureMemoryAllocateInfo,
+            pNext: importInfo.pointer(),
+            allocationSize: requirements.size,
+            memoryTypeIndex: memoryType
+        }
+        let memorySlot = boxed<RawPtr>(nullPointer())
+        let allocated = vulkanResultOf(
+            vkAllocateMemory(state.device, allocate, nullPointer(), memorySlot.pointer())
+        )
+        if allocated != .Success {
+            return .Error(.MemoryRefused(allocated))
+        }
+        return .Ok(boxedValue<RawPtr>(memorySlot))
     }
-    let memorySlot = boxed<RawPtr>(nullPointer())
-    let allocated = vulkanResultOf(
-        vkAllocateMemory(state.device, allocate, nullPointer(), memorySlot.pointer())
-    )
-    if allocated != .Success {
-        return .Error(.MemoryRefused(allocated))
-    }
-    return .Ok(boxedValue<RawPtr>(memorySlot))
 }
 
 // Whether this device lays `image` out where `memory` says the peer did.
@@ -152,54 +156,56 @@ function vulkanCreateImportedImage(
     state: borrow mut VulkanState,
     memory: borrow ExportedMemory
 ) -> Result<U32, ImportFailure> {
-    let format = vulkanImportFormat(memory.format)
-    let image = match vulkanNewImportImage(state, memory, format) {
-        Ok(image) -> image
-        Error(failure) -> {
-            log fault("could not create an image to import into", failure)
-            return .Error(.DeviceRefused)
+    unsafe {
+        let format = vulkanImportFormat(memory.format)
+        let image = match vulkanNewImportImage(state, memory, format) {
+            Ok(image) -> image
+            Error(failure) -> {
+                log fault("could not create an image to import into", failure)
+                return .Error(.DeviceRefused)
+            }
         }
-    }
-    if !vulkanImportLayoutMatches(state, image, memory) {
-        vkDestroyImage(state.device, image, nullPointer())
-        log fault(
-            "an imported texture's rows are not where this device lays them",
-            stride: memory.stride,
-            offset: memory.offset
-        )
-        return .Error(.DeviceRefused)
-    }
-    let requirements = vulkanImageRequirements(state, image)
-    let deviceMemory = match vulkanImportMemory(state, image, requirements, I32(memory.handle)) {
-        Ok(deviceMemory) -> deviceMemory
-        Error(failure) -> {
+        if !vulkanImportLayoutMatches(state, image, memory) {
             vkDestroyImage(state.device, image, nullPointer())
-            log fault("the device would not take a dma-buf in", failure)
+            log fault(
+                "an imported texture's rows are not where this device lays them",
+                stride: memory.stride,
+                offset: memory.offset
+            )
             return .Error(.DeviceRefused)
         }
-    }
-    let bound = vulkanResultOf(vkBindImageMemory(state.device, image, deviceMemory, U64(0)))
-    if bound != .Success {
-        // The allocation owns the descriptor now, so freeing it closes it.
-        vkFreeMemory(state.device, deviceMemory, nullPointer())
-        vkDestroyImage(state.device, image, nullPointer())
-        log fault("the device would not bind imported memory", bound)
-        return .Error(.DeviceRefused)
-    }
-    let size = Number(requirements.size)
-    let id = vulkanRegisterObject(
-        state,
-        VulkanObject {
-            kind: .Image,
-            handle: image,
-            memory: .Some(deviceMemory),
-            size: size,
-            allocationSize: size,
-            format: format
+        let requirements = vulkanImageRequirements(state, image)
+        let deviceMemory = match vulkanImportMemory(state, image, requirements, I32(memory.handle)) {
+            Ok(deviceMemory) -> deviceMemory
+            Error(failure) -> {
+                vkDestroyImage(state.device, image, nullPointer())
+                log fault("the device would not take a dma-buf in", failure)
+                return .Error(.DeviceRefused)
+            }
         }
-    )
-    vulkanSetObjectLayout(state, id, .Preinitialized)
-    return .Ok(id)
+        let bound = vulkanResultOf(vkBindImageMemory(state.device, image, deviceMemory, U64(0)))
+        if bound != .Success {
+            // The allocation owns the descriptor now, so freeing it closes it.
+            vkFreeMemory(state.device, deviceMemory, nullPointer())
+            vkDestroyImage(state.device, image, nullPointer())
+            log fault("the device would not bind imported memory", bound)
+            return .Error(.DeviceRefused)
+        }
+        let size = Number(requirements.size)
+        let id = vulkanRegisterObject(
+            state,
+            VulkanObject {
+                kind: .Image,
+                handle: image,
+                memory: .Some(deviceMemory),
+                size: size,
+                allocationSize: size,
+                format: format
+            }
+        )
+        vulkanSetObjectLayout(state, id, .Preinitialized)
+        return .Ok(id)
+    }
 }
 
 // The imported image acquired from the peer and moved to the layout shaders
@@ -208,20 +214,22 @@ function vulkanReadyImported(
     state: borrow mut VulkanState,
     imageId: U32
 ) -> Result<Void, VulkanFrameFailure> {
-    if state.frameActive {
+    unsafe {
+        if state.frameActive {
+            vulkanAcquireExternalImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
+            return .Ok
+        }
+        let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
+        if idle != .Success {
+            return .Error(.QueueWaitFailed(idle))
+        }
+        match vulkanRestartCommandBuffer(state, .OneTime) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
         vulkanAcquireExternalImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
-        return .Ok
+        return vulkanFlushCommands(state)
     }
-    let idle = vulkanResultOf(vkQueueWaitIdle(state.queue))
-    if idle != .Success {
-        return .Error(.QueueWaitFailed(idle))
-    }
-    match vulkanRestartCommandBuffer(state, .OneTime) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    vulkanAcquireExternalImage(state, imageId, .ShaderRead, VulkanVocabulary.aspectColor)
-    return vulkanFlushCommands(state)
 }
 
 // Whether the transfer of `texture` to or from the peer ran: recorded into the

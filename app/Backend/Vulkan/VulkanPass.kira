@@ -257,14 +257,22 @@ function vulkanNewManagedDepth(
 }
 
 public function vulkanWaitForFrame(state: borrow VulkanState) -> Result<Void, VulkanFrameFailure> {
-    let fence = boxed<RawPtr>(state.inFlightFence)
-    let waitResult = vulkanResultOf(
-        vkWaitForFences(state.device, U32(1), fence.pointer(), U32(1), VulkanVocabulary.waitForever)
-    )
-    if waitResult != .Success {
-        return .Error(.FenceWaitFailed(waitResult))
+    unsafe {
+        let fence = boxed<RawPtr>(state.inFlightFence)
+        let waitResult = vulkanResultOf(
+            vkWaitForFences(
+                state.device,
+                U32(1),
+                fence.pointer(),
+                U32(1),
+                VulkanVocabulary.waitForever
+            )
+        )
+        if waitResult != .Success {
+            return .Error(.FenceWaitFailed(waitResult))
+        }
+        return .Ok
     }
-    return .Ok
 }
 
 // A windowed frame open for recording, once the last one has retired.
@@ -293,16 +301,18 @@ function vulkanAcquireNextImage(
     state: borrow VulkanState,
     imageIndex: borrow Boxed<U32>
 ) -> VulkanResult {
-    return vulkanResultOf(
-        vkAcquireNextImageKHR(
-            state.device,
-            state.swapchain,
-            VulkanVocabulary.waitForever,
-            state.imageAvailable,
-            nullPointer(),
-            imageIndex.pointer()
+    unsafe {
+        return vulkanResultOf(
+            vkAcquireNextImageKHR(
+                state.device,
+                state.swapchain,
+                VulkanVocabulary.waitForever,
+                state.imageAvailable,
+                nullPointer(),
+                imageIndex.pointer()
+            )
         )
-    )
+    }
 }
 
 // The swapchain image is taken only when a pass first draws to it. A frame
@@ -385,6 +395,8 @@ public function vulkanEndPassAndCommitState(state: borrow mut VulkanState) {
     state.passActive = false
     state.passWidth = 0
     state.passHeight = 0
+    state.passOriginX = 0
+    state.passOriginY = 0
     state.passResolveImage = nullPointer()
     state.passSampleCount = 1
 }

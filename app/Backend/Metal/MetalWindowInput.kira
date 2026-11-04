@@ -82,18 +82,20 @@ function metalLayoutKey(raw: Number) -> Key {
 // Read back as a rect, the largest value fetched: a point fills its origin, and
 // a number its `x`. Nothing where `obj` has no value for `key`.
 public function metalKvcRect(obj: RawPtr, key: String) -> MetalCGRect? {
-    let name: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        move key
-    )
-    let value: RawPtr = metalMsgSend(obj, metalSel("valueForKey:"), name)
-    if isNull(value) {
-        return .None
+    unsafe {
+        let name: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            move key
+        )
+        let value: RawPtr = metalMsgSend(obj, metalSel("valueForKey:"), name)
+        if isNull(value) {
+            return .None
+        }
+        let rect = boxed<MetalCGRect>(MetalCGRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 })
+        metalMsgSend(value, metalSel("getValue:"), rect.pointer())
+        return .Some(boxedValue<MetalCGRect>(rect))
     }
-    let rect = boxed<MetalCGRect>(MetalCGRect { x: 0.0, y: 0.0, width: 0.0, height: 0.0 })
-    metalMsgSend(value, metalSel("getValue:"), rect.pointer())
-    return .Some(boxedValue<MetalCGRect>(rect))
 }
 
 // A scalar property, through `metalKvcRect`. A key `obj` does not carry reads
@@ -118,37 +120,39 @@ public function metalKvcNumber(obj: RawPtr, key: String) -> Number {
 // `mouseLocation` is used rather than the event's own location because the answer
 // has to be in screen space, and it is the current cursor position either way.
 public function metalWindowIsUnderCursor(app: RawPtr, window: RawPtr) -> Bool {
-    // System-posted moves can carry no window; the key window is the one they
-    // would have been delivered to, so it is what the comparison is against.
-    var ours = window
-    if isNull(ours) {
-        ours = metalMsgSend(app, metalSel("keyWindow"))
+    unsafe {
+        // System-posted moves can carry no window; the key window is the one they
+        // would have been delivered to, so it is what the comparison is against.
+        var ours = window
+        if isNull(ours) {
+            ours = metalMsgSend(app, metalSel("keyWindow"))
+        }
+        if isNull(ours) {
+            return true
+        }
+        let cursor: MetalNSPoint = metalMsgSend(metalObjcGetClass("NSEvent"), metalSel("mouseLocation"))
+        let front: U64 = metalMsgSend(
+            metalObjcGetClass("NSWindow"),
+            metalSel("windowNumberAtPoint:belowWindowWithWindowNumber:"),
+            cursor.x,
+            cursor.y,
+            0
+        )
+        let mine: U64 = metalMsgSend(ours, metalSel("windowNumber"))
+        // KIRA_HOVER_PROBE=1 prints the pair the gate decides on — 727272, then the
+        // window the server has at the cursor, then ours. Equal numbers mean the
+        // pointer is genuinely on our window; a different front number is an overlay
+        // and the event is dropped; a front of 0 is the desktop.
+        if metalEnvIsSet("KIRA_HOVER_PROBE") {
+            metalProbe(ProbeSentinel.probePixels, [Number(front), Number(mine)])
+        }
+        // 0 means the server has nothing there (desktop, another space): not ours
+        // either, but nothing is obscuring us, so let the viewport bounds decide.
+        if front == 0 {
+            return true
+        }
+        return front == mine
     }
-    if isNull(ours) {
-        return true
-    }
-    let cursor: MetalNSPoint = metalMsgSend(metalObjcGetClass("NSEvent"), metalSel("mouseLocation"))
-    let front: U64 = metalMsgSend(
-        metalObjcGetClass("NSWindow"),
-        metalSel("windowNumberAtPoint:belowWindowWithWindowNumber:"),
-        cursor.x,
-        cursor.y,
-        0
-    )
-    let mine: U64 = metalMsgSend(ours, metalSel("windowNumber"))
-    // KIRA_HOVER_PROBE=1 prints the pair the gate decides on — 727272, then the
-    // window the server has at the cursor, then ours. Equal numbers mean the
-    // pointer is genuinely on our window; a different front number is an overlay
-    // and the event is dropped; a front of 0 is the desktop.
-    if metalEnvIsSet("KIRA_HOVER_PROBE") {
-        metalProbe(ProbeSentinel.probePixels, [Number(front), Number(mine)])
-    }
-    // 0 means the server has nothing there (desktop, another space): not ours
-    // either, but nothing is obscuring us, so let the viewport bounds decide.
-    if front == 0 {
-        return true
-    }
-    return front == mine
 }
 
 // The NSEventModifierFlags bits a modifier sets.
@@ -173,12 +177,14 @@ public function metalModifiersFromFlags(flags: U64) -> ModifierState {
 // question goes through memory: write each beside the other, read them back
 // as integers, compare.
 public function metalPointersDiffer(a: RawPtr, b: RawPtr) -> Bool {
-    let slot = metalMemAlloc(U64(16))
-    metalMemWritePtr(slot, U64(0), a)
-    metalMemWritePtr(slot, U64(8), b)
-    let differ = metalMemReadU64(slot, U64(0)) != metalMemReadU64(slot, U64(8))
-    metalMemFree(slot)
-    return differ
+    unsafe {
+        let slot = metalMemAlloc(U64(16))
+        metalMemWritePtr(slot, U64(0), a)
+        metalMemWritePtr(slot, U64(8), b)
+        let differ = metalMemReadU64(slot, U64(0)) != metalMemReadU64(slot, U64(8))
+        metalMemFree(slot)
+        return differ
+    }
 }
 
 // Which surface a click belongs to, and what that means for the keyboard.
@@ -193,22 +199,24 @@ public function metalPointersDiffer(a: RawPtr, b: RawPtr) -> Bool {
 // forever. Hit testing is the whole of the decision. Mouse types 1, 2 and 3
 // are left, right and other mouse-down.
 public function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) {
-    let etype = Number(metalMsgSendCount(event, metalSel("type")))
-    if etype != 1 && etype != 2 && etype != 3 {
-        return
-    }
-    let loc: MetalNSPoint = metalMsgSend(event, metalSel("locationInWindow"))
-    let hit: RawPtr = metalMsgSend(view, metalSel("hitTest:"), loc.x, loc.y)
-    if isNull(hit) || metalPointersDiffer(hit, view) {
-        return
-    }
-    let keyWindow: RawPtr = metalMsgSend(app, metalSel("keyWindow"))
-    if isNull(keyWindow) {
-        return
-    }
-    let responder: RawPtr = metalMsgSend(keyWindow, metalSel("firstResponder"))
-    if !isNull(responder) && metalPointersDiffer(responder, view) {
-        metalMsgSend(keyWindow, metalSel("makeFirstResponder:"), view)
+    unsafe {
+        let etype = Number(metalMsgSendCount(event, metalSel("type")))
+        if etype != 1 && etype != 2 && etype != 3 {
+            return
+        }
+        let loc: MetalNSPoint = metalMsgSend(event, metalSel("locationInWindow"))
+        let hit: RawPtr = metalMsgSend(view, metalSel("hitTest:"), loc.x, loc.y)
+        if isNull(hit) || metalPointersDiffer(hit, view) {
+            return
+        }
+        let keyWindow: RawPtr = metalMsgSend(app, metalSel("keyWindow"))
+        if isNull(keyWindow) {
+            return
+        }
+        let responder: RawPtr = metalMsgSend(keyWindow, metalSel("firstResponder"))
+        if !isNull(responder) && metalPointersDiffer(responder, view) {
+            metalMsgSend(keyWindow, metalSel("makeFirstResponder:"), view)
+        }
     }
 }
 
@@ -217,43 +225,47 @@ public function metalClickOwnsSurface(app: RawPtr, view: RawPtr, event: RawPtr) 
 // anything else hands the drag to the window server, which tracks it without
 // this loop.
 public function metalWindowBeginTitlebarGesture(view: RawPtr, event: RawPtr) {
-    let window: RawPtr = metalMsgSend(view, metalSel("window"))
-    if isNull(window) {
-        return
-    }
-    if Int(metalMsgSendCount(event, metalSel("clickCount"))) == 2 {
-        let defaults: RawPtr = metalMsgSend(
-            metalObjcGetClass("NSUserDefaults"),
-            metalSel("standardUserDefaults")
-        )
-        let key: RawPtr = metalMsgSend(
-            metalObjcGetClass("NSString"),
-            metalSel("stringWithUTF8String:"),
-            "AppleActionOnDoubleClick"
-        )
-        let action: RawPtr = metalMsgSend(defaults, metalSel("stringForKey:"), key)
-        if metalStringEquals(action, "Minimize") {
-            metalMsgSend(window, metalSel("performMiniaturize:"), nullPointer())
-        } else if !metalStringEquals(action, "None") {
-            metalMsgSend(window, metalSel("performZoom:"), nullPointer())
+    unsafe {
+        let window: RawPtr = metalMsgSend(view, metalSel("window"))
+        if isNull(window) {
+            return
         }
-        return
+        if Int(metalMsgSendCount(event, metalSel("clickCount"))) == 2 {
+            let defaults: RawPtr = metalMsgSend(
+                metalObjcGetClass("NSUserDefaults"),
+                metalSel("standardUserDefaults")
+            )
+            let key: RawPtr = metalMsgSend(
+                metalObjcGetClass("NSString"),
+                metalSel("stringWithUTF8String:"),
+                "AppleActionOnDoubleClick"
+            )
+            let action: RawPtr = metalMsgSend(defaults, metalSel("stringForKey:"), key)
+            if metalStringEquals(action, "Minimize") {
+                metalMsgSend(window, metalSel("performMiniaturize:"), nullPointer())
+            } else if !metalStringEquals(action, "None") {
+                metalMsgSend(window, metalSel("performZoom:"), nullPointer())
+            }
+            return
+        }
+        metalMsgSend(window, metalSel("performWindowDragWithEvent:"), event)
     }
-    metalMsgSend(window, metalSel("performWindowDragWithEvent:"), event)
 }
 
 public function metalStringEquals(string: RawPtr, literal: String) -> Bool {
-    if isNull(string) {
-        return false
+    unsafe {
+        if isNull(string) {
+            return false
+        }
+        let other: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            literal
+        )
+        // A BOOL comes back in the result register: zero for NO, nonzero for YES.
+        let equal: RawPtr = metalMsgSend(string, metalSel("isEqualToString:"), other)
+        return !isNull(equal)
     }
-    let other: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        literal
-    )
-    // A BOOL comes back in the result register: zero for NO, nonzero for YES.
-    let equal: RawPtr = metalMsgSend(string, metalSel("isEqualToString:"), other)
-    return !isNull(equal)
 }
 
 // AppKit's `NSEventPhase` bits as the phase of a scroll: began 1, stationary

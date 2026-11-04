@@ -38,23 +38,25 @@ public function vulkanRestartCommandBuffer(
     state: borrow VulkanState,
     recording: borrow VulkanRecording
 ) -> Result<Void, VulkanFrameFailure> {
-    let resetResult = vulkanResultOf(vkResetCommandBuffer(state.commandBuffer, U32(0)))
-    if resetResult != .Success {
-        return .Error(.CommandBufferNotReset(resetResult))
-    }
-    let beginResult = vulkanResultOf(
-        vkBeginCommandBuffer(
-            state.commandBuffer,
-            VkCommandBufferBeginInfo {
-                sType: VulkanVocabulary.structureCommandBufferBeginInfo,
-                flags: vulkanRecordingFlags(recording)
-            }
+    unsafe {
+        let resetResult = vulkanResultOf(vkResetCommandBuffer(state.commandBuffer, U32(0)))
+        if resetResult != .Success {
+            return .Error(.CommandBufferNotReset(resetResult))
+        }
+        let beginResult = vulkanResultOf(
+            vkBeginCommandBuffer(
+                state.commandBuffer,
+                VkCommandBufferBeginInfo {
+                    sType: VulkanVocabulary.structureCommandBufferBeginInfo,
+                    flags: vulkanRecordingFlags(recording)
+                }
+            )
         )
-    )
-    if beginResult != .Success {
-        return .Error(.CommandBufferNotBegun(beginResult))
+        if beginResult != .Success {
+            return .Error(.CommandBufferNotBegun(beginResult))
+        }
+        return .Ok
     }
-    return .Ok
 }
 
 // The last submission waited out, and everything it kept alive released: the
@@ -63,24 +65,26 @@ public function vulkanRestartCommandBuffer(
 public function vulkanRetireFrame(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanFrameFailure> {
-    match vulkanWaitForFrame(state) {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    vulkanGpuTimingRetire(state)
-    vulkanReleasePendingUploads(state)
-    vulkanReleaseRetiredObjects(state)
-    state.blurExtentsUsed = 0
-    if isNull(state.descriptorPool) {
+    unsafe {
+        match vulkanWaitForFrame(state) {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        vulkanGpuTimingRetire(state)
+        vulkanReleasePendingUploads(state)
+        vulkanReleaseRetiredObjects(state)
+        state.blurExtentsUsed = 0
+        if isNull(state.descriptorPool) {
+            return .Ok
+        }
+        let poolResult = vulkanResultOf(
+            vkResetDescriptorPool(state.device, state.descriptorPool, U32(0))
+        )
+        if poolResult != .Success {
+            return .Error(.DescriptorPoolNotReset(poolResult))
+        }
         return .Ok
     }
-    let poolResult = vulkanResultOf(
-        vkResetDescriptorPool(state.device, state.descriptorPool, U32(0))
-    )
-    if poolResult != .Success {
-        return .Error(.DescriptorPoolNotReset(poolResult))
-    }
-    return .Ok
 }
 
 // Compute may run during initialization as well as between render passes.
@@ -103,25 +107,27 @@ public function vulkanBeginComputeCommands(
 // Make compute writes visible to subsequent shaders, vertex/index fetches,
 // indirect commands, transfers and host readback.
 public function vulkanComputeBarrier(state: borrow VulkanState) {
-    let barrier = VkMemoryBarrier {
-        sType: I32(VK_STRUCTURE_TYPE_MEMORY_BARRIER),
-        srcAccessMask: U32(VK_ACCESS_SHADER_WRITE_BIT),
-        dstAccessMask: U32(
-            VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT
+    unsafe {
+        let barrier = VkMemoryBarrier {
+            sType: I32(VK_STRUCTURE_TYPE_MEMORY_BARRIER),
+            srcAccessMask: U32(VK_ACCESS_SHADER_WRITE_BIT),
+            dstAccessMask: U32(
+                VK_ACCESS_MEMORY_READ_BIT | VK_ACCESS_MEMORY_WRITE_BIT | VK_ACCESS_HOST_READ_BIT
+            )
+        }
+        vkCmdPipelineBarrier(
+            state.commandBuffer,
+            U32(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
+            U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT),
+            U32(0),
+            U32(1),
+            barrier,
+            U32(0),
+            nullPointer(),
+            U32(0),
+            nullPointer()
         )
     }
-    vkCmdPipelineBarrier(
-        state.commandBuffer,
-        U32(VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT),
-        U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT | VK_PIPELINE_STAGE_HOST_BIT),
-        U32(0),
-        U32(1),
-        barrier,
-        U32(0),
-        nullPointer(),
-        U32(0),
-        nullPointer()
-    )
 }
 
 // Submit what is recorded without presenting, and wait for it. A readback in
@@ -130,50 +136,54 @@ public function vulkanComputeBarrier(state: borrow VulkanState) {
 public function vulkanFlushCommands(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanFrameFailure> {
-    if state.passActive {
-        return .Error(.PassOpen)
+    unsafe {
+        if state.passActive {
+            return .Error(.PassOpen)
+        }
+        let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
+        if endResult != .Success {
+            return .Error(.CommandBufferNotEnded(endResult))
+        }
+        let result = vulkanSubmitRecorded(state)
+        if result != .Success {
+            return .Error(.SubmitFailed(result))
+        }
+        state.acquireWaitPending = false
+        let waitResult = vulkanResultOf(vkQueueWaitIdle(state.queue))
+        if waitResult != .Success {
+            return .Error(.QueueWaitFailed(waitResult))
+        }
+        return .Ok
     }
-    let endResult = vulkanResultOf(vkEndCommandBuffer(state.commandBuffer))
-    if endResult != .Success {
-        return .Error(.CommandBufferNotEnded(endResult))
-    }
-    let result = vulkanSubmitRecorded(state)
-    if result != .Success {
-        return .Error(.SubmitFailed(result))
-    }
-    state.acquireWaitPending = false
-    let waitResult = vulkanResultOf(vkQueueWaitIdle(state.queue))
-    if waitResult != .Success {
-        return .Error(.QueueWaitFailed(waitResult))
-    }
-    return .Ok
 }
 
 // The recorded command buffer, submitted with no fence, waiting on the acquire
 // semaphore where this frame has not consumed it yet.
 function vulkanSubmitRecorded(state: borrow VulkanState) -> VulkanResult {
-    let commands = boxed<RawPtr>(state.commandBuffer)
-    let semaphore = boxed<RawPtr>(state.imageAvailable)
-    let stage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
-    let waits = match state.acquireWaitPending {
-        true -> U32(1)
-        false -> U32(0)
-    }
-    return vulkanResultOf(
-        vkQueueSubmit(
-            state.queue,
-            U32(1),
-            VkSubmitInfo {
-                sType: VulkanVocabulary.structureSubmitInfo,
-                waitSemaphoreCount: waits,
-                pWaitSemaphores: semaphore.pointer(),
-                pWaitDstStageMask: stage.pointer(),
-                commandBufferCount: U32(1),
-                pCommandBuffers: commands.pointer()
-            },
-            nullPointer()
+    unsafe {
+        let commands = boxed<RawPtr>(state.commandBuffer)
+        let semaphore = boxed<RawPtr>(state.imageAvailable)
+        let stage = boxed<U32>(U32(VK_PIPELINE_STAGE_ALL_COMMANDS_BIT))
+        let waits = match state.acquireWaitPending {
+            true -> U32(1)
+            false -> U32(0)
+        }
+        return vulkanResultOf(
+            vkQueueSubmit(
+                state.queue,
+                U32(1),
+                VkSubmitInfo {
+                    sType: VulkanVocabulary.structureSubmitInfo,
+                    waitSemaphoreCount: waits,
+                    pWaitSemaphores: semaphore.pointer(),
+                    pWaitDstStageMask: stage.pointer(),
+                    commandBufferCount: U32(1),
+                    pCommandBuffers: commands.pointer()
+                },
+                nullPointer()
+            )
         )
-    )
+    }
 }
 
 // `vulkanFlushCommands`, then recording resumed on the same frame and image.
@@ -205,30 +215,34 @@ public function vulkanFinishComputeCommands(state: borrow mut VulkanState) {
 // nothing will run on it again, so the caller destroys the object anyway; the
 // failure is logged with what was being released.
 public function vulkanSettleQueue(state: borrow VulkanState, releasing: borrow String) {
-    if isNull(state.queue) {
-        return
-    }
-    let result = vulkanResultOf(vkQueueWaitIdle(state.queue))
-    if result != .Success {
-        log fault(
-            "the queue did not go idle before a release",
-            result: result,
-            releasing: releasing
-        )
+    unsafe {
+        if isNull(state.queue) {
+            return
+        }
+        let result = vulkanResultOf(vkQueueWaitIdle(state.queue))
+        if result != .Success {
+            log fault(
+                "the queue did not go idle before a release",
+                result: result,
+                releasing: releasing
+            )
+        }
     }
 }
 
 // `vulkanSettleQueue` for the whole device: every queue, before teardown.
 public function vulkanSettleDevice(state: borrow VulkanState, releasing: borrow String) {
-    if isNull(state.device) {
-        return
-    }
-    let result = vulkanResultOf(vkDeviceWaitIdle(state.device))
-    if result != .Success {
-        log fault(
-            "the device did not go idle before a release",
-            result: result,
-            releasing: releasing
-        )
+    unsafe {
+        if isNull(state.device) {
+            return
+        }
+        let result = vulkanResultOf(vkDeviceWaitIdle(state.device))
+        if result != .Success {
+            log fault(
+                "the device did not go idle before a release",
+                result: result,
+                releasing: releasing
+            )
+        }
     }
 }

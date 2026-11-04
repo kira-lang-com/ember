@@ -94,35 +94,37 @@ struct VulkanLayoutChange {
 }
 
 function vulkanRecordLayoutChange(state: borrow VulkanState, change: borrow VulkanLayoutChange) {
-    let source = vulkanLayoutUse(change.from)
-    let destination = vulkanLayoutUse(change.to)
-    let barrier = VkImageMemoryBarrier {
-        sType: VulkanVocabulary.structureImageMemoryBarrier,
-        srcAccessMask: source.access,
-        dstAccessMask: destination.access,
-        oldLayout: vulkanLayoutCode(change.from),
-        newLayout: vulkanLayoutCode(change.to),
-        srcQueueFamilyIndex: change.sourceFamily,
-        dstQueueFamilyIndex: change.destinationFamily,
-        image: change.image,
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: change.aspect,
-            levelCount: U32(1),
-            layerCount: U32(1)
+    unsafe {
+        let source = vulkanLayoutUse(change.from)
+        let destination = vulkanLayoutUse(change.to)
+        let barrier = VkImageMemoryBarrier {
+            sType: VulkanVocabulary.structureImageMemoryBarrier,
+            srcAccessMask: source.access,
+            dstAccessMask: destination.access,
+            oldLayout: vulkanLayoutCode(change.from),
+            newLayout: vulkanLayoutCode(change.to),
+            srcQueueFamilyIndex: change.sourceFamily,
+            dstQueueFamilyIndex: change.destinationFamily,
+            image: change.image,
+            subresourceRange: VkImageSubresourceRange {
+                aspectMask: change.aspect,
+                levelCount: U32(1),
+                layerCount: U32(1)
+            }
         }
+        vkCmdPipelineBarrier(
+            state.commandBuffer,
+            source.stage,
+            destination.stage,
+            U32(0),
+            U32(0),
+            nullPointer(),
+            U32(0),
+            nullPointer(),
+            U32(1),
+            barrier
+        )
     }
-    vkCmdPipelineBarrier(
-        state.commandBuffer,
-        source.stage,
-        destination.stage,
-        U32(0),
-        U32(0),
-        nullPointer(),
-        U32(0),
-        nullPointer(),
-        U32(1),
-        barrier
-    )
 }
 
 // A registered image moved to `layout`, through `aspect`.

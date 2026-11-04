@@ -40,35 +40,41 @@ import Heap
 // user word, put there when the window opened, because a procedure is handed no
 // pointer of its own — the reason the pump used to be the only place with it.
 public function dawnWindowProcedure(window: RawPtr, message: U32, wparam: U64, lparam: Int) -> Int {
-    match fromCode<Win32Message>(message) {
-        Close -> {
-            destroyWindowHandle(window)
-            return 0
-        }
-        Destroy -> {
-            postQuitMessage(0)
-            return 0
-        }
-        Size -> {
-            let runtimeUserData = dawnWindowRuntime(window)
-            if !isNull(runtimeUserData) {
-                dawnDriveResizeFrame(runtimeUserData)
+    unsafe {
+        match fromCode<Win32Message>(message) {
+            Close -> {
+                destroyWindowHandle(window)
+                return 0
             }
-            return 0
+            Destroy -> {
+                postQuitMessage(0)
+                return 0
+            }
+            Size -> {
+                let runtimeUserData = dawnWindowRuntime(window)
+                if !isNull(runtimeUserData) {
+                    dawnDriveResizeFrame(runtimeUserData)
+                }
+                return 0
+            }
+            // Everything else takes the default handling.
+            else -> return defaultWindowProcedure(window, message, wparam, lparam)
         }
-        // Everything else takes the default handling.
-        else -> return defaultWindowProcedure(window, message, wparam, lparam)
     }
 }
 
 // The runtime state a window was opened for, or null before it was attached.
 public function dawnWindowRuntime(window: RawPtr) -> RawPtr {
-    return windowLong(window, WindowLongIndex.userData)
+    unsafe {
+        return windowLong(window, WindowLongIndex.userData)
+    }
 }
 
 // Attaches the runtime state to the window, so its procedure can reach it.
 public function dawnAttachWindowRuntime(window: RawPtr, runtimeUserData: RawPtr) {
-    setWindowLong(window, WindowLongIndex.userData, runtimeUserData)
+    unsafe {
+        setWindowLong(window, WindowLongIndex.userData, runtimeUserData)
+    }
 }
 
 // A size in physical pixels.
@@ -84,16 +90,18 @@ public struct WindowSize {
 // reported when nothing of that name has ever been registered, and the caller
 // finds out by trying to create the window.
 public function dawnRegisterWindowClass(instance: RawPtr, className: borrow String) -> Bool {
-    return windowClassRegistered(
-        WindowClass {
-            byteSize: U32(sizeOf<WindowClass>()),
-            style: WindowClassStyle.redrawOnResize,
-            procedure: dawnWindowProcedure,
-            instance: instance,
-            cursor: loadCursor(nullPointer(), StockCursor.arrow),
-            className: className
-        }
-    )
+    unsafe {
+        return windowClassRegistered(
+            WindowClass {
+                byteSize: U32(sizeOf<WindowClass>()),
+                style: WindowClassStyle.redrawOnResize,
+                procedure: dawnWindowProcedure,
+                instance: instance,
+                cursor: loadCursor(nullPointer(), StockCursor.arrow),
+                className: className
+            }
+        )
+    }
 }
 
 // Physical pixels per point for a window that does not exist yet.
@@ -105,11 +113,13 @@ public function dawnRegisterWindowClass(instance: RawPtr, className: borrow Stri
 // declared awareness is told 96 here and 96 there, so the unscaled path falls
 // out of the same arithmetic rather than needing a branch.
 public function dawnSystemScale() -> Number {
-    let dpi = Number(systemDpi())
-    if dpi <= 0 {
-        return 1
+    unsafe {
+        let dpi = Number(systemDpi())
+        if dpi <= 0 {
+            return 1
+        }
+        return dpi / BaseDpi.value
     }
-    return dpi / BaseDpi.value
 }
 
 // A size in points as the physical pixels it covers.
@@ -122,16 +132,18 @@ public function dawnPixelsFromPoints(points: Number, scale: Number) -> Number {
 // them the client size gives a drawable smaller than requested by exactly the
 // frame. Where Windows cannot say, the client size is the best answer there is.
 public function dawnFramedSize(client: borrow WindowSize, style: U32) -> WindowSize {
-    let rect = boxed<WindowRect>(
-        WindowRect { right: I32(client.width), bottom: I32(client.height) }
-    )
-    if adjustWindowRect(rect.pointer(), style, 0) == 0 {
-        return WindowSize { width: client.width, height: client.height }
-    }
-    let framed = boxedValue<WindowRect>(rect)
-    return WindowSize {
-        width: Number(framed.right) - Number(framed.left),
-        height: Number(framed.bottom) - Number(framed.top)
+    unsafe {
+        let rect = boxed<WindowRect>(
+            WindowRect { right: I32(client.width), bottom: I32(client.height) }
+        )
+        if adjustWindowRect(rect.pointer(), style, 0) == 0 {
+            return WindowSize { width: client.width, height: client.height }
+        }
+        let framed = boxedValue<WindowRect>(rect)
+        return WindowSize {
+            width: Number(framed.right) - Number(framed.left),
+            height: Number(framed.bottom) - Number(framed.top)
+        }
     }
 }
 
@@ -148,49 +160,53 @@ public function dawnOpenWindow(
     className: borrow String,
     app: borrow WindowRequest
 ) -> Result<RawPtr, WindowFailure> {
-    let style = dawnStyleForMode(app.windowMode)
-    let scale = dawnSystemScale()
-    let client = WindowSize {
-        width: dawnPixelsFromPoints(app.width, scale),
-        height: dawnPixelsFromPoints(app.height, scale)
+    unsafe {
+        let style = dawnStyleForMode(app.windowMode)
+        let scale = dawnSystemScale()
+        let client = WindowSize {
+            width: dawnPixelsFromPoints(app.width, scale),
+            height: dawnPixelsFromPoints(app.height, scale)
+        }
+        let outer = app.windowMode == .Windowed ? dawnFramedSize(client, style) : client
+        // What the desktop does with this window's pixels: `transparent` makes the
+        // key color a hole the desktop shows through, and `opacity` composites the
+        // whole window at less than full strength. Either needs a layered window.
+        let layered = app.transparent || app.opacity < 1
+        let window = createWindowHandle(
+            layered ? WindowStyle.layered : WindowStyle.plain,
+            className,
+            app.title,
+            style,
+            WindowPlacement.initialOffset,
+            WindowPlacement.initialOffset,
+            I32(outer.width),
+            I32(outer.height),
+            nullPointer(),
+            nullPointer(),
+            instance,
+            nullPointer(),
+        )
+        if isNull(window) {
+            return .Error(.NotCreated)
+        }
+        dawnShowNewWindow(window, app)
+        return .Ok(window)
     }
-    let outer = app.windowMode == .Windowed ? dawnFramedSize(client, style) : client
-    // What the desktop does with this window's pixels: `transparent` makes the
-    // key color a hole the desktop shows through, and `opacity` composites the
-    // whole window at less than full strength. Either needs a layered window.
-    let layered = app.transparent || app.opacity < 1
-    let window = createWindowHandle(
-        layered ? WindowStyle.layered : WindowStyle.plain,
-        className,
-        app.title,
-        style,
-        WindowPlacement.initialOffset,
-        WindowPlacement.initialOffset,
-        I32(outer.width),
-        I32(outer.height),
-        nullPointer(),
-        nullPointer(),
-        instance,
-        nullPointer(),
-    )
-    if isNull(window) {
-        return .Error(.NotCreated)
-    }
-    dawnShowNewWindow(window, app)
-    return .Ok(window)
 }
 
 // A window just created, composed, brought forward, and made to cover the
 // display where the app asked for fullscreen.
 function dawnShowNewWindow(window: RawPtr, app: borrow WindowRequest) {
-    dawnApplyWindowComposition(window, app)
-    if app.transparent {
-        dawnEnableWindowBackdrop(window)
-    }
-    showWindow(window, WindowPlacement.show)
-    setForegroundWindow(window)
-    if app.windowMode == .Fullscreen {
-        dawnCoverDisplay(window)
+    unsafe {
+        dawnApplyWindowComposition(window, app)
+        if app.transparent {
+            dawnEnableWindowBackdrop(window)
+        }
+        showWindow(window, WindowPlacement.show)
+        setForegroundWindow(window)
+        if app.windowMode == .Fullscreen {
+            dawnCoverDisplay(window)
+        }
     }
 }
 
@@ -206,10 +222,12 @@ function dawnShowNewWindow(window: RawPtr, app: borrow WindowRequest) {
 // The frame goes first: the backdrop is drawn where the compositor owns the
 // window, so the frame is extended over the whole client area.
 public function dawnEnableWindowBackdrop(window: RawPtr) {
-    let margins = boxed<WindowMargins>(WindowMargins())
-    extendFrameIntoClientArea(window, margins.pointer())
-    let backdrop = boxed<U32>(WindowBackdrop.acrylic)
-    setWindowAttribute(window, WindowBackdrop.attribute, backdrop.pointer(), U32(sizeOf<U32>()))
+    unsafe {
+        let margins = boxed<WindowMargins>(WindowMargins())
+        extendFrameIntoClientArea(window, margins.pointer())
+        let backdrop = boxed<U32>(WindowBackdrop.acrylic)
+        setWindowAttribute(window, WindowBackdrop.attribute, backdrop.pointer(), U32(sizeOf<U32>()))
+    }
 }
 
 // Tells the desktop how to composite the window it just made.
@@ -218,17 +236,19 @@ public function dawnEnableWindowBackdrop(window: RawPtr) {
 // setting the key and then the alpha in two calls leaves the window carrying
 // whichever was set last.
 public function dawnApplyWindowComposition(window: RawPtr, app: borrow WindowRequest) {
-    let keyFlag = app.transparent ? LayeredFlag.colorKey : U32(0)
-    let alphaFlag = app.opacity < 1 ? LayeredFlag.alpha : U32(0)
-    if keyFlag == 0 && alphaFlag == 0 {
-        return
+    unsafe {
+        let keyFlag = app.transparent ? LayeredFlag.colorKey : U32(0)
+        let alphaFlag = app.opacity < 1 ? LayeredFlag.alpha : U32(0)
+        if keyFlag == 0 && alphaFlag == 0 {
+            return
+        }
+        setLayeredWindowAttributes(
+            window,
+            TransparentKey.colorRef,
+            dawnWindowAlphaByte(app.opacity),
+            keyFlag | alphaFlag
+        )
     }
-    setLayeredWindowAttributes(
-        window,
-        TransparentKey.colorRef,
-        dawnWindowAlphaByte(app.opacity),
-        keyFlag | alphaFlag
-    )
 }
 
 // The alpha the desktop composites the window at, as the byte the call takes.
@@ -247,48 +267,54 @@ public function dawnStyleForMode(mode: borrow WindowMode) -> U32 {
 
 // The display the window is on, or nothing where Windows cannot say.
 function dawnWindowMonitor(window: RawPtr) -> WindowRect? {
-    let monitor = monitorForWindow(window, WindowPlacement.nearestMonitor)
-    if isNull(monitor) {
-        return .None
+    unsafe {
+        let monitor = monitorForWindow(window, WindowPlacement.nearestMonitor)
+        if isNull(monitor) {
+            return .None
+        }
+        let info = boxed<MonitorInfo>(MonitorInfo { byteSize: U32(sizeOf<MonitorInfo>()) })
+        if readMonitorInfo(monitor, info.pointer()) == 0 {
+            return .None
+        }
+        return .Some(boxedValue<MonitorInfo>(info).monitor)
     }
-    let info = boxed<MonitorInfo>(MonitorInfo { byteSize: U32(sizeOf<MonitorInfo>()) })
-    if readMonitorInfo(monitor, info.pointer()) == 0 {
-        return .None
-    }
-    return .Some(boxedValue<MonitorInfo>(info).monitor)
 }
 
 // Moves an undecorated window over the whole display it is on.
 public function dawnCoverDisplay(window: RawPtr) {
-    let display = match dawnWindowMonitor(window) {
-        Some(display) -> display
-        None -> return
+    unsafe {
+        let display = match dawnWindowMonitor(window) {
+            Some(display) -> display
+            None -> return
+        }
+        setWindowPosition(
+            window,
+            nullPointer(),
+            display.left,
+            display.top,
+            display.right - display.left,
+            display.bottom - display.top,
+            WindowPositionFlag.noZOrder | WindowPositionFlag.frameChanged,
+        )
     }
-    setWindowPosition(
-        window,
-        nullPointer(),
-        display.left,
-        display.top,
-        display.right - display.left,
-        display.bottom - display.top,
-        WindowPositionFlag.noZOrder | WindowPositionFlag.frameChanged,
-    )
 }
 
 // The client area in physical pixels, which is what the surface is configured
 // with and what a drawable measures. Nothing where there is no window to ask.
 public function dawnClientSize(window: RawPtr) -> WindowSize {
-    if isNull(window) {
-        return WindowSize()
-    }
-    let rect = boxed<WindowRect>(WindowRect())
-    if windowClientRect(window, rect.pointer()) == 0 {
-        return WindowSize()
-    }
-    let client = boxedValue<WindowRect>(rect)
-    return WindowSize {
-        width: Number(client.right) - Number(client.left),
-        height: Number(client.bottom) - Number(client.top)
+    unsafe {
+        if isNull(window) {
+            return WindowSize()
+        }
+        let rect = boxed<WindowRect>(WindowRect())
+        if windowClientRect(window, rect.pointer()) == 0 {
+            return WindowSize()
+        }
+        let client = boxedValue<WindowRect>(rect)
+        return WindowSize {
+            width: Number(client.right) - Number(client.left),
+            height: Number(client.bottom) - Number(client.top)
+        }
     }
 }
 
@@ -304,60 +330,66 @@ public function dawnClientHeight(window: RawPtr) -> Number {
 // display's: a window dragged between two monitors of different scales reports
 // the one it is on.
 public function dawnWindowScale(window: RawPtr) -> Number {
-    if isNull(window) {
-        return 1
+    unsafe {
+        if isNull(window) {
+            return 1
+        }
+        let dpi = Number(windowDpi(window))
+        if dpi <= 0 {
+            return 1
+        }
+        return dpi / BaseDpi.value
     }
-    let dpi = Number(windowDpi(window))
-    if dpi <= 0 {
-        return 1
-    }
-    return dpi / BaseDpi.value
 }
 
 // How the window is presented right now, read off the window rather than
 // remembered: a user can leave a mode through the window manager, and a stored
 // copy would go stale exactly when it mattered.
 public function dawnReadWindowMode(window: RawPtr) -> WindowMode {
-    if isNull(window) {
-        return .Windowed
+    unsafe {
+        if isNull(window) {
+            return .Windowed
+        }
+        let style: Int = windowLong(window, WindowLongIndex.style)
+        if (style & WindowStyle.caption) != 0 {
+            return .Windowed
+        }
+        let display = match dawnWindowMonitor(window) {
+            Some(display) -> display
+            None -> return .WindowedBorderless
+        }
+        let client = dawnClientSize(window)
+        let covering = client.width >= Number(display.right) - Number(display.left)
+            && client.height >= Number(display.bottom) - Number(display.top)
+        return covering ? .Fullscreen : .WindowedBorderless
     }
-    let style: Int = windowLong(window, WindowLongIndex.style)
-    if (style & WindowStyle.caption) != 0 {
-        return .Windowed
-    }
-    let display = match dawnWindowMonitor(window) {
-        Some(display) -> display
-        None -> return .WindowedBorderless
-    }
-    let client = dawnClientSize(window)
-    let covering = client.width >= Number(display.right) - Number(display.left)
-        && client.height >= Number(display.bottom) - Number(display.top)
-    return covering ? .Fullscreen : .WindowedBorderless
 }
 
 // Resizes the window's client area, in points, leaving its position and style
 // alone. Windows answers with the same `WM_SIZE` a drag produces, which is what
 // makes a swept size exercise the resize path rather than a path of its own.
 public function dawnResizeWindow(window: RawPtr, width: Number, height: Number) {
-    if isNull(window) {
-        return
+    unsafe {
+        if isNull(window) {
+            return
+        }
+        let scale = dawnWindowScale(window)
+        let client = WindowSize {
+            width: dawnPixelsFromPoints(width, scale),
+            height: dawnPixelsFromPoints(height, scale)
+        }
+        let currentStyle: Int = windowLong(window, WindowLongIndex.style)
+        let outer = dawnFramedSize(client, U32(currentStyle))
+        setWindowPosition(
+            window,
+            nullPointer(),
+            I32(0),
+            I32(0),
+            I32(outer.width),
+            I32(outer.height),
+            WindowPositionFlag.noMove | WindowPositionFlag.noZOrder
+        )
     }
-    let scale = dawnWindowScale(window)
-    let client = WindowSize {
-        width: dawnPixelsFromPoints(width, scale),
-        height: dawnPixelsFromPoints(height, scale)
-    }
-    let currentStyle: Int = windowLong(window, WindowLongIndex.style)
-    let outer = dawnFramedSize(client, U32(currentStyle))
-    setWindowPosition(
-        window,
-        nullPointer(),
-        I32(0),
-        I32(0),
-        I32(outer.width),
-        I32(outer.height),
-        WindowPositionFlag.noMove | WindowPositionFlag.noZOrder
-    )
 }
 
 // Moves the window to `mode`, sized in POINTS as `dawnOpenWindow` is. The style
@@ -368,41 +400,45 @@ public function dawnApplyWindowMode(
     mode: borrow WindowMode,
     app: borrow WindowRequest
 ) {
-    if isNull(window) {
-        return
-    }
-    // The window exists, so its own DPI answers rather than the system's: a
-    // window on the second of two differently scaled displays is resized by the
-    // scale it is being shown at.
-    let scale = dawnWindowScale(window)
-    let client = WindowSize {
-        width: dawnPixelsFromPoints(app.width, scale),
-        height: dawnPixelsFromPoints(app.height, scale)
-    }
-    setWindowLong(window, WindowLongIndex.style, Int(dawnStyleForMode(mode)))
-    let outer = match mode {
-        Fullscreen -> {
-            dawnCoverDisplay(window)
+    unsafe {
+        if isNull(window) {
             return
         }
-        Windowed -> dawnFramedSize(client, dawnStyleForMode(mode))
-        WindowedBorderless -> client
+        // The window exists, so its own DPI answers rather than the system's: a
+        // window on the second of two differently scaled displays is resized by the
+        // scale it is being shown at.
+        let scale = dawnWindowScale(window)
+        let client = WindowSize {
+            width: dawnPixelsFromPoints(app.width, scale),
+            height: dawnPixelsFromPoints(app.height, scale)
+        }
+        setWindowLong(window, WindowLongIndex.style, Int(dawnStyleForMode(mode)))
+        let outer = match mode {
+            Fullscreen -> {
+                dawnCoverDisplay(window)
+                return
+            }
+            Windowed -> dawnFramedSize(client, dawnStyleForMode(mode))
+            WindowedBorderless -> client
+        }
+        setWindowPosition(
+            window,
+            nullPointer(),
+            I32(0),
+            I32(0),
+            I32(outer.width),
+            I32(outer.height),
+            WindowPositionFlag.noMove | WindowPositionFlag.noZOrder | WindowPositionFlag.frameChanged
+        )
     }
-    setWindowPosition(
-        window,
-        nullPointer(),
-        I32(0),
-        I32(0),
-        I32(outer.width),
-        I32(outer.height),
-        WindowPositionFlag.noMove | WindowPositionFlag.noZOrder | WindowPositionFlag.frameChanged
-    )
 }
 
 // Whether a key is held right now. `GetKeyState`'s high bit is "down", and the
 // value is signed, so a negative answer is a held key.
 function dawnKeyHeld(key: VirtualKey) -> Bool {
-    return keyState(I32(code(key))) < I16(0)
+    unsafe {
+        return keyState(I32(code(key))) < I16(0)
+    }
 }
 
 // The modifier keys held right now.

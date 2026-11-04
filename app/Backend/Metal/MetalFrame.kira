@@ -1,3 +1,5 @@
+import Heap
+
 // Metal frame bridge: the seam the public RenderFrame dispatches to when its
 // backend is Metal. Mirrors the Sokol begin/end/submit contract but submits work
 // through the Metal context built from Objective-C messages.
@@ -30,6 +32,7 @@ public function metalBeginRenderPassFromFrame(frame: borrow RenderFrame, ctxPtr:
     } else {
         metalContextBeginClear(ctxPtr, start)
     }
+    metalEncoderSetDrawArea(ctxPtr, frame.drawArea)
     return true
 }
 
@@ -87,12 +90,16 @@ public function metalReportBench(totalNs: Number, frames: Number) {
 // is the newest completed logical frame and therefore trails the CPU sample by the
 // configured in-flight depth.
 public function metalReportBenchFrame(ctxPtr: RawPtr, frameIndex: Number) {
-    metalProbe(
-        ProbeSentinel.benchFrame,
-        [frameIndex, Number(metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)), Number(
-            metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)
-        ), Number(metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs))]
-    )
+    unsafe {
+        metalProbe(
+            ProbeSentinel.benchFrame,
+            [frameIndex, Number(
+                metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)
+            ), Number(metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)), Number(
+                metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs)
+            )]
+        )
+    }
 }
 
 public function metalReportBenchWorst(frameNs: Number, cpuNs: Number, gpuNs: Number) {
@@ -139,9 +146,11 @@ function metalBenchCollect(
     cpuNs: borrow mut[Number],
     gpuNs: borrow mut[Number]
 ) {
-    frameNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)))
-    cpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)))
-    gpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs)))
+    unsafe {
+        frameNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetFrameDurationNs)))
+        cpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetCpuFrameDurationNs)))
+        gpuNs.append(Number(metalMemReadU64(ctxPtr, MetalContext.offsetGpuFrameDurationNs)))
+    }
 }
 
 public function metalBenchReport(
@@ -162,4 +171,44 @@ public function metalBenchReport(
     metalBenchReportSeries("frame", frameNs)
     metalBenchReportSeries("cpu", cpuNs)
     metalBenchReportSeries("gpu", gpuNs)
+}
+
+// `MTLViewport`: six doubles, passed indirectly on arm64 as MTLScissorRect is.
+public @FFI.Struct { layout: c }
+struct MetalPassViewport {
+    var originX: Float = 0.0
+    var originY: Float = 0.0
+    var width: Float = 0.0
+    var height: Float = 0.0
+    var znear: Float = 0.0
+    var zfar: Float = 1.0
+}
+
+// Puts the open pass's viewport over its draw area and records the area's
+// corner, which every scissor is then moved by. A pass with no draw area keeps
+// Metal's viewport over the whole attachment.
+public function metalEncoderSetDrawArea(ctx: RawPtr, area: borrow ScissorRect?) {
+    unsafe {
+        metalMemWriteU64(ctx, MetalContext.offsetPassOriginX, U64(0))
+        metalMemWriteU64(ctx, MetalContext.offsetPassOriginY, U64(0))
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        let rect = match area {
+            Some(value) -> value
+            None -> return
+        }
+        if isNull(encoder) || rect.x < 0 || rect.y < 0 {
+            return
+        }
+        metalMemWriteU64(ctx, MetalContext.offsetPassOriginX, U64(rect.x))
+        metalMemWriteU64(ctx, MetalContext.offsetPassOriginY, U64(rect.y))
+        let block = boxed<MetalPassViewport>(
+            MetalPassViewport {
+                originX: Float(rect.x),
+                originY: Float(rect.y),
+                width: Float(rect.width),
+                height: Float(rect.height)
+            }
+        )
+        metalMsgSend(encoder, metalSel("setViewport:"), block.pointer())
+    }
 }

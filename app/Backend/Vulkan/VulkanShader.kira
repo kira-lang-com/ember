@@ -71,30 +71,32 @@ public function vulkanCreateShaderModule(
     label: borrow String,
     words: borrow[U32]
 ) -> RawPtr {
-    if words.count == 0 {
-        log fault("a shader has no valid SPIR-V words", label: label)
-        return nullPointer()
+    unsafe {
+        if words.count == 0 {
+            log fault("a shader has no valid SPIR-V words", label: label)
+            return nullPointer()
+        }
+        let code = allocateZeroed(memoryLayout(words.count * sizeOf<U32>(), alignOf<U64>()))
+        for index in 0..words.count {
+            heapStore<U32>(code, index * sizeOf<U32>(), words[index])
+        }
+        let info = VkShaderModuleCreateInfo {
+            sType: VulkanVocabulary.structureShaderModuleCreateInfo,
+            codeSize: U64(words.count * sizeOf<U32>()),
+            pCode: code
+        }
+        let moduleSlot = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateShaderModule(state.device, info, nullPointer(), moduleSlot.pointer())
+        )
+        let module = boxedValue<RawPtr>(moduleSlot)
+        deallocate(code)
+        if result != .Success || isNull(module) {
+            log fault("rejected shader", label: label, result: result)
+            return nullPointer()
+        }
+        return module
     }
-    let code = allocateZeroed(memoryLayout(words.count * sizeOf<U32>(), alignOf<U64>()))
-    for index in 0..words.count {
-        heapStore<U32>(code, index * sizeOf<U32>(), words[index])
-    }
-    let info = VkShaderModuleCreateInfo {
-        sType: VulkanVocabulary.structureShaderModuleCreateInfo,
-        codeSize: U64(words.count * sizeOf<U32>()),
-        pCode: code
-    }
-    let moduleSlot = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateShaderModule(state.device, info, nullPointer(), moduleSlot.pointer())
-    )
-    let module = boxedValue<RawPtr>(moduleSlot)
-    deallocate(code)
-    if result != .Success || isNull(module) {
-        log fault("rejected shader", label: label, result: result)
-        return nullPointer()
-    }
-    return module
 }
 
 public function vulkanUniformBlocks(

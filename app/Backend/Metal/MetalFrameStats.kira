@@ -18,36 +18,40 @@ public function metalContextActive(ctx: RawPtr) -> Bool {
 }
 
 public function metalContextSetHighDpi(ctx: RawPtr, enabled: Bool) {
-    var value: U64 = 0
-    if enabled {
-        value = 1
+    unsafe {
+        var value: U64 = 0
+        if enabled {
+            value = 1
+        }
+        metalMemWriteU64(ctx, MetalContext.offsetHighDpi, value)
     }
-    metalMemWriteU64(ctx, MetalContext.offsetHighDpi, value)
 }
 
 // Sleep to just before an absolute deadline, then spin the final 100us. Work that
 // already missed its deadline returns immediately; the caller starts a fresh
 // cadence instead of emitting catch-up frames.
 public function metalContextWaitUntilNs(ctx: RawPtr, deadlineNs: U64) {
-    let nowNs = metalClockNs(MetalForeign.clockUptimeRaw)
-    if deadlineNs <= nowNs {
-        return
-    }
-    let remainingNs = deadlineNs - nowNs
-    let spinNs: UNumber = 100000
-    if remainingNs > spinNs {
-        let sleepNs = remainingNs - spinNs
-        var numer = metalMemReadU64(ctx, MetalContext.offsetMachTimeNumer)
-        var denom = metalMemReadU64(ctx, MetalContext.offsetMachTimeDenom)
-        if numer == 0 { numer = 1 }
-        if denom == 0 { denom = 1 }
-        let ticks = sleepNs * denom / numer
-        // An interrupted wait ends early; the spin below covers the rest.
-        if metalMachWaitUntil(metalMachAbsoluteTime() + ticks) != U32(0) {
-            log debug("mach_wait_until returned early", area: "pacing")
+    unsafe {
+        let nowNs = metalClockNs(MetalForeign.clockUptimeRaw)
+        if deadlineNs <= nowNs {
+            return
         }
+        let remainingNs = deadlineNs - nowNs
+        let spinNs: UNumber = 100000
+        if remainingNs > spinNs {
+            let sleepNs = remainingNs - spinNs
+            var numer = metalMemReadU64(ctx, MetalContext.offsetMachTimeNumer)
+            var denom = metalMemReadU64(ctx, MetalContext.offsetMachTimeDenom)
+            if numer == 0 { numer = 1 }
+            if denom == 0 { denom = 1 }
+            let ticks = sleepNs * denom / numer
+            // An interrupted wait ends early; the spin below covers the rest.
+            if metalMachWaitUntil(metalMachAbsoluteTime() + ticks) != U32(0) {
+                log debug("mach_wait_until returned early", area: "pacing")
+            }
+        }
+        while metalClockNs(MetalForeign.clockUptimeRaw) < deadlineNs {}
     }
-    while metalClockNs(MetalForeign.clockUptimeRaw) < deadlineNs {}
 }
 
 // Sample the frame clock: record the delta since the previous tick as the current
@@ -59,19 +63,21 @@ public function metalContextWaitUntilNs(ctx: RawPtr, deadlineNs: U64) {
 // tens of milliseconds, and a capture of an animation has to show it at the
 // cadence a display would, one frame in, one frame later.
 public function metalContextTickFrameTime(ctx: RawPtr) {
-    let last = metalMemReadU64(ctx, MetalContext.offsetLastFrameNs)
-    let periodNs = metalFixedFramePeriodNs()
-    if periodNs > U64(0) {
-        let fixed = last > U64(0) ? last + periodNs : metalClockNs(MetalForeign.clockUptimeRaw)
-        metalMemWriteU64(ctx, MetalContext.offsetFrameDurationNs, periodNs)
-        metalMemWriteU64(ctx, MetalContext.offsetLastFrameNs, fixed)
-        return
+    unsafe {
+        let last = metalMemReadU64(ctx, MetalContext.offsetLastFrameNs)
+        let periodNs = metalFixedFramePeriodNs()
+        if periodNs > U64(0) {
+            let fixed = last > U64(0) ? last + periodNs : metalClockNs(MetalForeign.clockUptimeRaw)
+            metalMemWriteU64(ctx, MetalContext.offsetFrameDurationNs, periodNs)
+            metalMemWriteU64(ctx, MetalContext.offsetLastFrameNs, fixed)
+            return
+        }
+        let now = metalClockNs(MetalForeign.clockUptimeRaw)
+        if last > 0 && now > last {
+            metalMemWriteU64(ctx, MetalContext.offsetFrameDurationNs, now - last)
+        }
+        metalMemWriteU64(ctx, MetalContext.offsetLastFrameNs, now)
     }
-    let now = metalClockNs(MetalForeign.clockUptimeRaw)
-    if last > 0 && now > last {
-        metalMemWriteU64(ctx, MetalContext.offsetFrameDurationNs, now - last)
-    }
-    metalMemWriteU64(ctx, MetalContext.offsetLastFrameNs, now)
 }
 
 // One frame's period in nanoseconds at `KIRA_GRAPHICS_FRAME_RATE`, or zero
@@ -88,143 +94,175 @@ public function metalFixedFramePeriodNs() -> U64 {
 // `KIRA_GRAPHICS_FRAME_RATE` is set, so what is timed against it agrees with
 // the durations the frames report.
 public function metalContextFrameClockNs(ctx: RawPtr) -> U64 {
-    let last = metalMemReadU64(ctx, MetalContext.offsetLastFrameNs)
-    if last > U64(0) && metalFixedFramePeriodNs() > U64(0) {
-        return last
+    unsafe {
+        let last = metalMemReadU64(ctx, MetalContext.offsetLastFrameNs)
+        if last > U64(0) && metalFixedFramePeriodNs() > U64(0) {
+            return last
+        }
+        return metalClockNs(MetalForeign.clockUptimeRaw)
     }
-    return metalClockNs(MetalForeign.clockUptimeRaw)
 }
 
 // The most recent inter-frame delta in seconds, for the FPS readout. The
 // conversion is a Kira division — no floating-point value crosses the FFI
 // boundary, which carries the duration as nanoseconds.
 public function metalContextFrameDuration(ctx: RawPtr) -> Number {
-    let durNs = metalMemReadU64(ctx, MetalContext.offsetFrameDurationNs)
-    return secondsFromNanoseconds(Number(durNs))
+    unsafe {
+        let durNs = metalMemReadU64(ctx, MetalContext.offsetFrameDurationNs)
+        return secondsFromNanoseconds(Number(durNs))
+    }
 }
 
 // Start/end one LOGICAL application frame. A frame may contain many Metal command
 // buffers (the Liquid Glass compositor has capture and blur passes), so the serial
 // groups their asynchronous GPU timestamps into one HUD sample.
 public function metalContextBeginFrameTiming(ctx: RawPtr) {
-    metalContextTickFrameTime(ctx)
-    let serial = metalMemReadU64(ctx, MetalContext.offsetLogicalFrameSerial) + U64(1)
-    metalMemWriteU64(ctx, MetalContext.offsetLogicalFrameSerial, serial)
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetCpuFrameStartNs,
-        metalClockNs(MetalForeign.clockUptimeRaw)
-    )
-    metalMemWriteU64(ctx, MetalContext.offsetCurrentPasses, 0)
-    metalMemWriteU64(ctx, MetalContext.offsetCurrentDraws, 0)
-    metalMemWriteU64(ctx, MetalContext.offsetCurrentTriangles, 0)
+    unsafe {
+        metalContextTickFrameTime(ctx)
+        let serial = metalMemReadU64(ctx, MetalContext.offsetLogicalFrameSerial) + U64(1)
+        metalMemWriteU64(ctx, MetalContext.offsetLogicalFrameSerial, serial)
+        metalMemWriteU64(
+            ctx,
+            MetalContext.offsetCpuFrameStartNs,
+            metalClockNs(MetalForeign.clockUptimeRaw)
+        )
+        metalMemWriteU64(ctx, MetalContext.offsetCurrentPasses, 0)
+        metalMemWriteU64(ctx, MetalContext.offsetCurrentDraws, 0)
+        metalMemWriteU64(ctx, MetalContext.offsetCurrentTriangles, 0)
+    }
 }
 
 public function metalContextEndFrameTiming(ctx: RawPtr) {
-    let start = metalMemReadU64(ctx, MetalContext.offsetCpuFrameStartNs)
-    let finish = metalClockNs(MetalForeign.clockUptimeRaw)
-    if start > 0 && finish > start {
-        metalMemWriteU64(ctx, MetalContext.offsetCpuFrameDurationNs, finish - start)
-    }
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetLastPasses,
-        metalMemReadU64(ctx, MetalContext.offsetCurrentPasses)
-    )
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetLastDraws,
-        metalMemReadU64(ctx, MetalContext.offsetCurrentDraws)
-    )
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetLastTriangles,
-        metalMemReadU64(ctx, MetalContext.offsetCurrentTriangles)
-    )
-}
-
-public function metalContextCpuDuration(ctx: RawPtr) -> Number {
-    return secondsFromNanoseconds(
-        Number(metalMemReadU64(ctx, MetalContext.offsetCpuFrameDurationNs))
-    )
-}
-
-public function metalContextGpuDuration(ctx: RawPtr) -> Number {
-    return secondsFromNanoseconds(
-        Number(metalMemReadU64(ctx, MetalContext.offsetGpuFrameDurationNs))
-    )
-}
-
-public function metalContextCountPass(ctx: RawPtr) {
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetCurrentPasses,
-        metalMemReadU64(ctx, MetalContext.offsetCurrentPasses) + U64(1)
-    )
-}
-
-public function metalContextCountDraw(ctx: RawPtr, triangles: Number) {
-    metalMemWriteU64(
-        ctx,
-        MetalContext.offsetCurrentDraws,
-        metalMemReadU64(ctx, MetalContext.offsetCurrentDraws) + U64(1)
-    )
-    if triangles > 0 {
+    unsafe {
+        let start = metalMemReadU64(ctx, MetalContext.offsetCpuFrameStartNs)
+        let finish = metalClockNs(MetalForeign.clockUptimeRaw)
+        if start > 0 && finish > start {
+            metalMemWriteU64(ctx, MetalContext.offsetCpuFrameDurationNs, finish - start)
+        }
         metalMemWriteU64(
             ctx,
-            MetalContext.offsetCurrentTriangles,
-            metalMemReadU64(ctx, MetalContext.offsetCurrentTriangles) + U64(triangles)
+            MetalContext.offsetLastPasses,
+            metalMemReadU64(ctx, MetalContext.offsetCurrentPasses)
+        )
+        metalMemWriteU64(
+            ctx,
+            MetalContext.offsetLastDraws,
+            metalMemReadU64(ctx, MetalContext.offsetCurrentDraws)
+        )
+        metalMemWriteU64(
+            ctx,
+            MetalContext.offsetLastTriangles,
+            metalMemReadU64(ctx, MetalContext.offsetCurrentTriangles)
         )
     }
 }
 
+public function metalContextCpuDuration(ctx: RawPtr) -> Number {
+    unsafe {
+        return secondsFromNanoseconds(
+            Number(metalMemReadU64(ctx, MetalContext.offsetCpuFrameDurationNs))
+        )
+    }
+}
+
+public function metalContextGpuDuration(ctx: RawPtr) -> Number {
+    unsafe {
+        return secondsFromNanoseconds(
+            Number(metalMemReadU64(ctx, MetalContext.offsetGpuFrameDurationNs))
+        )
+    }
+}
+
+public function metalContextCountPass(ctx: RawPtr) {
+    unsafe {
+        metalMemWriteU64(
+            ctx,
+            MetalContext.offsetCurrentPasses,
+            metalMemReadU64(ctx, MetalContext.offsetCurrentPasses) + U64(1)
+        )
+    }
+}
+
+public function metalContextCountDraw(ctx: RawPtr, triangles: Number) {
+    unsafe {
+        metalMemWriteU64(
+            ctx,
+            MetalContext.offsetCurrentDraws,
+            metalMemReadU64(ctx, MetalContext.offsetCurrentDraws) + U64(1)
+        )
+        if triangles > 0 {
+            metalMemWriteU64(
+                ctx,
+                MetalContext.offsetCurrentTriangles,
+                metalMemReadU64(ctx, MetalContext.offsetCurrentTriangles) + U64(triangles)
+            )
+        }
+    }
+}
+
 public function metalContextPassCount(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetLastPasses)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetLastPasses)
+    }
 }
 
 public function metalContextDrawCount(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetLastDraws)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetLastDraws)
+    }
 }
 
 public function metalContextTriangleCount(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetLastTriangles)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetLastTriangles)
+    }
 }
 
 public function metalContextFrameSerial(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetLogicalFrameSerial)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetLogicalFrameSerial)
+    }
 }
 
 // MTLDevice.currentAllocatedSize is the same live figure Instruments exposes in
 // Metal System Trace, so the expanded HUD reports real driver-owned resource bytes.
 public function metalContextAllocatedBytes(ctx: RawPtr) -> U64 {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    return metalMsgSend(device, metalSel("currentAllocatedSize"))
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        return metalMsgSend(device, metalSel("currentAllocatedSize"))
+    }
 }
 
 public function metalContextResourceCount(ctx: RawPtr) -> Number {
-    let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
-    let nextId = metalMemReadU64(ctx, MetalContext.offsetNextId)
-    var active = 0
-    for id in U64(1)..nextId {
-        if metalMemReadU8(kinds, id) != MetalRegistry.registryKindFree {
-            active = active + 1
+    unsafe {
+        let kinds = metalMemReadPtr(ctx, MetalContext.offsetRegistryKinds)
+        let nextId = metalMemReadU64(ctx, MetalContext.offsetNextId)
+        var active = 0
+        for id in U64(1)..nextId {
+            if metalMemReadU8(kinds, id) != MetalRegistry.registryKindFree {
+                active = active + 1
+            }
         }
+        return active
     }
-    return active
 }
 
 public function metalContextPhysicalWidth(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+    }
 }
 
 public function metalContextPhysicalHeight(ctx: RawPtr) -> Number {
-    let logicalW = metalMemReadU64(ctx, MetalContext.offsetWidth)
-    let logicalH = metalMemReadU64(ctx, MetalContext.offsetHeight)
-    let physicalW = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
-    if logicalW == 0 || physicalW == 0 {
-        return logicalH
+    unsafe {
+        let logicalW = metalMemReadU64(ctx, MetalContext.offsetWidth)
+        let logicalH = metalMemReadU64(ctx, MetalContext.offsetHeight)
+        let physicalW = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+        if logicalW == 0 || physicalW == 0 {
+            return logicalH
+        }
+        return logicalH * physicalW / logicalW
     }
-    return logicalH * physicalW / logicalW
 }
 
 // The window state, as the enum the whole surface reports it in. The context
@@ -232,11 +270,15 @@ public function metalContextPhysicalHeight(ctx: RawPtr) -> Number {
 // C-side context block, so the conversion sits here rather than at each of its
 // three readers.
 public function metalContextWindowState(ctx: RawPtr) -> WindowState {
-    return windowStateFromCode(Int(metalMemReadU64(ctx, MetalContext.offsetWindowState)))
+    unsafe {
+        return windowStateFromCode(Int(metalMemReadU64(ctx, MetalContext.offsetWindowState)))
+    }
 }
 
 public function metalContextSetWindowState(ctx: RawPtr, state: borrow WindowState) {
-    metalMemWriteU64(ctx, MetalContext.offsetWindowState, U64(windowStateCode(state)))
+    unsafe {
+        metalMemWriteU64(ctx, MetalContext.offsetWindowState, U64(windowStateCode(state)))
+    }
 }
 
 // The codes the context slot holds, one per case. Named because the slot is a
@@ -321,23 +363,25 @@ function metalViewBounds(view: RawPtr) -> MetalViewport? {
 // AppKit, the screen's on UIKit. One until the view is in a window, because the
 // scale lives on the window and not the view.
 function metalBackingScale(view: RawPtr) -> Number {
-    let window: RawPtr = metalMsgSend(view, metalSel("window"))
-    if isNull(window) {
-        return 1
+    unsafe {
+        let window: RawPtr = metalMsgSend(view, metalSel("window"))
+        if isNull(window) {
+            return 1
+        }
+        let owner: RawPtr = metalUsesUIKit!() ? metalMsgSend(window, metalSel("screen")) : window
+        let name = metalUsesUIKit!() ? "scale" : "backingScaleFactor"
+        let key: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            name
+        )
+        let boxed: RawPtr = metalMsgSend(owner, metalSel("valueForKey:"), key)
+        if isNull(boxed) {
+            return 1
+        }
+        let scale = metalU64ToInt(metalMsgSendCount(boxed, metalSel("integerValue")))
+        return scale >= 1 && scale <= MetalViewportLimit.largestScale ? scale : 1
     }
-    let owner: RawPtr = metalUsesUIKit!() ? metalMsgSend(window, metalSel("screen")) : window
-    let name = metalUsesUIKit!() ? "scale" : "backingScaleFactor"
-    let key: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        name
-    )
-    let boxed: RawPtr = metalMsgSend(owner, metalSel("valueForKey:"), key)
-    if isNull(boxed) {
-        return 1
-    }
-    let scale = metalU64ToInt(metalMsgSendCount(boxed, metalSel("integerValue")))
-    return scale >= 1 && scale <= MetalViewportLimit.largestScale ? scale : 1
 }
 
 // `bounds` scaled to the drawable a frame renders into.
@@ -353,106 +397,120 @@ function metalScaledViewport(
     bounds: borrow MetalViewport,
     backing: Number
 ) -> MetalViewport {
-    let asked = metalEnvNumber("KIRA_METAL_RENDER_SCALE", 0)
-    let renderScale = asked > 1 && asked <= MetalViewportLimit.largestScale ? asked : 1
-    // Without highDpi the drawable stays at points; the layer's contentsScale
-    // is still the backing factor either way.
-    let highDpi = metalMemReadU64(ctx, MetalContext.offsetHighDpi) != 0
-    let pixelScale = (highDpi ? backing : 1) * renderScale
-    return MetalViewport {
-        width: bounds.width,
-        height: bounds.height,
-        pixelWidth: bounds.width * pixelScale,
-        pixelHeight: bounds.height * pixelScale,
-        scale: backing * renderScale
+    unsafe {
+        let asked = metalEnvNumber("KIRA_METAL_RENDER_SCALE", 0)
+        let renderScale = asked > 1 && asked <= MetalViewportLimit.largestScale ? asked : 1
+        // Without highDpi the drawable stays at points; the layer's contentsScale
+        // is still the backing factor either way.
+        let highDpi = metalMemReadU64(ctx, MetalContext.offsetHighDpi) != 0
+        let pixelScale = (highDpi ? backing : 1) * renderScale
+        return MetalViewport {
+            width: bounds.width,
+            height: bounds.height,
+            pixelWidth: bounds.width * pixelScale,
+            pixelHeight: bounds.height * pixelScale,
+            scale: backing * renderScale
+        }
     }
 }
 
 // Whether `viewport` is the size already recorded, pixels included.
 function metalViewportRecorded(ctx: RawPtr, viewport: borrow MetalViewport) -> Bool {
-    let recordedPixels = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
-    return viewport.width == Int(metalMemReadU64(ctx, MetalContext.offsetWidth))
-        && viewport.height == Int(metalMemReadU64(ctx, MetalContext.offsetHeight))
-        && viewport.pixelWidth == Int(recordedPixels)
-        && recordedPixels != U64(0)
+    unsafe {
+        let recordedPixels = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+        return viewport.width == Int(metalMemReadU64(ctx, MetalContext.offsetWidth))
+            && viewport.height == Int(metalMemReadU64(ctx, MetalContext.offsetHeight))
+            && viewport.pixelWidth == Int(recordedPixels)
+            && recordedPixels != U64(0)
+    }
 }
 
 function metalSizeLayer(layer: RawPtr, viewport: borrow MetalViewport) {
-    // Layer frame in points (so the content tracks the window), drawable in
-    // physical pixels and contentsScale the backing factor (so it is crisp
-    // at native res).
-    metalMsgSend(
-        layer,
-        metalSel("setFrame:"),
-        Float(0),
-        Float(0),
-        Float(viewport.width),
-        Float(viewport.height)
-    )
-    metalMsgSend(
-        layer,
-        metalSel("setDrawableSize:"),
-        Float(viewport.pixelWidth),
-        Float(viewport.pixelHeight)
-    )
-    metalMsgSend(layer, metalSel("setContentsScale:"), Float(viewport.scale))
+    unsafe {
+        // Layer frame in points (so the content tracks the window), drawable in
+        // physical pixels and contentsScale the backing factor (so it is crisp
+        // at native res).
+        metalMsgSend(
+            layer,
+            metalSel("setFrame:"),
+            Float(0),
+            Float(0),
+            Float(viewport.width),
+            Float(viewport.height)
+        )
+        metalMsgSend(
+            layer,
+            metalSel("setDrawableSize:"),
+            Float(viewport.pixelWidth),
+            Float(viewport.pixelHeight)
+        )
+        metalMsgSend(layer, metalSel("setContentsScale:"), Float(viewport.scale))
+    }
 }
 
 // Track the host view's current size and the display's backing scale so the
 // drawable is sized in physical pixels at the live window size and the UI
 // layout reflows on resize. Called once per frame by the on-screen run loop.
 public function metalContextSyncViewportFromView(ctx: RawPtr) {
-    let view = metalMemReadPtr(ctx, MetalContext.offsetHostView)
-    if isNull(view) {
-        return
+    unsafe {
+        let view = metalMemReadPtr(ctx, MetalContext.offsetHostView)
+        if isNull(view) {
+            return
+        }
+        let bounds = match metalViewBounds(view) {
+            Some(bounds) -> bounds
+            None -> return
+        }
+        let viewport = metalScaledViewport(ctx, bounds, metalBackingScale(view))
+        // The physical size has to be part of this, not just the point size.
+        //
+        // A view exists before it is in a window, and the backing scale lives on the
+        // WINDOW — so the first sync finds no window, falls back to 1, and records a
+        // drawable the same size as the bounds. Comparing points alone then makes
+        // every later sync a no-op: the window arrives, the scale becomes 2, and
+        // nothing ever asks again. The result is a 1x drawable on a 2x display,
+        // stretched by the compositor — everything soft, and text worst of all.
+        //
+        // Including the pixel width also covers a window moving between displays of
+        // different scale, which is the same event arriving later.
+        if metalViewportRecorded(ctx, viewport) {
+            return
+        }
+        let layer = metalMemReadPtr(ctx, MetalContext.offsetLayer)
+        if !isNull(layer) {
+            metalSizeLayer(layer, viewport)
+        }
+        metalMemWriteU64(ctx, MetalContext.offsetWidth, viewport.width)
+        metalMemWriteU64(ctx, MetalContext.offsetHeight, viewport.height)
+        metalMemWriteU64(ctx, MetalContext.offsetPhysicalWidth, viewport.pixelWidth)
     }
-    let bounds = match metalViewBounds(view) {
-        Some(bounds) -> bounds
-        None -> return
-    }
-    let viewport = metalScaledViewport(ctx, bounds, metalBackingScale(view))
-    // The physical size has to be part of this, not just the point size.
-    //
-    // A view exists before it is in a window, and the backing scale lives on the
-    // WINDOW — so the first sync finds no window, falls back to 1, and records a
-    // drawable the same size as the bounds. Comparing points alone then makes
-    // every later sync a no-op: the window arrives, the scale becomes 2, and
-    // nothing ever asks again. The result is a 1x drawable on a 2x display,
-    // stretched by the compositor — everything soft, and text worst of all.
-    //
-    // Including the pixel width also covers a window moving between displays of
-    // different scale, which is the same event arriving later.
-    if metalViewportRecorded(ctx, viewport) {
-        return
-    }
-    let layer = metalMemReadPtr(ctx, MetalContext.offsetLayer)
-    if !isNull(layer) {
-        metalSizeLayer(layer, viewport)
-    }
-    metalMemWriteU64(ctx, MetalContext.offsetWidth, viewport.width)
-    metalMemWriteU64(ctx, MetalContext.offsetHeight, viewport.height)
-    metalMemWriteU64(ctx, MetalContext.offsetPhysicalWidth, viewport.pixelWidth)
 }
 
 // Backing (Retina) scale = physical pixels / points. One until the first
 // viewport sync has recorded a size to divide.
 public function metalContextScale(ctx: RawPtr) -> Number {
-    let pw = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
-    let w = metalMemReadU64(ctx, MetalContext.offsetWidth)
-    if w <= 0 || pw <= 0 {
-        return 1
+    unsafe {
+        let pw = metalMemReadU64(ctx, MetalContext.offsetPhysicalWidth)
+        let w = metalMemReadU64(ctx, MetalContext.offsetWidth)
+        if w <= 0 || pw <= 0 {
+            return 1
+        }
+        return Number(pw) / Number(w)
     }
-    return Number(pw) / Number(w)
 }
 
 // Drawable dimensions recorded on the context (the UI layout/viewport source on the
 // Metal path, where Sokol's sapp_width/height are not valid).
 public function metalContextWidth(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetWidth)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetWidth)
+    }
 }
 
 public function metalContextHeight(ctx: RawPtr) -> Number {
-    return metalMemReadU64(ctx, MetalContext.offsetHeight)
+    unsafe {
+        return metalMemReadU64(ctx, MetalContext.offsetHeight)
+    }
 }
 
 // The Metal backend's answer to `RenderFrame.statistics()`: the same context

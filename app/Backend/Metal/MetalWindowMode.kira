@@ -28,27 +28,29 @@ import Heap
 // either: the application says where the band is bare, and the event pump
 // starts the window's drag there itself.
 public function metalWindowApplyTitlebar(window: RawPtr, titlebar: borrow WindowTitlebar): Void {
-    if titlebar == .Standard {
-        return
+    unsafe {
+        if titlebar == .Standard {
+            return
+        }
+        let mask: U64 = metalMsgSend(window, metalSel("styleMask"))
+        metalMsgSend(
+            window,
+            metalSel("setStyleMask:"),
+            mask + MetalWindowMode.windowStyleFullSizeContentBit
+        )
+        metalMsgSend(window, metalSel("setTitlebarAppearsTransparent:"), true)
+        metalMsgSend(window, metalSel("setTitleVisibility:"), MetalWindowMode.windowTitleHidden)
+        let identifier: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            "kira.window.unified"
+        )
+        let toolbarAlloc: RawPtr = metalMsgSend(metalObjcGetClass("NSToolbar"), metalSel("alloc"))
+        let toolbar: RawPtr = metalMsgSend(toolbarAlloc, metalSel("initWithIdentifier:"), identifier)
+        metalMsgSend(window, metalSel("setToolbar:"), toolbar)
+        metalMsgSend(window, metalSel("setToolbarStyle:"), MetalWindowMode.windowToolbarStyleUnified)
+        metalMsgSend(window, metalSel("setMovable:"), false)
     }
-    let mask: U64 = metalMsgSend(window, metalSel("styleMask"))
-    metalMsgSend(
-        window,
-        metalSel("setStyleMask:"),
-        mask + MetalWindowMode.windowStyleFullSizeContentBit
-    )
-    metalMsgSend(window, metalSel("setTitlebarAppearsTransparent:"), true)
-    metalMsgSend(window, metalSel("setTitleVisibility:"), MetalWindowMode.windowTitleHidden)
-    let identifier: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        "kira.window.unified"
-    )
-    let toolbarAlloc: RawPtr = metalMsgSend(metalObjcGetClass("NSToolbar"), metalSel("alloc"))
-    let toolbar: RawPtr = metalMsgSend(toolbarAlloc, metalSel("initWithIdentifier:"), identifier)
-    metalMsgSend(window, metalSel("setToolbar:"), toolbar)
-    metalMsgSend(window, metalSel("setToolbarStyle:"), MetalWindowMode.windowToolbarStyleUnified)
-    metalMsgSend(window, metalSel("setMovable:"), false)
 }
 
 // Corners rounded past the window's own: the window turned see-through and
@@ -57,24 +59,26 @@ public function metalWindowApplyTitlebar(window: RawPtr, titlebar: borrow Window
 // the shadow rounds with it. The window's own corner is smaller than any
 // radius worth asking for, so the curve drawn here is the one that shows.
 public function metalWindowApplyCornerRadius(view: RawPtr, radius: Number): Void {
-    if metalUsesUIKit!() { return }
-    if radius <= 0 {
-        return
+    unsafe {
+        if metalUsesUIKit!() { return }
+        if radius <= 0 {
+            return
+        }
+        let window: RawPtr = metalMsgSend(view, metalSel("window"))
+        let clear: RawPtr = metalMsgSend(metalObjcGetClass("NSColor"), metalSel("clearColor"))
+        metalMsgSend(window, metalSel("setOpaque:"), false)
+        metalMsgSend(window, metalSel("setBackgroundColor:"), clear)
+        let layer: RawPtr = metalMsgSend(view, metalSel("layer"))
+        metalMsgSend(layer, metalSel("setOpaque:"), false)
+        metalMsgSend(layer, metalSel("setCornerRadius:"), Float(radius))
+        metalMsgSend(
+            layer,
+            metalSel("setCornerCurve:"),
+            metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), "continuous")
+        )
+        metalMsgSend(layer, metalSel("setMasksToBounds:"), true)
+        metalMsgSend(window, metalSel("invalidateShadow"))
     }
-    let window: RawPtr = metalMsgSend(view, metalSel("window"))
-    let clear: RawPtr = metalMsgSend(metalObjcGetClass("NSColor"), metalSel("clearColor"))
-    metalMsgSend(window, metalSel("setOpaque:"), false)
-    metalMsgSend(window, metalSel("setBackgroundColor:"), clear)
-    let layer: RawPtr = metalMsgSend(view, metalSel("layer"))
-    metalMsgSend(layer, metalSel("setOpaque:"), false)
-    metalMsgSend(layer, metalSel("setCornerRadius:"), Float(radius))
-    metalMsgSend(
-        layer,
-        metalSel("setCornerCurve:"),
-        metalMsgSend(metalObjcGetClass("NSString"), metalSel("stringWithUTF8String:"), "continuous")
-    )
-    metalMsgSend(layer, metalSel("setMasksToBounds:"), true)
-    metalMsgSend(window, metalSel("invalidateShadow"))
 }
 
 // The mask a mode switch writes, keeping the content layout the window was
@@ -82,11 +86,13 @@ public function metalWindowApplyCornerRadius(view: RawPtr, radius: Number): Void
 // nothing on an untitled window — so a unified title bar's content still runs
 // under the bar once the window is decorated again.
 public function metalWindowDecoratedMask(window: RawPtr, mask: U64) -> U64 {
-    let current: U64 = metalMsgSend(window, metalSel("styleMask"))
-    if metalWindowStyleBitSet(current, MetalWindowMode.windowStyleFullSizeContentBit) {
-        return mask + MetalWindowMode.windowStyleFullSizeContentBit
+    unsafe {
+        let current: U64 = metalMsgSend(window, metalSel("styleMask"))
+        if metalWindowStyleBitSet(current, MetalWindowMode.windowStyleFullSizeContentBit) {
+            return mask + MetalWindowMode.windowStyleFullSizeContentBit
+        }
+        return mask
     }
-    return mask
 }
 
 public function metalWindowStyleMaskFor(mode: borrow WindowMode) -> U64 {
@@ -115,70 +121,78 @@ public function metalWindowStyleBitSet(mask: U64, bit: U64) -> Bool {
 }
 
 public function metalWindowIsFullScreen(window: RawPtr) -> Bool {
-    return metalWindowStyleBitSet(
-        metalMsgSend(window, metalSel("styleMask")),
-        MetalWindowMode.windowStyleFullScreenBit
-    )
+    unsafe {
+        return metalWindowStyleBitSet(
+            metalMsgSend(window, metalSel("styleMask")),
+            MetalWindowMode.windowStyleFullScreenBit
+        )
+    }
 }
 
 // Put a freshly created window into the mode the application asked for. The
 // window is already decorated and on screen; only a fullscreen request has
 // anything left to do.
 public function metalWindowApplyStartMode(window: RawPtr, mode: borrow WindowMode): Void {
-    if metalWindowWantsFullScreen(mode) {
-        metalMsgSend(window, metalSel("toggleFullScreen:"), nullPointer())
-        return
-    }
-    metalMsgSend(
-        window,
-        metalSel("setStyleMask:"),
-        metalWindowDecoratedMask(window, metalWindowStyleMaskFor(mode))
-    )
-}
-
-public function metalViewWindowMode(view: RawPtr) -> WindowMode {
-    if metalUsesUIKit!() { return .Fullscreen }
-    let window: RawPtr = metalMsgSend(view, metalSel("window"))
-    if isNull(window) {
-        return .Windowed
-    }
-    let mask: U64 = metalMsgSend(window, metalSel("styleMask"))
-    if metalWindowStyleBitSet(mask, MetalWindowMode.windowStyleFullScreenBit) {
-        return .Fullscreen
-    }
-    if metalWindowStyleBitSet(mask, MetalWindowMode.windowStyleTitledBit) {
-        return .Windowed
-    }
-    return .WindowedBorderless
-}
-
-public function metalViewSetWindowMode(view: RawPtr, mode: borrow WindowMode): Void {
-    if metalUsesUIKit!() { return }
-    let window: RawPtr = metalMsgSend(view, metalSel("window"))
-    if isNull(window) {
-        return
-    }
-    let wantsFullScreen = metalWindowWantsFullScreen(mode)
-    if metalWindowIsFullScreen(window) != wantsFullScreen {
-        // Restore the decoration before the toggle in either direction: AppKit
-        // refuses to enter a fullscreen space from an untitled window, and a
-        // window that left one untitled has no titlebar to come back to.
+    unsafe {
+        if metalWindowWantsFullScreen(mode) {
+            metalMsgSend(window, metalSel("toggleFullScreen:"), nullPointer())
+            return
+        }
         metalMsgSend(
             window,
             metalSel("setStyleMask:"),
-            metalWindowDecoratedMask(window, MetalWindow.windowStyleMask)
+            metalWindowDecoratedMask(window, metalWindowStyleMaskFor(mode))
         )
-        metalMsgSend(window, metalSel("toggleFullScreen:"), nullPointer())
     }
-    if wantsFullScreen {
-        return
+}
+
+public function metalViewWindowMode(view: RawPtr) -> WindowMode {
+    unsafe {
+        if metalUsesUIKit!() { return .Fullscreen }
+        let window: RawPtr = metalMsgSend(view, metalSel("window"))
+        if isNull(window) {
+            return .Windowed
+        }
+        let mask: U64 = metalMsgSend(window, metalSel("styleMask"))
+        if metalWindowStyleBitSet(mask, MetalWindowMode.windowStyleFullScreenBit) {
+            return .Fullscreen
+        }
+        if metalWindowStyleBitSet(mask, MetalWindowMode.windowStyleTitledBit) {
+            return .Windowed
+        }
+        return .WindowedBorderless
     }
-    metalMsgSend(
-        window,
-        metalSel("setStyleMask:"),
-        metalWindowDecoratedMask(window, metalWindowStyleMaskFor(mode))
-    )
-    metalMsgSend(window, metalSel("makeKeyAndOrderFront:"), nullPointer())
+}
+
+public function metalViewSetWindowMode(view: RawPtr, mode: borrow WindowMode): Void {
+    unsafe {
+        if metalUsesUIKit!() { return }
+        let window: RawPtr = metalMsgSend(view, metalSel("window"))
+        if isNull(window) {
+            return
+        }
+        let wantsFullScreen = metalWindowWantsFullScreen(mode)
+        if metalWindowIsFullScreen(window) != wantsFullScreen {
+            // Restore the decoration before the toggle in either direction: AppKit
+            // refuses to enter a fullscreen space from an untitled window, and a
+            // window that left one untitled has no titlebar to come back to.
+            metalMsgSend(
+                window,
+                metalSel("setStyleMask:"),
+                metalWindowDecoratedMask(window, MetalWindow.windowStyleMask)
+            )
+            metalMsgSend(window, metalSel("toggleFullScreen:"), nullPointer())
+        }
+        if wantsFullScreen {
+            return
+        }
+        metalMsgSend(
+            window,
+            metalSel("setStyleMask:"),
+            metalWindowDecoratedMask(window, metalWindowStyleMaskFor(mode))
+        )
+        metalMsgSend(window, metalSel("makeKeyAndOrderFront:"), nullPointer())
+    }
 }
 
 public namespace MetalWindowMode {

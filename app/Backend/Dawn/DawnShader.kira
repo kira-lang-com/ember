@@ -48,36 +48,38 @@ public function dawnCompileWgsl(
     label: borrow String,
     source: borrow String
 ) -> RawPtr {
-    if source.count == 0 {
-        log fault("a shader has no WGSL for this stage", label: label)
-        return nullPointer()
-    }
-    if !state.dawn.strictMath {
+    unsafe {
+        if source.count == 0 {
+            log fault("a shader has no WGSL for this stage", label: label)
+            return nullPointer()
+        }
+        if !state.dawn.strictMath {
+            return wgpuDeviceCreateShaderModule(
+                state.dawn.device,
+                WGPUShaderModuleDescriptor {
+                    nextInChain: WGPUShaderSourceWGSL {
+                        chain: WGPUChainedStruct { sType: DawnVocabulary.structureWgsl },
+                        code: dawnText(source)
+                    },
+                    label: dawnText(label)
+                }
+            )
+        }
+        let options = WGPUShaderModuleCompilationOptions {
+            chain: WGPUChainedStruct { sType: DawnVocabulary.structureCompilationOptions },
+            strictMath: U32(1)
+        }
         return wgpuDeviceCreateShaderModule(
             state.dawn.device,
             WGPUShaderModuleDescriptor {
                 nextInChain: WGPUShaderSourceWGSL {
-                    chain: WGPUChainedStruct { sType: DawnVocabulary.structureWgsl },
+                    chain: WGPUChainedStruct { next: options, sType: DawnVocabulary.structureWgsl },
                     code: dawnText(source)
                 },
                 label: dawnText(label)
             }
         )
     }
-    let options = WGPUShaderModuleCompilationOptions {
-        chain: WGPUChainedStruct { sType: DawnVocabulary.structureCompilationOptions },
-        strictMath: U32(1)
-    }
-    return wgpuDeviceCreateShaderModule(
-        state.dawn.device,
-        WGPUShaderModuleDescriptor {
-            nextInChain: WGPUShaderSourceWGSL {
-                chain: WGPUChainedStruct { next: options, sType: DawnVocabulary.structureWgsl },
-                code: dawnText(source)
-            },
-            label: dawnText(label)
-        }
-    )
 }
 
 // Records a compiled shader and answers the `GraphicsShader` that names it.

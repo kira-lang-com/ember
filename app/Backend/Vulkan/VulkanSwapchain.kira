@@ -84,56 +84,60 @@ function vulkanFormatIsEightBit(format: I32) -> Bool {
 function vulkanSurfaceCapabilities(
     state: borrow VulkanState
 ) -> Result<VkSurfaceCapabilitiesKHR, VulkanSwapchainFailure> {
-    let capabilities = boxed<VkSurfaceCapabilitiesKHR>(VkSurfaceCapabilitiesKHR())
-    let result = vulkanResultOf(
-        vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
-            state.physicalDevice,
-            state.surface,
-            capabilities.pointer()
+    unsafe {
+        let capabilities = boxed<VkSurfaceCapabilitiesKHR>(VkSurfaceCapabilitiesKHR())
+        let result = vulkanResultOf(
+            vkGetPhysicalDeviceSurfaceCapabilitiesKHR(
+                state.physicalDevice,
+                state.surface,
+                capabilities.pointer()
+            )
         )
-    )
-    if result != .Success {
-        return .Error(.CapabilitiesUnreadable(result))
+        if result != .Success {
+            return .Error(.CapabilitiesUnreadable(result))
+        }
+        return .Ok(boxedValue<VkSurfaceCapabilitiesKHR>(capabilities))
     }
-    return .Ok(boxedValue<VkSurfaceCapabilitiesKHR>(capabilities))
 }
 
 function vulkanSurfaceFormats(
     state: borrow VulkanState
 ) -> Result<[VkSurfaceFormatKHR], VulkanSwapchainFailure> {
-    let count = boxed<U32>(U32(0))
-    let countResult = vulkanResultOf(
-        vkGetPhysicalDeviceSurfaceFormatsKHR(
-            state.physicalDevice,
-            state.surface,
-            count.pointer(),
-            nullPointer()
+    unsafe {
+        let count = boxed<U32>(U32(0))
+        let countResult = vulkanResultOf(
+            vkGetPhysicalDeviceSurfaceFormatsKHR(
+                state.physicalDevice,
+                state.surface,
+                count.pointer(),
+                nullPointer()
+            )
         )
-    )
-    if countResult != .Success {
-        return .Error(.FormatsUnreadable(countResult))
-    }
-    let listed = Number(boxedValue<U32>(count))
-    if listed == 0 {
-        return .Error(.NoFormats)
-    }
-    let block = zeroedBlock(listed * sizeOf<VkSurfaceFormatKHR>(), alignOf<VkSurfaceFormatKHR>())
-    let result = vulkanResultOf(
-        vkGetPhysicalDeviceSurfaceFormatsKHR(
-            state.physicalDevice,
-            state.surface,
-            count.pointer(),
-            block.pointer()
+        if countResult != .Success {
+            return .Error(.FormatsUnreadable(countResult))
+        }
+        let listed = Number(boxedValue<U32>(count))
+        if listed == 0 {
+            return .Error(.NoFormats)
+        }
+        let block = zeroedBlock(listed * sizeOf<VkSurfaceFormatKHR>(), alignOf<VkSurfaceFormatKHR>())
+        let result = vulkanResultOf(
+            vkGetPhysicalDeviceSurfaceFormatsKHR(
+                state.physicalDevice,
+                state.surface,
+                count.pointer(),
+                block.pointer()
+            )
         )
-    )
-    if result != .Success {
-        return .Error(.FormatsUnreadable(result))
+        if result != .Success {
+            return .Error(.FormatsUnreadable(result))
+        }
+        var formats: [VkSurfaceFormatKHR] = []
+        for index in 0..Number(boxedValue<U32>(count)) {
+            formats.append(viewElement<VkSurfaceFormatKHR>(block.view(), index))
+        }
+        return .Ok(formats)
     }
-    var formats: [VkSurfaceFormatKHR] = []
-    for index in 0..Number(boxedValue<U32>(count)) {
-        formats.append(viewElement<VkSurfaceFormatKHR>(block.view(), index))
-    }
-    return .Ok(formats)
 }
 
 function vulkanSwapchainImageCount(capabilities: borrow VkSurfaceCapabilitiesKHR) -> U32 {
@@ -187,55 +191,59 @@ function vulkanSwapchainInfo(
 public function vulkanCreateSwapchain(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanSwapchainFailure> {
-    let capabilities = match vulkanSurfaceCapabilities(state) {
-        Ok(capabilities) -> capabilities
-        Error(failure) -> return .Error(failure)
+    unsafe {
+        let capabilities = match vulkanSurfaceCapabilities(state) {
+            Ok(capabilities) -> capabilities
+            Error(failure) -> return .Error(failure)
+        }
+        let formats = match vulkanSurfaceFormats(state) {
+            Ok(formats) -> formats
+            Error(failure) -> return .Error(failure)
+        }
+        let chosen = vulkanChooseSurfaceFormat(formats)
+        let extent = vulkanSurfaceExtent(state, capabilities)
+        state.captureSupported = vulkanSurfaceCapturable(capabilities, chosen.format)
+        let info = vulkanSwapchainInfo(state, capabilities, chosen, extent)
+        let swapchain = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateSwapchainKHR(state.device, info, nullPointer(), swapchain.pointer())
+        )
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        state.swapchain = boxedValue<RawPtr>(swapchain)
+        state.swapchainWidth = Number(extent.width)
+        state.swapchainHeight = Number(extent.height)
+        state.swapchainFormat = chosen.format
+        return vulkanAdoptSwapchainImages(state)
     }
-    let formats = match vulkanSurfaceFormats(state) {
-        Ok(formats) -> formats
-        Error(failure) -> return .Error(failure)
-    }
-    let chosen = vulkanChooseSurfaceFormat(formats)
-    let extent = vulkanSurfaceExtent(state, capabilities)
-    state.captureSupported = vulkanSurfaceCapturable(capabilities, chosen.format)
-    let info = vulkanSwapchainInfo(state, capabilities, chosen, extent)
-    let swapchain = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateSwapchainKHR(state.device, info, nullPointer(), swapchain.pointer())
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
-    }
-    state.swapchain = boxedValue<RawPtr>(swapchain)
-    state.swapchainWidth = Number(extent.width)
-    state.swapchainHeight = Number(extent.height)
-    state.swapchainFormat = chosen.format
-    return vulkanAdoptSwapchainImages(state)
 }
 
 function vulkanSwapchainImages(
     state: borrow VulkanState
 ) -> Result<[RawPtr], VulkanSwapchainFailure> {
-    let count = boxed<U32>(U32(0))
-    let countResult = vulkanResultOf(
-        vkGetSwapchainImagesKHR(state.device, state.swapchain, count.pointer(), nullPointer())
-    )
-    if countResult != .Success {
-        return .Error(.ImagesUnreadable(countResult))
+    unsafe {
+        let count = boxed<U32>(U32(0))
+        let countResult = vulkanResultOf(
+            vkGetSwapchainImagesKHR(state.device, state.swapchain, count.pointer(), nullPointer())
+        )
+        if countResult != .Success {
+            return .Error(.ImagesUnreadable(countResult))
+        }
+        let listed = Number(boxedValue<U32>(count))
+        let block = zeroedBlock(max(listed, 1) * sizeOf<RawPtr>(), alignOf<RawPtr>())
+        let result = vulkanResultOf(
+            vkGetSwapchainImagesKHR(state.device, state.swapchain, count.pointer(), block.pointer())
+        )
+        if result != .Success {
+            return .Error(.ImagesUnreadable(result))
+        }
+        var images: [RawPtr] = []
+        for index in 0..Number(boxedValue<U32>(count)) {
+            images.append(viewElement<RawPtr>(block.view(), index))
+        }
+        return .Ok(images)
     }
-    let listed = Number(boxedValue<U32>(count))
-    let block = zeroedBlock(max(listed, 1) * sizeOf<RawPtr>(), alignOf<RawPtr>())
-    let result = vulkanResultOf(
-        vkGetSwapchainImagesKHR(state.device, state.swapchain, count.pointer(), block.pointer())
-    )
-    if result != .Success {
-        return .Error(.ImagesUnreadable(result))
-    }
-    var images: [RawPtr] = []
-    for index in 0..Number(boxedValue<U32>(count)) {
-        images.append(viewElement<RawPtr>(block.view(), index))
-    }
-    return .Ok(images)
 }
 
 // The swapchain's images, a view of each to render into, and a semaphore
@@ -243,79 +251,85 @@ function vulkanSwapchainImages(
 function vulkanAdoptSwapchainImages(
     state: borrow mut VulkanState
 ) -> Result<Void, VulkanSwapchainFailure> {
-    let images = match vulkanSwapchainImages(state) {
-        Ok(images) -> images
-        Error(failure) -> return .Error(failure)
-    }
-    state.swapchainImages = []
-    state.swapchainViews = []
-    state.swapchainPresentSemaphores = []
-    state.swapchainLayouts = []
-    for image in images {
-        let view = match vulkanSwapchainView(state, image) {
-            Ok(view) -> view
+    unsafe {
+        let images = match vulkanSwapchainImages(state) {
+            Ok(images) -> images
             Error(failure) -> return .Error(failure)
         }
-        let semaphore = boxed<RawPtr>(nullPointer())
-        let semaphoreResult = vulkanResultOf(
-            vkCreateSemaphore(
-                state.device,
-                VkSemaphoreCreateInfo { sType: VulkanVocabulary.structureSemaphoreCreateInfo },
-                nullPointer(),
-                semaphore.pointer()
+        state.swapchainImages = []
+        state.swapchainViews = []
+        state.swapchainPresentSemaphores = []
+        state.swapchainLayouts = []
+        for image in images {
+            let view = match vulkanSwapchainView(state, image) {
+                Ok(view) -> view
+                Error(failure) -> return .Error(failure)
+            }
+            let semaphore = boxed<RawPtr>(nullPointer())
+            let semaphoreResult = vulkanResultOf(
+                vkCreateSemaphore(
+                    state.device,
+                    VkSemaphoreCreateInfo { sType: VulkanVocabulary.structureSemaphoreCreateInfo },
+                    nullPointer(),
+                    semaphore.pointer()
+                )
             )
-        )
-        if semaphoreResult != .Success {
-            return .Error(.SemaphoreRefused(semaphoreResult))
+            if semaphoreResult != .Success {
+                return .Error(.SemaphoreRefused(semaphoreResult))
+            }
+            state.swapchainImages.append(image)
+            state.swapchainViews.append(view)
+            state.swapchainPresentSemaphores.append(boxedValue<RawPtr>(semaphore))
+            state.swapchainLayouts.append(.Undefined)
         }
-        state.swapchainImages.append(image)
-        state.swapchainViews.append(view)
-        state.swapchainPresentSemaphores.append(boxedValue<RawPtr>(semaphore))
-        state.swapchainLayouts.append(.Undefined)
+        return .Ok
     }
-    return .Ok
 }
 
 function vulkanSwapchainView(
     state: borrow VulkanState,
     image: RawPtr
 ) -> Result<RawPtr, VulkanSwapchainFailure> {
-    let viewInfo = VkImageViewCreateInfo {
-        sType: VulkanVocabulary.structureImageViewCreateInfo,
-        image: image,
-        viewType: VulkanVocabulary.imageViewType2d,
-        format: state.swapchainFormat,
-        components: VkComponentMapping {},
-        subresourceRange: VkImageSubresourceRange {
-            aspectMask: VulkanVocabulary.aspectColor,
-            levelCount: U32(1),
-            layerCount: U32(1)
+    unsafe {
+        let viewInfo = VkImageViewCreateInfo {
+            sType: VulkanVocabulary.structureImageViewCreateInfo,
+            image: image,
+            viewType: VulkanVocabulary.imageViewType2d,
+            format: state.swapchainFormat,
+            components: VkComponentMapping {},
+            subresourceRange: VkImageSubresourceRange {
+                aspectMask: VulkanVocabulary.aspectColor,
+                levelCount: U32(1),
+                layerCount: U32(1)
+            }
         }
+        let view = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateImageView(state.device, viewInfo, nullPointer(), view.pointer())
+        )
+        if result != .Success {
+            return .Error(.ViewRefused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(view))
     }
-    let view = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateImageView(state.device, viewInfo, nullPointer(), view.pointer())
-    )
-    if result != .Success {
-        return .Error(.ViewRefused(result))
-    }
-    return .Ok(boxedValue<RawPtr>(view))
 }
 
 public function vulkanDestroySwapchain(state: borrow mut VulkanState) {
-    for semaphore in state.swapchainPresentSemaphores {
-        vkDestroySemaphore(state.device, semaphore, nullPointer())
-    }
-    state.swapchainPresentSemaphores = []
-    for view in state.swapchainViews {
-        vkDestroyImageView(state.device, view, nullPointer())
-    }
-    state.swapchainViews = []
-    state.swapchainImages = []
-    state.swapchainLayouts = []
-    if !isNull(state.swapchain) {
-        vkDestroySwapchainKHR(state.device, state.swapchain, nullPointer())
-        state.swapchain = nullPointer()
+    unsafe {
+        for semaphore in state.swapchainPresentSemaphores {
+            vkDestroySemaphore(state.device, semaphore, nullPointer())
+        }
+        state.swapchainPresentSemaphores = []
+        for view in state.swapchainViews {
+            vkDestroyImageView(state.device, view, nullPointer())
+        }
+        state.swapchainViews = []
+        state.swapchainImages = []
+        state.swapchainLayouts = []
+        if !isNull(state.swapchain) {
+            vkDestroySwapchainKHR(state.device, state.swapchain, nullPointer())
+            state.swapchain = nullPointer()
+        }
     }
 }
 

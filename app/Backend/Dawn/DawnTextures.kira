@@ -74,22 +74,24 @@ function dawnNewTexture(
     format: I32,
     samples: UN8
 ) -> RawPtr {
-    return wgpuDeviceCreateTexture(
-        state.dawn.device,
-        WGPUTextureDescriptor {
-            label: dawnText(descriptor.label),
-            usage: dawnTextureUsage(descriptor.usage),
-            dimension: DawnVocabulary.textureDimension2d,
-            size: WGPUExtent3D {
-                width: U32(descriptor.width),
-                height: U32(descriptor.height),
-                depthOrArrayLayers: U32(1)
-            },
-            format: format,
-            mipLevelCount: U32(1),
-            sampleCount: U32(samples)
-        }
-    )
+    unsafe {
+        return wgpuDeviceCreateTexture(
+            state.dawn.device,
+            WGPUTextureDescriptor {
+                label: dawnText(descriptor.label),
+                usage: dawnTextureUsage(descriptor.usage),
+                dimension: DawnVocabulary.textureDimension2d,
+                size: WGPUExtent3D {
+                    width: U32(descriptor.width),
+                    height: U32(descriptor.height),
+                    depthOrArrayLayers: U32(1)
+                },
+                format: format,
+                mipLevelCount: U32(1),
+                sampleCount: U32(samples)
+            }
+        )
+    }
 }
 
 // A texture the device has made and the run has registered, before its views.
@@ -167,19 +169,21 @@ public function dawnUsageIsColorTarget(usage: borrow TextureUsage) -> Bool {
 }
 
 public function dawnMakeView(texture: RawPtr, format: I32, role: borrow String) -> RawPtr {
-    return wgpuTextureCreateView(
-        texture,
-        WGPUTextureViewDescriptor {
-            label: dawnText("kira-texture-view-" + role),
-            format: format,
-            dimension: DawnVocabulary.textureViewDimension2d,
-            baseMipLevel: U32(0),
-            mipLevelCount: U32(1),
-            baseArrayLayer: U32(0),
-            arrayLayerCount: U32(1),
-            aspect: DawnVocabulary.textureAspectAll
-        }
-    )
+    unsafe {
+        return wgpuTextureCreateView(
+            texture,
+            WGPUTextureViewDescriptor {
+                label: dawnText("kira-texture-view-" + role),
+                format: format,
+                dimension: DawnVocabulary.textureViewDimension2d,
+                baseMipLevel: U32(0),
+                mipLevelCount: U32(1),
+                baseArrayLayer: U32(0),
+                arrayLayerCount: U32(1),
+                aspect: DawnVocabulary.textureAspectAll
+            }
+        )
+    }
 }
 
 public function dawnCreateTextureFromPixels(
@@ -305,12 +309,14 @@ public function dawnDestroyTexture(context: RawPtr, texture: borrow GraphicsText
 }
 
 public function dawnReleaseView(state: borrow mut GraphicsRuntimeState, id: U32) {
-    let view = dawnObject(state, id)
-    if isNull(view) {
-        return
+    unsafe {
+        let view = dawnObject(state, id)
+        if isNull(view) {
+            return
+        }
+        wgpuTextureViewRelease(view)
+        dawnForgetObject(state, id)
     }
-    wgpuTextureViewRelease(view)
-    dawnForgetObject(state, id)
 }
 
 // --- samplers ------------------------------------------------------------

@@ -19,13 +19,15 @@ namespace DawnWait {
 
 // The instance, able to wait on a future with a timeout.
 function dawnWaitingInstance() -> RawPtr {
-    let features: [I32] = [DawnVocabulary.instanceFeatureTimedWaitAny]
-    return wgpuCreateInstance(
-        WGPUInstanceDescriptor {
-            requiredFeatureCount: U64(features.count),
-            requiredFeatures: features
-        }
-    )
+    unsafe {
+        let features: [I32] = [DawnVocabulary.instanceFeatureTimedWaitAny]
+        return wgpuCreateInstance(
+            WGPUInstanceDescriptor {
+                requiredFeatureCount: U64(features.count),
+                requiredFeatures: features
+            }
+        )
+    }
 }
 
 // Waits for `future` to complete, at most `nanoseconds`; whether it did. Its
@@ -35,17 +37,19 @@ function dawnWaitFor(
     future: borrow WGPUFuture,
     nanoseconds: UNumber
 ) -> Bool {
-    // One `WGPUFutureWaitInfo`: the future's id, then whether it completed.
-    let block = allocateZeroed(
-        memoryLayout(sizeOf<WGPUFutureWaitInfo>(), alignOf<WGPUFutureWaitInfo>())
-    )
-    writeDoubleWord(block, U64(0), future.id)
-    let waits: WGPUFutureWaitInfo_ptr = block
-    let status = wgpuInstanceWaitAny(state.dawn.instance, U64(1), waits, U64(nanoseconds))
-    deallocate(block)
-    if status != DawnVocabulary.waitSucceeded {
-        log warn("Dawn did not answer a wait", status: Number(status))
-        return false
+    unsafe {
+        // One `WGPUFutureWaitInfo`: the future's id, then whether it completed.
+        let block = allocateZeroed(
+            memoryLayout(sizeOf<WGPUFutureWaitInfo>(), alignOf<WGPUFutureWaitInfo>())
+        )
+        writeDoubleWord(block, U64(0), future.id)
+        let waits: WGPUFutureWaitInfo_ptr = block
+        let status = wgpuInstanceWaitAny(state.dawn.instance, U64(1), waits, U64(nanoseconds))
+        deallocate(block)
+        if status != DawnVocabulary.waitSucceeded {
+            log warn("Dawn did not answer a wait", status: Number(status))
+            return false
+        }
+        return true
     }
-    return true
 }

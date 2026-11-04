@@ -222,29 +222,31 @@ public function dawnBuildPipeline(
     descriptor: borrow RenderPipelineDescriptor,
     stages: borrow DawnPipelineStages
 ) -> RawPtr {
-    if !dawnUsesDepth(descriptor.depthStencil) {
+    unsafe {
+        if !dawnUsesDepth(descriptor.depthStencil) {
+            return wgpuDeviceCreateRenderPipeline(
+                state.dawn.device,
+                WGPURenderPipelineDescriptor {
+                    label: dawnText(descriptor.label),
+                    vertex: stages.vertex,
+                    primitive: dawnPrimitiveState(descriptor),
+                    multisample: dawnMultisampleState(descriptor),
+                    fragment: stages.fragment
+                }
+            )
+        }
         return wgpuDeviceCreateRenderPipeline(
             state.dawn.device,
             WGPURenderPipelineDescriptor {
                 label: dawnText(descriptor.label),
                 vertex: stages.vertex,
                 primitive: dawnPrimitiveState(descriptor),
+                depthStencil: dawnDepthState(state, descriptor.depthStencil),
                 multisample: dawnMultisampleState(descriptor),
                 fragment: stages.fragment
             }
         )
     }
-    return wgpuDeviceCreateRenderPipeline(
-        state.dawn.device,
-        WGPURenderPipelineDescriptor {
-            label: dawnText(descriptor.label),
-            vertex: stages.vertex,
-            primitive: dawnPrimitiveState(descriptor),
-            depthStencil: dawnDepthState(state, descriptor.depthStencil),
-            multisample: dawnMultisampleState(descriptor),
-            fragment: stages.fragment
-        }
-    )
 }
 
 // The depth state a pipeline bakes in.

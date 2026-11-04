@@ -40,6 +40,26 @@ public struct RenderPassDescriptor {
     var hasDepthAttachment: Bool = false
     var stencilAttachment: StencilAttachment = StencilAttachment()
     var hasStencilAttachment: Bool = false
+    // The part of the color attachment the pass draws into, in pixels from
+    // its top-left corner; the whole attachment when none. The viewport and
+    // every scissor are taken inside it, so a pass drawn for a smaller output
+    // lands at the area's corner. A clear still covers the whole attachment:
+    // what lies outside the area is the clear color.
+    var drawArea: ScissorRect? = .None
+}
+
+// The part of a `width` by `height` attachment a pass draws into: `area`
+// clipped to the attachment, the whole attachment where none is set, and an
+// empty area at the corner where `area` misses it.
+public function drawAreaWithinAttachment(
+    area: borrow ScissorRect?,
+    width: UN32,
+    height: UN32
+) -> ScissorRect {
+    return match scissorWithinPass(area, width, height) {
+        Some(within) -> within
+        None -> ScissorRect()
+    }
 }
 
 public function emptyRenderTarget() -> RenderTarget {

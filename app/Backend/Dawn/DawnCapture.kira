@@ -108,37 +108,39 @@ function dawnCopyTextureToReadback(
     readback: RawPtr,
     bytesPerRow: UNumber
 ) {
-    let encoder = wgpuDeviceCreateCommandEncoder(
-        state.dawn.device,
-        WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-capture-encoder") }
-    )
-    wgpuCommandEncoderCopyTextureToBuffer(
-        encoder,
-        WGPUTexelCopyTextureInfo {
-            texture: source.texture,
-            mipLevel: U32(0),
-            origin: WGPUOrigin3D { x: U32(0), y: U32(source.top), z: U32(0) },
-            aspect: DawnVocabulary.textureAspectAll
-        },
-        WGPUTexelCopyBufferInfo {
-            layout: WGPUTexelCopyBufferLayout {
-                offset: U64(0),
-                bytesPerRow: U32(bytesPerRow),
-                rowsPerImage: U32(source.rows)
+    unsafe {
+        let encoder = wgpuDeviceCreateCommandEncoder(
+            state.dawn.device,
+            WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-capture-encoder") }
+        )
+        wgpuCommandEncoderCopyTextureToBuffer(
+            encoder,
+            WGPUTexelCopyTextureInfo {
+                texture: source.texture,
+                mipLevel: U32(0),
+                origin: WGPUOrigin3D { x: U32(0), y: U32(source.top), z: U32(0) },
+                aspect: DawnVocabulary.textureAspectAll
             },
-            buffer: readback
-        },
-        WGPUExtent3D {
-            width: U32(source.width),
-            height: U32(source.rows),
-            depthOrArrayLayers: U32(1)
-        },
-    )
-    let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
-    let submission: [RawPtr] = [commands]
-    wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
-    wgpuCommandBufferRelease(commands)
-    wgpuCommandEncoderRelease(encoder)
+            WGPUTexelCopyBufferInfo {
+                layout: WGPUTexelCopyBufferLayout {
+                    offset: U64(0),
+                    bytesPerRow: U32(bytesPerRow),
+                    rowsPerImage: U32(source.rows)
+                },
+                buffer: readback
+            },
+            WGPUExtent3D {
+                width: U32(source.width),
+                height: U32(source.rows),
+                depthOrArrayLayers: U32(1)
+            },
+        )
+        let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
+        let submission: [RawPtr] = [commands]
+        wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
+        wgpuCommandBufferRelease(commands)
+        wgpuCommandEncoderRelease(encoder)
+    }
 }
 
 // The readback mapped for reading, waiting for the map to answer. The wait
@@ -149,29 +151,33 @@ function dawnMapReadback(
     readback: RawPtr,
     byteCount: UNumber
 ) -> Result<Void, CaptureFailure> {
-    state.dawn.mapResolved = false
-    state.dawn.mapSucceeded = false
-    let map = wgpuBufferMapAsync(
-        readback,
-        DawnVocabulary.mapModeRead,
-        U64(0),
-        U64(byteCount),
-        WGPUBufferMapCallbackInfo {
-            mode: DawnVocabulary.callbackWaitAnyOnly,
-            callback: dawnBufferMapped,
-            userdata1: context
+    unsafe {
+        state.dawn.mapResolved = false
+        state.dawn.mapSucceeded = false
+        let map = wgpuBufferMapAsync(
+            readback,
+            DawnVocabulary.mapModeRead,
+            U64(0),
+            U64(byteCount),
+            WGPUBufferMapCallbackInfo {
+                mode: DawnVocabulary.callbackWaitAnyOnly,
+                callback: dawnBufferMapped,
+                userdata1: context
+            }
+        )
+        let answered = dawnWaitFor(state, map, DawnWait.gpuNanoseconds) && state.dawn.mapResolved
+        if !answered || !state.dawn.mapSucceeded {
+            return .Error(.MapFailed)
         }
-    )
-    let answered = dawnWaitFor(state, map, DawnWait.gpuNanoseconds) && state.dawn.mapResolved
-    if !answered || !state.dawn.mapSucceeded {
-        return .Error(.MapFailed)
+        return .Ok
     }
-    return .Ok
 }
 
 function dawnReleaseReadback(readback: RawPtr) {
-    wgpuBufferDestroy(readback)
-    wgpuBufferRelease(readback)
+    unsafe {
+        wgpuBufferDestroy(readback)
+        wgpuBufferRelease(readback)
+    }
 }
 
 // A readback buffer holding a copy of a texture's rows, mapped for reading.
@@ -222,8 +228,10 @@ function dawnMappedCopy(
 }
 
 function dawnReleaseMappedCopy(copy: borrow DawnMappedCopy) {
-    wgpuBufferUnmap(copy.readback)
-    dawnReleaseReadback(copy.readback)
+    unsafe {
+        wgpuBufferUnmap(copy.readback)
+        dawnReleaseReadback(copy.readback)
+    }
 }
 
 // `source` written to `path` as a binary PPM.

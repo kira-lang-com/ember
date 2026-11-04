@@ -319,29 +319,31 @@ function vulkanBuildRenderPipeline(
     descriptor: borrow RenderPipelineDescriptor,
     inputs: borrow VulkanPipelineInputs
 ) -> Result<RawPtr, VulkanPipelineFailure> {
-    let dynamicStates = boxed<VulkanDynamicStates>(VulkanDynamicStates())
-    let formats = vulkanRenderingFormats(state, descriptor)
-    let info = vulkanGraphicsPipelineInfo(
-        descriptor,
-        inputs,
-        dynamicStates.pointer(),
-        formats.info.pointer()
-    )
-    let pipeline = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateGraphicsPipelines(
-            state.device,
-            nullPointer(),
-            U32(1),
-            info,
-            nullPointer(),
-            pipeline.pointer()
+    unsafe {
+        let dynamicStates = boxed<VulkanDynamicStates>(VulkanDynamicStates())
+        let formats = vulkanRenderingFormats(state, descriptor)
+        let info = vulkanGraphicsPipelineInfo(
+            descriptor,
+            inputs,
+            dynamicStates.pointer(),
+            formats.info.pointer()
         )
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
+        let pipeline = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateGraphicsPipelines(
+                state.device,
+                nullPointer(),
+                U32(1),
+                info,
+                nullPointer(),
+                pipeline.pointer()
+            )
+        )
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(pipeline))
     }
-    return .Ok(boxedValue<RawPtr>(pipeline))
 }
 
 // The sample count, shader and layouts `descriptor` builds a pipeline from.

@@ -33,27 +33,29 @@ function vulkanBuildComputePipeline(
     stage: borrow VkPipelineShaderStageCreateInfo,
     layout: RawPtr
 ) -> Result<RawPtr, VulkanComputePipelineFailure> {
-    let info = VkComputePipelineCreateInfo {
-        sType: VulkanVocabulary.structureComputePipelineCreateInfo,
-        stage: stage,
-        layout: layout,
-        basePipelineIndex: 0 - 1
-    }
-    let pipeline = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateComputePipelines(
-            state.device,
-            nullPointer(),
-            U32(1),
-            info,
-            nullPointer(),
-            pipeline.pointer()
+    unsafe {
+        let info = VkComputePipelineCreateInfo {
+            sType: VulkanVocabulary.structureComputePipelineCreateInfo,
+            stage: stage,
+            layout: layout,
+            basePipelineIndex: 0 - 1
+        }
+        let pipeline = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateComputePipelines(
+                state.device,
+                nullPointer(),
+                U32(1),
+                info,
+                nullPointer(),
+                pipeline.pointer()
+            )
         )
-    )
-    if result != .Success {
-        return .Error(.Refused(result))
+        if result != .Success {
+            return .Error(.Refused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(pipeline))
     }
-    return .Ok(boxedValue<RawPtr>(pipeline))
 }
 
 // The live shader record `shader` names, where it has a compute stage.
@@ -195,12 +197,14 @@ function vulkanRecordDispatch(
     group: borrow BindGroup,
     groups: borrow VulkanGroupCount
 ) -> Bool {
-    vkCmdBindPipeline(state.commandBuffer, VulkanVocabulary.pipelineCompute, pipeline.pipeline)
-    if !vulkanBoundComputeGroup(state, pipeline, 0, group) {
-        return false
+    unsafe {
+        vkCmdBindPipeline(state.commandBuffer, VulkanVocabulary.pipelineCompute, pipeline.pipeline)
+        if !vulkanBoundComputeGroup(state, pipeline, 0, group) {
+            return false
+        }
+        vkCmdDispatch(state.commandBuffer, groups.x, groups.y, U32(1))
+        return true
     }
-    vkCmdDispatch(state.commandBuffer, groups.x, groups.y, U32(1))
-    return true
 }
 
 // A buffer dispatch recorded, with `depth` bound at slot 0 ahead of the
@@ -445,18 +449,20 @@ public function vulkanReadBufferU32(
 // read. A frame in flight is flushed and resumed; a frame that cannot be is
 // a device that has stopped, and the run is asked to quit.
 function vulkanSettleForRead(state: borrow mut VulkanState) -> Result<Void, BufferReadFailure> {
-    if !state.frameActive {
-        if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
-            return .Error(.DeviceRefused)
+    unsafe {
+        if !state.frameActive {
+            if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
+                return .Error(.DeviceRefused)
+            }
+            return .Ok
         }
-        return .Ok
-    }
-    match vulkanFlushAndResume(state) {
-        Ok -> return .Ok
-        Error(failure) -> {
-            log fault("flushing the frame's commands for a buffer read failed; quitting", failure)
-            state.quitRequested = true
-            return .Error(.DeviceRefused)
+        match vulkanFlushAndResume(state) {
+            Ok -> return .Ok
+            Error(failure) -> {
+                log fault("flushing the frame's commands for a buffer read failed; quitting", failure)
+                state.quitRequested = true
+                return .Error(.DeviceRefused)
+            }
         }
     }
 }

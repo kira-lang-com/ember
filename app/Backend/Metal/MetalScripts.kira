@@ -65,33 +65,35 @@ public function metalScriptedResizes() -> [ScriptedResize] {
 // it. The first frame begins the gesture and the frame after the last step ends
 // it, both without movement, as a trackpad reports them.
 public function metalSwipeEvent(swipe: borrow ScriptedSwipe, frame: Number) -> AppEvent? {
-    let last = swipe.frame + swipe.steps + 1
-    if frame < swipe.frame || frame > last {
-        return .None
-    }
-    var phase: ScrollPhase = .Changed
-    var share = 1 / swipe.steps
-    if frame == swipe.frame {
-        phase = .Began
-        share = 0
-    }
-    if frame == last {
-        phase = .Ended
-        share = 0
-    }
-    return .Some(
-        AppEvent {
-            kind: .Scroll,
-            pointerX: swipe.x,
-            pointerY: swipe.y,
-            scrollX: swipe.deltaX * share,
-            scrollY: swipe.deltaY * share,
-            scrollPhase: phase,
-            scrollPrecise: true,
-            scrollInverted: true,
-            timestamp: secondsFromNanoseconds(Number(metalClockNs(MetalForeign.clockUptimeRaw)))
+    unsafe {
+        let last = swipe.frame + swipe.steps + 1
+        if frame < swipe.frame || frame > last {
+            return .None
         }
-    )
+        var phase: ScrollPhase = .Changed
+        var share = 1 / swipe.steps
+        if frame == swipe.frame {
+            phase = .Began
+            share = 0
+        }
+        if frame == last {
+            phase = .Ended
+            share = 0
+        }
+        return .Some(
+            AppEvent {
+                kind: .Scroll,
+                pointerX: swipe.x,
+                pointerY: swipe.y,
+                scrollX: swipe.deltaX * share,
+                scrollY: swipe.deltaY * share,
+                scrollPhase: phase,
+                scrollPrecise: true,
+                scrollInverted: true,
+                timestamp: secondsFromNanoseconds(Number(metalClockNs(MetalForeign.clockUptimeRaw)))
+            }
+        )
+    }
 }
 
 // Every scripted swipe that lands on `frame`, delivered through `onEvent`.

@@ -13,6 +13,8 @@ public class RenderFrame {
     var hasRenderPass: Bool = false
     // The label of the pass begun last, for a backend timing its passes.
     var passLabel: String = ""
+    // The draw area of the pass begun last (`RenderPassDescriptor.drawArea`).
+    var drawArea: ScissorRect? = .None
     var renderPassActive: Bool = false
     var passSubmitted: Bool = false
     var shouldQuit: Bool = false
@@ -143,6 +145,7 @@ public class RenderFrame {
         }
         self.hasRenderPass = true
         self.passLabel = copy descriptor.label
+        self.drawArea = copy descriptor.drawArea
         self.passSubmitted = false
         self.renderPassActive = self.renderBackend().beginRenderPass(self)
 

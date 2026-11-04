@@ -27,42 +27,44 @@ import Heap
 // which is what a resize does. Reconfiguring and asking again is the answer, and
 // only a second refusal is worth a line.
 public function dawnAcquireSurfaceTexture(state: borrow mut GraphicsRuntimeState) -> Bool {
-    if !isNull(state.dawn.frameView) {
-        return true
-    }
-    let block: WGPUSurfaceTexture_ptr = state.dawn.surfaceTextureBlock
-    wgpuSurfaceGetCurrentTexture(state.dawn.surface, block)
-    if !dawnSurfaceStatusIsUsable(block.status) {
-        state.dawn.surfaceWidth = 0
-        state.dawn.surfaceHeight = 0
-        if !dawnConfigureSurface(
-            state,
-            dawnWindowFor(dawnPlatformForHost()).clientWidth(state.dawn.window),
-            dawnWindowFor(dawnPlatformForHost()).clientHeight(state.dawn.window)
-        ) {
-            return false
+    unsafe {
+        if !isNull(state.dawn.frameView) {
+            return true
         }
+        let block: WGPUSurfaceTexture_ptr = state.dawn.surfaceTextureBlock
         wgpuSurfaceGetCurrentTexture(state.dawn.surface, block)
         if !dawnSurfaceStatusIsUsable(block.status) {
-            log fault("the Dawn surface has no drawable this frame")
-            return false
+            state.dawn.surfaceWidth = 0
+            state.dawn.surfaceHeight = 0
+            if !dawnConfigureSurface(
+                state,
+                dawnWindowFor(dawnPlatformForHost()).clientWidth(state.dawn.window),
+                dawnWindowFor(dawnPlatformForHost()).clientHeight(state.dawn.window)
+            ) {
+                return false
+            }
+            wgpuSurfaceGetCurrentTexture(state.dawn.surface, block)
+            if !dawnSurfaceStatusIsUsable(block.status) {
+                log fault("the Dawn surface has no drawable this frame")
+                return false
+            }
         }
+        state.dawn.frameTexture = block.texture
+        state.dawn.frameView = wgpuTextureCreateView(
+            state.dawn.frameTexture,
+            WGPUTextureViewDescriptor {
+                label: dawnText("kira-swapchain-view"),
+                format: state.dawn.surfaceFormat,
+                dimension: DawnVocabulary.textureViewDimension2d,
+                baseMipLevel: U32(0),
+                mipLevelCount: U32(1),
+                baseArrayLayer: U32(0),
+                arrayLayerCount: U32(1),
+                aspect: DawnVocabulary.textureAspectAll
+            }
+        )
+        return !isNull(state.dawn.frameView)
     }
-    state.dawn.frameTexture = block.texture
-    state.dawn.frameView = wgpuTextureCreateView(
-        state.dawn.frameTexture,
-        WGPUTextureViewDescriptor {
-            label: dawnText("kira-swapchain-view"),
-            format: state.dawn.surfaceFormat,
-            dimension: DawnVocabulary.textureViewDimension2d,
-            baseMipLevel: U32(0),
-            mipLevelCount: U32(1),
-            baseArrayLayer: U32(0),
-            arrayLayerCount: U32(1),
-            aspect: DawnVocabulary.textureAspectAll
-        }
-    )
-    return !isNull(state.dawn.frameView)
 }
 
 public function dawnSurfaceStatusIsUsable(status: I32) -> Bool {
@@ -112,55 +114,59 @@ function dawnNewManagedDepth(
     width: UNumber,
     height: UNumber
 ) -> DawnManagedDepth? {
-    let format = DawnVocabulary.formatDepth24PlusStencil8
-    let texture = wgpuDeviceCreateTexture(
-        state.dawn.device,
-        WGPUTextureDescriptor {
-            label: dawnText("kira-managed-depth"),
-            usage: DawnVocabulary.textureUsageRenderAttachment,
-            dimension: DawnVocabulary.textureDimension2d,
-            size: WGPUExtent3D {
-                width: U32(width),
-                height: U32(height),
-                depthOrArrayLayers: U32(1)
-            },
-            format: format,
-            mipLevelCount: U32(1),
-            sampleCount: U32(1)
+    unsafe {
+        let format = DawnVocabulary.formatDepth24PlusStencil8
+        let texture = wgpuDeviceCreateTexture(
+            state.dawn.device,
+            WGPUTextureDescriptor {
+                label: dawnText("kira-managed-depth"),
+                usage: DawnVocabulary.textureUsageRenderAttachment,
+                dimension: DawnVocabulary.textureDimension2d,
+                size: WGPUExtent3D {
+                    width: U32(width),
+                    height: U32(height),
+                    depthOrArrayLayers: U32(1)
+                },
+                format: format,
+                mipLevelCount: U32(1),
+                sampleCount: U32(1)
+            }
+        )
+        if isNull(texture) {
+            log fault("refused a managed depth buffer for this pass")
+            return .None
         }
-    )
-    if isNull(texture) {
-        log fault("refused a managed depth buffer for this pass")
-        return .None
-    }
-    let view = dawnMakeView(texture, format, "depth")
-    if isNull(view) {
-        wgpuTextureRelease(texture)
-        return .None
-    }
-    return .Some(
-        DawnManagedDepth {
-            textureId: dawnRegisterObject(state, texture, format),
-            viewId: dawnRegisterObject(state, view, format),
-            width: width,
-            height: height
+        let view = dawnMakeView(texture, format, "depth")
+        if isNull(view) {
+            wgpuTextureRelease(texture)
+            return .None
         }
-    )
+        return .Some(
+            DawnManagedDepth {
+                textureId: dawnRegisterObject(state, texture, format),
+                viewId: dawnRegisterObject(state, view, format),
+                width: width,
+                height: height
+            }
+        )
+    }
 }
 
 public function dawnReleaseDepthTarget(state: borrow mut GraphicsRuntimeState) {
-    let depth = match state.dawn.managedDepth {
-        Some(depth) -> depth
-        None -> return
+    unsafe {
+        let depth = match state.dawn.managedDepth {
+            Some(depth) -> depth
+            None -> return
+        }
+        dawnReleaseView(state, depth.viewId)
+        let texture = dawnObject(state, depth.textureId)
+        if !isNull(texture) {
+            wgpuTextureDestroy(texture)
+            wgpuTextureRelease(texture)
+            dawnForgetObject(state, depth.textureId)
+        }
+        state.dawn.managedDepth = .None
     }
-    dawnReleaseView(state, depth.viewId)
-    let texture = dawnObject(state, depth.textureId)
-    if !isNull(texture) {
-        wgpuTextureDestroy(texture)
-        wgpuTextureRelease(texture)
-        dawnForgetObject(state, depth.textureId)
-    }
-    state.dawn.managedDepth = .None
 }
 
 // Why a render pass did not begin.
@@ -319,24 +325,26 @@ function dawnOpenColorPass(
     color: borrow WGPURenderPassColorAttachment,
     timedFrom: DawnClockPair?
 ) -> RawPtr {
-    return match timedFrom {
-        None -> wgpuCommandEncoderBeginRenderPass(
-            state.dawn.encoder,
-            WGPURenderPassDescriptor {
-                label: dawnText(DawnPassLabel.render),
-                colorAttachmentCount: U64(1),
-                colorAttachments: color
-            }
-        )
-        Some(pair) -> wgpuCommandEncoderBeginRenderPass(
-            state.dawn.encoder,
-            WGPURenderPassDescriptor {
-                label: dawnText(DawnPassLabel.render),
-                colorAttachmentCount: U64(1),
-                colorAttachments: color,
-                timestampWrites: dawnClockWrites(pair)
-            }
-        )
+    unsafe {
+        return match timedFrom {
+            None -> wgpuCommandEncoderBeginRenderPass(
+                state.dawn.encoder,
+                WGPURenderPassDescriptor {
+                    label: dawnText(DawnPassLabel.render),
+                    colorAttachmentCount: U64(1),
+                    colorAttachments: color
+                }
+            )
+            Some(pair) -> wgpuCommandEncoderBeginRenderPass(
+                state.dawn.encoder,
+                WGPURenderPassDescriptor {
+                    label: dawnText(DawnPassLabel.render),
+                    colorAttachmentCount: U64(1),
+                    colorAttachments: color,
+                    timestampWrites: dawnClockWrites(pair)
+                }
+            )
+        }
     }
 }
 
@@ -346,26 +354,28 @@ function dawnOpenDepthPass(
     depth: borrow WGPURenderPassDepthStencilAttachment,
     timedFrom: DawnClockPair?
 ) -> RawPtr {
-    return match timedFrom {
-        None -> wgpuCommandEncoderBeginRenderPass(
-            state.dawn.encoder,
-            WGPURenderPassDescriptor {
-                label: dawnText(DawnPassLabel.render),
-                colorAttachmentCount: U64(1),
-                colorAttachments: color,
-                depthStencilAttachment: depth
-            }
-        )
-        Some(pair) -> wgpuCommandEncoderBeginRenderPass(
-            state.dawn.encoder,
-            WGPURenderPassDescriptor {
-                label: dawnText(DawnPassLabel.render),
-                colorAttachmentCount: U64(1),
-                colorAttachments: color,
-                depthStencilAttachment: depth,
-                timestampWrites: dawnClockWrites(pair)
-            }
-        )
+    unsafe {
+        return match timedFrom {
+            None -> wgpuCommandEncoderBeginRenderPass(
+                state.dawn.encoder,
+                WGPURenderPassDescriptor {
+                    label: dawnText(DawnPassLabel.render),
+                    colorAttachmentCount: U64(1),
+                    colorAttachments: color,
+                    depthStencilAttachment: depth
+                }
+            )
+            Some(pair) -> wgpuCommandEncoderBeginRenderPass(
+                state.dawn.encoder,
+                WGPURenderPassDescriptor {
+                    label: dawnText(DawnPassLabel.render),
+                    colorAttachmentCount: U64(1),
+                    colorAttachments: color,
+                    depthStencilAttachment: depth,
+                    timestampWrites: dawnClockWrites(pair)
+                }
+            )
+        }
     }
 }
 
@@ -418,8 +428,11 @@ public function dawnBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) 
             }
         }
         state.dawn.passActive = true
-        state.dawn.passWidth = UN32(target.width)
-        state.dawn.passHeight = UN32(target.height)
+        let area = drawAreaWithinAttachment(frame.drawArea, UN32(target.width), UN32(target.height))
+        state.dawn.passWidth = area.width
+        state.dawn.passHeight = area.height
+        state.dawn.passOriginX = UN32(area.x)
+        state.dawn.passOriginY = UN32(area.y)
         state.dawn.passFormat = target.format
         state.dawn.passIsSwapchain = frame.attachments.color.target.kind == .Swapchain
         state.dawn.stats.passCount = state.dawn.stats.passCount + 1
@@ -430,14 +443,16 @@ public function dawnBeginRenderPass(context: RawPtr, frame: borrow RenderFrame) 
 // The frame's command encoder, opened on first use. Every pass of the frame —
 // and every compute dispatch between them — records into this one.
 public function dawnFrameEncoder(state: borrow mut GraphicsRuntimeState) -> RawPtr {
-    if isNull(state.dawn.encoder) {
-        state.dawn.blurExtentsUsed = 0
-        state.dawn.encoder = wgpuDeviceCreateCommandEncoder(
-            state.dawn.device,
-            WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-encoder") }
-        )
+    unsafe {
+        if isNull(state.dawn.encoder) {
+            state.dawn.blurExtentsUsed = 0
+            state.dawn.encoder = wgpuDeviceCreateCommandEncoder(
+                state.dawn.device,
+                WGPUCommandEncoderDescriptor { label: dawnText("kira-frame-encoder") }
+            )
+        }
+        return state.dawn.encoder
     }
-    return state.dawn.encoder
 }
 
 // Ends the pass. The commands stay on the frame's encoder until it is submitted.
@@ -459,24 +474,33 @@ public function dawnEndPassAndCommit(context: RawPtr) {
         let extent = String(state.dawn.passWidth) + "x" + String(state.dawn.passHeight)
         state.dawn.passWidth = 0
         state.dawn.passHeight = 0
-        dawnTraceSegment(context, state, (composite ? "composite" : "offscreen") + extent, composite)
+        state.dawn.passOriginX = 0
+        state.dawn.passOriginY = 0
+        dawnTraceSegment(
+            context,
+            state,
+            (composite ? "composite" : "offscreen") + extent,
+            composite
+        )
     }
 }
 
 // Finishes whatever the frame's encoder holds and submits it.
 public function dawnSubmitEncoder(state: borrow mut GraphicsRuntimeState) {
-    if isNull(state.dawn.encoder) {
-        return
+    unsafe {
+        if isNull(state.dawn.encoder) {
+            return
+        }
+        let commands = wgpuCommandEncoderFinish(
+            state.dawn.encoder,
+            WGPUCommandBufferDescriptor { label: dawnText("kira-frame-commands") }
+        )
+        let submission: [RawPtr] = [commands]
+        wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
+        wgpuCommandBufferRelease(commands)
+        wgpuCommandEncoderRelease(state.dawn.encoder)
+        state.dawn.encoder = nullPointer()
     }
-    let commands = wgpuCommandEncoderFinish(
-        state.dawn.encoder,
-        WGPUCommandBufferDescriptor { label: dawnText("kira-frame-commands") }
-    )
-    let submission: [RawPtr] = [commands]
-    wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
-    wgpuCommandBufferRelease(commands)
-    wgpuCommandEncoderRelease(state.dawn.encoder)
-    state.dawn.encoder = nullPointer()
 }
 
 function dawnCapturePresented(context: RawPtr, path: borrow String) {

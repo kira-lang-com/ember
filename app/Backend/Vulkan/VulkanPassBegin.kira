@@ -345,10 +345,17 @@ function vulkanRecordBeginRendering(
     }
 }
 
-function vulkanOpenPass(state: borrow mut VulkanState, plan: borrow VulkanPassPlan) {
+function vulkanOpenPass(
+    state: borrow mut VulkanState,
+    plan: borrow VulkanPassPlan,
+    drawArea: borrow ScissorRect?
+) {
     state.passActive = true
-    state.passWidth = UN32(plan.color.width)
-    state.passHeight = UN32(plan.color.height)
+    let area = drawAreaWithinAttachment(drawArea, UN32(plan.color.width), UN32(plan.color.height))
+    state.passWidth = area.width
+    state.passHeight = area.height
+    state.passOriginX = UN32(area.x)
+    state.passOriginY = UN32(area.y)
     state.passColorImage = plan.color.image
     state.passResolveImage = match plan.resolve {
         Some(resolve) -> resolve.image
@@ -394,7 +401,7 @@ public function vulkanBeginRenderPassState(
     }
     vulkanGpuTimingPassBegin(state, frame.passLabel)
     vulkanRecordBeginRendering(state, frame, plan)
-    vulkanOpenPass(state, plan)
+    vulkanOpenPass(state, plan, frame.drawArea)
     vulkanTracePass(state, frame, plan)
     return true
 }

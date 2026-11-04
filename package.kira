@@ -188,16 +188,7 @@ construct Ember extends Package {
                 entrypoint: "NativeLibs/Vulkan/include/vulkan/vulkan_core.h",
                 includeDirs: ["NativeLibs/Vulkan/include"]
             },
-            // The scalar pointer types webgpu.kira already declares (`float_ptr`,
-            // `uint32_t_ptr`, `uint64_t_ptr`) are used here unwritten, so the
-            // package declares each once. Vulkan's other scalar pointers
-            // (`int_ptr`, `int32_t_ptr`, ...) are generated here as before.
-            autobind: Autobind {
-                module: "vulkan",
-                headers: ["NativeLibs/Vulkan/include/vulkan/vulkan_core.h"],
-                mode: AutobindMode.AllPublic,
-                sharedPointerAliases: ["float_ptr", "uint32_t_ptr", "uint64_t_ptr"]
-            },
+            klffi: "NativeLibs/Vulkan/vulkan.klffi",
             // Tessera's loader is the one C library a Tessera program links. Its
             // SDK carries no C, so the link finds it in the build's sysroot.
             nativeTargets: [

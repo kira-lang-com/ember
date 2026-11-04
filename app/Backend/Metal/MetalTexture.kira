@@ -6,20 +6,22 @@ import Heap
 // Create an RGBA8 sampled texture (shared storage so pixels can be uploaded from
 // the CPU) and register it.
 public function metalCreateTexture(ctx: RawPtr, width: Number, height: Number) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let descClass = metalObjcGetClass("MTLTextureDescriptor")
-    let desc: RawPtr = metalMsgSend(
-        descClass,
-        metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
-        MetalTexture.pixelFormatRGBA8Unorm,
-        width,
-        height,
-        false
-    )
-    metalMsgSend(desc, metalSel("setUsage:"), MetalTexture.textureUsageShaderRead)
-    metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModeShared)
-    let texture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
-    return metalRegisterNew(ctx, texture)
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let descClass = metalObjcGetClass("MTLTextureDescriptor")
+        let desc: RawPtr = metalMsgSend(
+            descClass,
+            metalSel("texture2DDescriptorWithPixelFormat:width:height:mipmapped:"),
+            MetalTexture.pixelFormatRGBA8Unorm,
+            width,
+            height,
+            false
+        )
+        metalMsgSend(desc, metalSel("setUsage:"), MetalTexture.textureUsageShaderRead)
+        metalMsgSend(desc, metalSel("setStorageMode:"), MetalRegistry.storageModeShared)
+        let texture: RawPtr = metalMsgSend(device, metalSel("newTextureWithDescriptor:"), desc)
+        return metalRegisterNew(ctx, texture)
+    }
 }
 
 // The `GraphicsTexture` the public API hands back, so a caller never learns
@@ -96,25 +98,27 @@ function metalReplaceRows(
     image: RawPtr,
     rows: borrow MetalRowRange
 ) {
-    let bytesPerRow = texture.width * UN32(sizeOf<U32>())
-    let region = boxed<MetalRegion>(
-        MetalRegion { y: U64(rows.first), width: U64(texture.width), height: U64(rows.count) }
-    )
-    // The row's address: written as a pointer, read back as a word, moved, and
-    // read as a pointer again.
-    let slot = metalMemAlloc(U64(sizeOf<RawPtr>()))
-    metalMemWritePtr(slot, 0, image)
-    metalMemWriteU64(slot, 0, metalMemReadU64(slot, 0) + U64(rows.first * bytesPerRow))
-    let start = metalMemReadPtr(slot, 0)
-    metalMsgSend(
-        metalLookup(ctx, texture.id.raw),
-        metalSel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
-        region.pointer(),
-        0,
-        start,
-        bytesPerRow
-    )
-    metalMemFree(slot)
+    unsafe {
+        let bytesPerRow = texture.width * UN32(sizeOf<U32>())
+        let region = boxed<MetalRegion>(
+            MetalRegion { y: U64(rows.first), width: U64(texture.width), height: U64(rows.count) }
+        )
+        // The row's address: written as a pointer, read back as a word, moved, and
+        // read as a pointer again.
+        let slot = metalMemAlloc(U64(sizeOf<RawPtr>()))
+        metalMemWritePtr(slot, 0, image)
+        metalMemWriteU64(slot, 0, metalMemReadU64(slot, 0) + U64(rows.first * bytesPerRow))
+        let start = metalMemReadPtr(slot, 0)
+        metalMsgSend(
+            metalLookup(ctx, texture.id.raw),
+            metalSel("replaceRegion:mipmapLevel:withBytes:bytesPerRow:"),
+            region.pointer(),
+            0,
+            start,
+            bytesPerRow
+        )
+        metalMemFree(slot)
+    }
 }
 
 // Replace a texture's pixels (RGBA8, row-major) with `data`, leaving it
@@ -124,12 +128,14 @@ function metalReplaceRows(
 // that will be updated again — a glyph atlas — and optimizing it would undo the
 // linear layout the next upload needs.
 public function metalUpdateTexture(ctx: RawPtr, texture: borrow GraphicsTexture, data: borrow[U8]) {
-    let bytes = metalMemAlloc(data.count)
-    for (index, byte) in data.enumerated() {
-        metalMemWriteU8(bytes, index, byte)
+    unsafe {
+        let bytes = metalMemAlloc(data.count)
+        for (index, byte) in data.enumerated() {
+            metalMemWriteU8(bytes, index, byte)
+        }
+        metalReplaceRows(ctx, texture, bytes, MetalRowRange { count: texture.height })
+        metalMemFree(bytes)
     }
-    metalReplaceRows(ctx, texture, bytes, MetalRowRange { count: texture.height })
-    metalMemFree(bytes)
 }
 
 // Replace a texture's contents from raw memory the caller already owns.
@@ -173,14 +179,16 @@ public function metalUpdateTextureRows(
 // treat the upload as complete when this returns; wrong for textures that
 // keep taking CPU writes, like the glyph atlas.
 public function metalOptimizeTextureForGpu(ctx: RawPtr, textureId: Number) {
-    let texture = metalLookup(ctx, textureId)
-    let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
-    let commandBuffer: RawPtr = metalMsgSend(queue, metalSel("commandBuffer"))
-    let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
-    metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), texture)
-    metalMsgSend(blit, metalSel("endEncoding"))
-    metalMsgSend(commandBuffer, metalSel("commit"))
-    metalMsgSend(commandBuffer, metalSel("waitUntilCompleted"))
+    unsafe {
+        let texture = metalLookup(ctx, textureId)
+        let queue = metalMemReadPtr(ctx, MetalContext.offsetQueue)
+        let commandBuffer: RawPtr = metalMsgSend(queue, metalSel("commandBuffer"))
+        let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
+        metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), texture)
+        metalMsgSend(blit, metalSel("endEncoding"))
+        metalMsgSend(commandBuffer, metalSel("commit"))
+        metalMsgSend(commandBuffer, metalSel("waitUntilCompleted"))
+    }
 }
 
 // As metalOptimizeTextureForGpu, but encoded on the FRAME's active command
@@ -188,10 +196,12 @@ public function metalOptimizeTextureForGpu(ctx: RawPtr, textureId: Number) {
 // mid-frame producer (the blur compute) needs, where a separate committed
 // buffer would race the uncommitted writes it must follow.
 public function metalContextOptimizeTextureInFrame(ctx: RawPtr, textureId: Number) {
-    let commandBuffer = metalContextActiveCommandBuffer(ctx)
-    let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
-    metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), metalLookup(ctx, textureId))
-    metalMsgSend(blit, metalSel("endEncoding"))
+    unsafe {
+        let commandBuffer = metalContextActiveCommandBuffer(ctx)
+        let blit: RawPtr = metalMsgSend(commandBuffer, metalSel("blitCommandEncoder"))
+        metalMsgSend(blit, metalSel("optimizeContentsForGPUAccess:"), metalLookup(ctx, textureId))
+        metalMsgSend(blit, metalSel("endEncoding"))
+    }
 }
 
 // Create an MTLSamplerState with the given min/mag filters and address mode.
@@ -201,31 +211,37 @@ public function metalCreateSampler(
     magFilter: U64,
     addressMode: U64
 ) -> Number? {
-    let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
-    let descClass = metalObjcGetClass("MTLSamplerDescriptor")
-    let desc: RawPtr = metalMsgSend(metalMsgSend(descClass, metalSel("alloc")), metalSel("init"))
-    metalMsgSend(desc, metalSel("setMinFilter:"), minFilter)
-    metalMsgSend(desc, metalSel("setMagFilter:"), magFilter)
-    metalMsgSend(desc, metalSel("setSAddressMode:"), addressMode)
-    metalMsgSend(desc, metalSel("setTAddressMode:"), addressMode)
-    let sampler: RawPtr = metalMsgSend(device, metalSel("newSamplerStateWithDescriptor:"), desc)
-    // The descriptor is a +1-owned alloc/init temporary; the sampler state does not
-    // retain it, so release it here rather than leaking one per sampler.
-    metalMsgSend(desc, metalSel("release"))
-    return metalRegisterNew(ctx, sampler)
+    unsafe {
+        let device = metalMemReadPtr(ctx, MetalContext.offsetDevice)
+        let descClass = metalObjcGetClass("MTLSamplerDescriptor")
+        let desc: RawPtr = metalMsgSend(metalMsgSend(descClass, metalSel("alloc")), metalSel("init"))
+        metalMsgSend(desc, metalSel("setMinFilter:"), minFilter)
+        metalMsgSend(desc, metalSel("setMagFilter:"), magFilter)
+        metalMsgSend(desc, metalSel("setSAddressMode:"), addressMode)
+        metalMsgSend(desc, metalSel("setTAddressMode:"), addressMode)
+        let sampler: RawPtr = metalMsgSend(device, metalSel("newSamplerStateWithDescriptor:"), desc)
+        // The descriptor is a +1-owned alloc/init temporary; the sampler state does not
+        // retain it, so release it here rather than leaking one per sampler.
+        metalMsgSend(desc, metalSel("release"))
+        return metalRegisterNew(ctx, sampler)
+    }
 }
 
 // Bind a texture / sampler to a fragment-shader slot on the active encoder.
 public function metalEncoderBindFragmentTexture(ctx: RawPtr, textureId: Number, index: Number) {
-    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
-    let texture = metalLookup(ctx, textureId)
-    metalMsgSend(encoder, metalSel("setFragmentTexture:atIndex:"), texture, index)
+    unsafe {
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        let texture = metalLookup(ctx, textureId)
+        metalMsgSend(encoder, metalSel("setFragmentTexture:atIndex:"), texture, index)
+    }
 }
 
 public function metalEncoderBindFragmentSampler(ctx: RawPtr, samplerId: Number, index: Number) {
-    let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
-    let sampler = metalLookup(ctx, samplerId)
-    metalMsgSend(encoder, metalSel("setFragmentSamplerState:atIndex:"), sampler, index)
+    unsafe {
+        let encoder = metalMemReadPtr(ctx, MetalContext.offsetEncoder)
+        let sampler = metalLookup(ctx, samplerId)
+        metalMsgSend(encoder, metalSel("setFragmentSamplerState:atIndex:"), sampler, index)
+    }
 }
 
 public namespace MetalTexture {

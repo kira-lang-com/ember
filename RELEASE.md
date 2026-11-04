@@ -14,6 +14,7 @@ The first source release of Ember includes:
 
 ## Changed
 
+- Added `RenderPassDescriptor.drawArea`: a pass can draw into part of its color attachment. The viewport and every scissor are placed inside the area on Vulkan, Dawn and Metal, and a clear still covers the whole attachment. A compositor uses it to draw a smaller output at an offset.
 - Made low-level graphics backend, native callback state, and foreign memory operations explicit inside `unsafe` regions across Metal, Vulkan, and Dawn code paths.
 
 ## Breaking changes

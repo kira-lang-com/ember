@@ -33,6 +33,18 @@ function metalCursorIsVisible(): Bool
 public @FFI.Extern { library: kira_metal, symbol: CGAssociateMouseAndMouseCursorPosition, abi: c }
 function metalAssociateMouseAndCursor(connected: Bool): I32
 
+function metalCursorIsVisibleAtBoundary() -> Bool {
+    var visible = true
+    unsafe { visible = metalCursorIsVisible() }
+    return visible
+}
+
+function metalAssociateMouseAndCursorAtBoundary(connected: Bool) -> I32 {
+    var status: I32 = 0
+    unsafe { status = metalAssociateMouseAndCursor(connected) }
+    return status
+}
+
 // CoreGraphics cursor locking/visibility is a macOS desktop API. These macros
 // fold by build target so iOS never carries references to those symbols into
 // native reachability or the final app link.
@@ -40,7 +52,7 @@ comptime macro metalPlatformCursorIsVisible {
     kind { function }
     expand(input: Syntax) -> Syntax {
         if Build.platform() == "macos" {
-            return quote { metalCursorIsVisible() }
+            return quote { metalCursorIsVisibleAtBoundary() }
         }
         return quote { true }
     }
@@ -50,7 +62,7 @@ comptime macro metalPlatformAssociateMouseAndCursor {
     kind { function }
     expand(input: Syntax) -> Syntax {
         if Build.platform() == "macos" {
-            return quote { metalAssociateMouseAndCursor(#{input}) }
+            return quote { metalAssociateMouseAndCursorAtBoundary(#{input}) }
         }
         return quote { I32(0) }
     }

@@ -25,10 +25,12 @@ struct MetalUIKitApplication {
 }
 
 function metalUIKitApplicationPointer() -> RawPtr {
-    let cls = metalObjcGetClass("KiraMetalApplicationDelegate")
-    if isNull(cls) { return nullPointer() }
-    let value = metalObjcGetAssociatedObject(cls, metalSel("kiraApplication"))
-    return metalMsgSend(value, metalSel("pointerValue"))
+    unsafe {
+        let cls = metalObjcGetClass("KiraMetalApplicationDelegate")
+        if isNull(cls) { return nullPointer() }
+        let value = metalObjcGetAssociatedObject(cls, metalSel("kiraApplication"))
+        return metalMsgSend(value, metalSel("pointerValue"))
+    }
 }
 
 // Why UIKit could not be handed the application.
@@ -40,86 +42,92 @@ enum UIKitLaunchFailure {
 
 // The application delegate class: launch, and the timer that starts the run.
 function metalUIKitRegisterApplicationDelegate() -> Result<RawPtr, UIKitLaunchFailure> {
-    let cls = metalObjcAllocateClassPair(
-        metalObjcGetClass("NSObject"),
-        "KiraMetalApplicationDelegate",
-        0
-    )
-    let launch = "application:didFinishLaunchingWithOptions:"
-    if !metalUIKitAddLaunchMethod(cls, metalSel(launch), metalUIKitDidFinishLaunching, "B@:@@") {
-        return .Error(.MethodRefused(launch))
+    unsafe {
+        let cls = metalObjcAllocateClassPair(
+            metalObjcGetClass("NSObject"),
+            "KiraMetalApplicationDelegate",
+            0
+        )
+        let launch = "application:didFinishLaunchingWithOptions:"
+        if !metalUIKitAddLaunchMethod(cls, metalSel(launch), metalUIKitDidFinishLaunching, "B@:@@") {
+            return .Error(.MethodRefused(launch))
+        }
+        if !metalClassAddMethod(
+            cls,
+            metalSel("runKiraApplication:"),
+            metalUIKitRunApplication,
+            "v@:@"
+        ) {
+            return .Error(.MethodRefused("runKiraApplication:"))
+        }
+        if !metalUIKitAddProtocol(cls, metalUIKitGetProtocol("UIApplicationDelegate")) {
+            return .Error(.ProtocolRefused("UIApplicationDelegate"))
+        }
+        metalObjcRegisterClassPair(cls)
+        return .Ok(cls)
     }
-    if !metalClassAddMethod(
-        cls,
-        metalSel("runKiraApplication:"),
-        metalUIKitRunApplication,
-        "v@:@"
-    ) {
-        return .Error(.MethodRefused("runKiraApplication:"))
-    }
-    if !metalUIKitAddProtocol(cls, metalUIKitGetProtocol("UIApplicationDelegate")) {
-        return .Error(.ProtocolRefused("UIApplicationDelegate"))
-    }
-    metalObjcRegisterClassPair(cls)
-    return .Ok(cls)
 }
 
 // The scene delegate class: the scene's window, the timer that starts the run,
 // and the display link's frames.
 function metalUIKitRegisterSceneDelegate() -> Result<Void, UIKitLaunchFailure> {
-    let cls = metalObjcAllocateClassPair(metalObjcGetClass("NSObject"), "KiraMetalSceneDelegate", 0)
-    let connect = "scene:willConnectToSession:options:"
-    if !metalUIKitAddSceneMethod(cls, metalSel(connect), metalUIKitConnectScene, "v@:@@@") {
-        return .Error(.MethodRefused(connect))
+    unsafe {
+        let cls = metalObjcAllocateClassPair(metalObjcGetClass("NSObject"), "KiraMetalSceneDelegate", 0)
+        let connect = "scene:willConnectToSession:options:"
+        if !metalUIKitAddSceneMethod(cls, metalSel(connect), metalUIKitConnectScene, "v@:@@@") {
+            return .Error(.MethodRefused(connect))
+        }
+        if !metalClassAddMethod(
+            cls,
+            metalSel("runKiraApplication:"),
+            metalUIKitRunApplication,
+            "v@:@"
+        ) {
+            return .Error(.MethodRefused("runKiraApplication:"))
+        }
+        if !metalUIKitAddProtocol(cls, metalUIKitGetProtocol("UISceneDelegate")) {
+            return .Error(.ProtocolRefused("UISceneDelegate"))
+        }
+        if !metalClassAddMethod(cls, metalSel("renderKiraFrame:"), metalUIKitRenderFrame, "v@:@") {
+            return .Error(.MethodRefused("renderKiraFrame:"))
+        }
+        metalObjcRegisterClassPair(cls)
+        return .Ok
     }
-    if !metalClassAddMethod(
-        cls,
-        metalSel("runKiraApplication:"),
-        metalUIKitRunApplication,
-        "v@:@"
-    ) {
-        return .Error(.MethodRefused("runKiraApplication:"))
-    }
-    if !metalUIKitAddProtocol(cls, metalUIKitGetProtocol("UISceneDelegate")) {
-        return .Error(.ProtocolRefused("UISceneDelegate"))
-    }
-    if !metalClassAddMethod(cls, metalSel("renderKiraFrame:"), metalUIKitRenderFrame, "v@:@") {
-        return .Error(.MethodRefused("renderKiraFrame:"))
-    }
-    metalObjcRegisterClassPair(cls)
-    return .Ok
 }
 
 function metalUIKitLaunchApplication(
     app: borrow GraphicsApplication,
     runtimeUserData: RawPtr
 ) -> Result<Void, UIKitLaunchFailure> {
-    if !isNull(metalUIKitApplicationPointer()) {
-        return .Error(.AlreadyLaunched)
+    unsafe {
+        if !isNull(metalUIKitApplicationPointer()) {
+            return .Error(.AlreadyLaunched)
+        }
+        let cls = match metalUIKitRegisterApplicationDelegate() {
+            Ok(cls) -> cls
+            Error(failure) -> return .Error(failure)
+        }
+        match metalUIKitRegisterSceneDelegate() {
+            Ok -> {}
+            Error(failure) -> return .Error(failure)
+        }
+        let storage = nativeState(MetalUIKitApplication { app: app, runtimeUserData: runtimeUserData })
+        let value: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSValue"),
+            metalSel("valueWithPointer:"),
+            nativeUserDataBorrow(storage)
+        )
+        metalObjcSetAssociatedObject(cls, metalSel("kiraApplication"), value, 1)
+        let name: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            "KiraMetalApplicationDelegate"
+        )
+        // UIApplicationMain never returns: UIKit owns the process from here.
+        metalUIApplicationMain(I32(0), nullPointer(), nullPointer(), name)
+        return .Ok
     }
-    let cls = match metalUIKitRegisterApplicationDelegate() {
-        Ok(cls) -> cls
-        Error(failure) -> return .Error(failure)
-    }
-    match metalUIKitRegisterSceneDelegate() {
-        Ok -> {}
-        Error(failure) -> return .Error(failure)
-    }
-    let storage = nativeState(MetalUIKitApplication { app: app, runtimeUserData: runtimeUserData })
-    let value: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSValue"),
-        metalSel("valueWithPointer:"),
-        nativeUserDataBorrow(storage)
-    )
-    metalObjcSetAssociatedObject(cls, metalSel("kiraApplication"), value, 1)
-    let name: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        "KiraMetalApplicationDelegate"
-    )
-    // UIApplicationMain never returns: UIKit owns the process from here.
-    metalUIApplicationMain(I32(0), nullPointer(), nullPointer(), name)
-    return .Ok
 }
 
 function metalUIKitDidFinishLaunching(
@@ -133,37 +141,39 @@ function metalUIKitDidFinishLaunching(
 
 // The content view class, which turns touches into pointer events.
 function metalUIKitRegisterContentView() -> Result<RawPtr, UIKitLaunchFailure> {
-    let cls = metalObjcAllocateClassPair(metalObjcGetClass("UIView"), "KiraMetalContentView", 0)
-    if !metalUIKitAddTouchMethod(
-        cls,
-        metalSel("touchesBegan:withEvent:"),
-        metalUIKitTouchesBegan,
-        "v@:@@"
-    ) {
-        return .Error(.MethodRefused("touchesBegan:withEvent:"))
+    unsafe {
+        let cls = metalObjcAllocateClassPair(metalObjcGetClass("UIView"), "KiraMetalContentView", 0)
+        if !metalUIKitAddTouchMethod(
+            cls,
+            metalSel("touchesBegan:withEvent:"),
+            metalUIKitTouchesBegan,
+            "v@:@@"
+        ) {
+            return .Error(.MethodRefused("touchesBegan:withEvent:"))
+        }
+        if !metalUIKitAddTouchMethod(
+            cls,
+            metalSel("touchesMoved:withEvent:"),
+            metalUIKitTouchesMoved,
+            "v@:@@"
+        ) {
+            return .Error(.MethodRefused("touchesMoved:withEvent:"))
+        }
+        if !metalUIKitAddTouchMethod(
+            cls,
+            metalSel("touchesEnded:withEvent:"),
+            metalUIKitTouchesEnded,
+            "v@:@@"
+        ) {
+            return .Error(.MethodRefused("touchesEnded:withEvent:"))
+        }
+        let cancelled = "touchesCancelled:withEvent:"
+        if !metalUIKitAddTouchMethod(cls, metalSel(cancelled), metalUIKitTouchesCancelled, "v@:@@") {
+            return .Error(.MethodRefused(cancelled))
+        }
+        metalObjcRegisterClassPair(cls)
+        return .Ok(cls)
     }
-    if !metalUIKitAddTouchMethod(
-        cls,
-        metalSel("touchesMoved:withEvent:"),
-        metalUIKitTouchesMoved,
-        "v@:@@"
-    ) {
-        return .Error(.MethodRefused("touchesMoved:withEvent:"))
-    }
-    if !metalUIKitAddTouchMethod(
-        cls,
-        metalSel("touchesEnded:withEvent:"),
-        metalUIKitTouchesEnded,
-        "v@:@@"
-    ) {
-        return .Error(.MethodRefused("touchesEnded:withEvent:"))
-    }
-    let cancelled = "touchesCancelled:withEvent:"
-    if !metalUIKitAddTouchMethod(cls, metalSel(cancelled), metalUIKitTouchesCancelled, "v@:@@") {
-        return .Error(.MethodRefused(cancelled))
-    }
-    metalObjcRegisterClassPair(cls)
-    return .Ok(cls)
 }
 
 namespace UIKitAutoresizing {
@@ -212,26 +222,28 @@ function metalUIKitConnectScene(
     session: RawPtr,
     options: RawPtr
 ) {
-    let viewClass = match metalUIKitRegisterContentView() {
-        Ok(cls) -> cls
-        Error(failure) -> {
-            log fault("UIKit refused the content view", failure)
-            return
+    unsafe {
+        let viewClass = match metalUIKitRegisterContentView() {
+            Ok(cls) -> cls
+            Error(failure) -> {
+                log fault("UIKit refused the content view", failure)
+                return
+            }
         }
-    }
-    metalUIKitShowContent(scene, viewClass, delegate)
-    // The run loop retains the timer, so the handle is only checked, not kept.
-    let timer: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSTimer"),
-        metalSel("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
-        0.0,
-        delegate,
-        metalSel("runKiraApplication:"),
-        nullPointer(),
-        false
-    )
-    if isNull(timer) {
-        log fault("UIKit refused the timer that starts the application")
+        metalUIKitShowContent(scene, viewClass, delegate)
+        // The run loop retains the timer, so the handle is only checked, not kept.
+        let timer: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSTimer"),
+            metalSel("scheduledTimerWithTimeInterval:target:selector:userInfo:repeats:"),
+            0.0,
+            delegate,
+            metalSel("runKiraApplication:"),
+            nullPointer(),
+            false
+        )
+        if isNull(timer) {
+            log fault("UIKit refused the timer that starts the application")
+        }
     }
 }
 
@@ -297,14 +309,16 @@ function metalUIKitTakeEvents() -> [AppEvent] {
 }
 
 public function metalUIKitSafeAreaInsets() -> ViewportInsets {
-    if !metalUsesUIKit!() { return ViewportInsets {} }
-    let view = metalUIKitContentView()
-    let insets: MetalUIKitInsets = metalMsgSend(view, metalSel("safeAreaInsets"))
-    return ViewportInsets {
-        top: Number(insets.top),
-        leading: Number(insets.left),
-        bottom: Number(insets.bottom),
-        trailing: Number(insets.right)
+    unsafe {
+        if !metalUsesUIKit!() { return ViewportInsets {} }
+        let view = metalUIKitContentView()
+        let insets: MetalUIKitInsets = metalMsgSend(view, metalSel("safeAreaInsets"))
+        return ViewportInsets {
+            top: Number(insets.top),
+            leading: Number(insets.left),
+            bottom: Number(insets.bottom),
+            trailing: Number(insets.right)
+        }
     }
 }
 
@@ -355,19 +369,21 @@ public function metalUIKitStartFrames(
 // joins the two the main run loop sits in, at rest and while a touch is being
 // tracked.
 function metalUIKitJoinRunLoop(link: RawPtr) {
-    let runLoop: RawPtr = metalMsgSend(metalObjcGetClass("NSRunLoop"), metalSel("mainRunLoop"))
-    let defaultMode: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        "kCFRunLoopDefaultMode"
-    )
-    let trackingMode: RawPtr = metalMsgSend(
-        metalObjcGetClass("NSString"),
-        metalSel("stringWithUTF8String:"),
-        "UITrackingRunLoopMode"
-    )
-    metalMsgSend(link, metalSel("addToRunLoop:forMode:"), runLoop, defaultMode)
-    metalMsgSend(link, metalSel("addToRunLoop:forMode:"), runLoop, trackingMode)
+    unsafe {
+        let runLoop: RawPtr = metalMsgSend(metalObjcGetClass("NSRunLoop"), metalSel("mainRunLoop"))
+        let defaultMode: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            "kCFRunLoopDefaultMode"
+        )
+        let trackingMode: RawPtr = metalMsgSend(
+            metalObjcGetClass("NSString"),
+            metalSel("stringWithUTF8String:"),
+            "UITrackingRunLoopMode"
+        )
+        metalMsgSend(link, metalSel("addToRunLoop:forMode:"), runLoop, defaultMode)
+        metalMsgSend(link, metalSel("addToRunLoop:forMode:"), runLoop, trackingMode)
+    }
 }
 
 function metalUIKitRenderFrame(delegate: RawPtr, selector: RawPtr, link: RawPtr) {

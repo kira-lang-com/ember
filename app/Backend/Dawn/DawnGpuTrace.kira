@@ -60,18 +60,20 @@ public function dawnWorkDone(
 
 // Submits whatever the frame has recorded and waits for the queue to finish it.
 public function dawnDrainQueue(context: RawPtr, state: borrow mut GraphicsRuntimeState) {
-    dawnSubmitEncoder(state)
-    state.dawn.trace.workDone = false
-    let done = wgpuQueueOnSubmittedWorkDone(
-        state.dawn.queue,
-        WGPUQueueWorkDoneCallbackInfo {
-            mode: DawnVocabulary.callbackWaitAnyOnly,
-            callback: dawnWorkDone,
-            userdata1: context
+    unsafe {
+        dawnSubmitEncoder(state)
+        state.dawn.trace.workDone = false
+        let done = wgpuQueueOnSubmittedWorkDone(
+            state.dawn.queue,
+            WGPUQueueWorkDoneCallbackInfo {
+                mode: DawnVocabulary.callbackWaitAnyOnly,
+                callback: dawnWorkDone,
+                userdata1: context
+            }
+        )
+        if !dawnWaitFor(state, done, DawnWait.gpuNanoseconds) || !state.dawn.trace.workDone {
+            log warn("the queue never reported its work done")
         }
-    )
-    if !dawnWaitFor(state, done, DawnWait.gpuNanoseconds) || !state.dawn.trace.workDone {
-        log warn("the queue never reported its work done")
     }
 }
 

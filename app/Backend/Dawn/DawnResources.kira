@@ -30,16 +30,18 @@ public function dawnMakeBuffer(
     usage: U64,
     byteCount: Number
 ) -> U32? {
-    let size = dawnAlignedSize(byteCount)
-    let buffer = wgpuDeviceCreateBuffer(
-        state.dawn.device,
-        WGPUBufferDescriptor { label: dawnText(label), usage: usage, size: U64(size) }
-    )
-    if isNull(buffer) {
-        return .None
+    unsafe {
+        let size = dawnAlignedSize(byteCount)
+        let buffer = wgpuDeviceCreateBuffer(
+            state.dawn.device,
+            WGPUBufferDescriptor { label: dawnText(label), usage: usage, size: U64(size) }
+        )
+        if isNull(buffer) {
+            return .None
+        }
+        state.dawn.allocatedBytes = state.dawn.allocatedBytes + U64(size)
+        return .Some(dawnRegisterObject(state, buffer, DawnVocabulary.formatUndefined))
     }
-    state.dawn.allocatedBytes = state.dawn.allocatedBytes + U64(size)
-    return .Some(dawnRegisterObject(state, buffer, DawnVocabulary.formatUndefined))
 }
 
 public function dawnCreateBuffer(
@@ -194,14 +196,16 @@ public function dawnCommitDynamicBuffer(
 }
 
 public function dawnDestroyBufferId(state: borrow mut GraphicsRuntimeState, id: U32) {
-    let buffer = dawnObject(state, id)
-    if isNull(buffer) {
-        return
+    unsafe {
+        let buffer = dawnObject(state, id)
+        if isNull(buffer) {
+            return
+        }
+        dawnFreeExtra(state, id)
+        wgpuBufferDestroy(buffer)
+        wgpuBufferRelease(buffer)
+        dawnForgetObject(state, id)
     }
-    dawnFreeExtra(state, id)
-    wgpuBufferDestroy(buffer)
-    wgpuBufferRelease(buffer)
-    dawnForgetObject(state, id)
 }
 
 // One 32-bit word out of a buffer a kernel has written.
@@ -249,17 +253,19 @@ function dawnReadStagedWord(
     staging: RawPtr,
     context: RawPtr
 ) -> BufferReadResult {
-    match dawnAwaitReadMap(state, staging, context) {
-        Ok -> {}
-        Error(failure) -> {
-            log fault("could not map the buffer readback", failure)
-            return .Error(.DeviceRefused)
+    unsafe {
+        match dawnAwaitReadMap(state, staging, context) {
+            Ok -> {}
+            Error(failure) -> {
+                log fault("could not map the buffer readback", failure)
+                return .Error(.DeviceRefused)
+            }
         }
+        let mapped = wgpuBufferGetConstMappedRange(staging, U64(0), U64(sizeOf<U32>()))
+        let word = heapLoad<U32>(mapped, 0)
+        wgpuBufferUnmap(staging)
+        return .Ok(word)
     }
-    let mapped = wgpuBufferGetConstMappedRange(staging, U64(0), U64(sizeOf<U32>()))
-    let word = heapLoad<U32>(mapped, 0)
-    wgpuBufferUnmap(staging)
-    return .Ok(word)
 }
 
 // A mappable staging buffer, and a submission that copies word `index` of
@@ -269,36 +275,38 @@ function dawnCopyWordOut(
     source: RawPtr,
     index: Number
 ) -> RawPtr? {
-    let staging = wgpuDeviceCreateBuffer(
-        state.dawn.device,
-        WGPUBufferDescriptor {
-            label: dawnText("kira-buffer-readback"),
-            usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
-            size: U64(DawnReadback.wordBytes)
+    unsafe {
+        let staging = wgpuDeviceCreateBuffer(
+            state.dawn.device,
+            WGPUBufferDescriptor {
+                label: dawnText("kira-buffer-readback"),
+                usage: DawnVocabulary.bufferUsageMapRead | DawnVocabulary.bufferUsageCopyDestination,
+                size: U64(DawnReadback.wordBytes)
+            }
+        )
+        if isNull(staging) {
+            log fault("could not allocate a readback buffer")
+            return .None
         }
-    )
-    if isNull(staging) {
-        log fault("could not allocate a readback buffer")
-        return .None
+        let encoder = wgpuDeviceCreateCommandEncoder(
+            state.dawn.device,
+            WGPUCommandEncoderDescriptor { label: dawnText("kira-buffer-readback-encoder") }
+        )
+        wgpuCommandEncoderCopyBufferToBuffer(
+            encoder,
+            source,
+            U64(index * DawnReadback.wordBytes),
+            staging,
+            U64(0),
+            U64(DawnReadback.wordBytes)
+        )
+        let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
+        let submission: [RawPtr] = [commands]
+        wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
+        wgpuCommandBufferRelease(commands)
+        wgpuCommandEncoderRelease(encoder)
+        return .Some(staging)
     }
-    let encoder = wgpuDeviceCreateCommandEncoder(
-        state.dawn.device,
-        WGPUCommandEncoderDescriptor { label: dawnText("kira-buffer-readback-encoder") }
-    )
-    wgpuCommandEncoderCopyBufferToBuffer(
-        encoder,
-        source,
-        U64(index * DawnReadback.wordBytes),
-        staging,
-        U64(0),
-        U64(DawnReadback.wordBytes)
-    )
-    let commands = wgpuCommandEncoderFinish(encoder, WGPUCommandBufferDescriptor {})
-    let submission: [RawPtr] = [commands]
-    wgpuQueueSubmit(state.dawn.queue, U64(1), submission)
-    wgpuCommandBufferRelease(commands)
-    wgpuCommandEncoderRelease(encoder)
-    return .Some(staging)
 }
 
 namespace DawnReadback {
@@ -319,26 +327,28 @@ function dawnAwaitReadMap(
     staging: RawPtr,
     context: RawPtr
 ) -> Result<Void, DawnMapFailure> {
-    state.dawn.mapResolved = false
-    state.dawn.mapSucceeded = false
-    let map = wgpuBufferMapAsync(
-        staging,
-        DawnVocabulary.mapModeRead,
-        U64(0),
-        U64(4),
-        WGPUBufferMapCallbackInfo {
-            mode: DawnVocabulary.callbackWaitAnyOnly,
-            callback: dawnBufferMapped,
-            userdata1: context
+    unsafe {
+        state.dawn.mapResolved = false
+        state.dawn.mapSucceeded = false
+        let map = wgpuBufferMapAsync(
+            staging,
+            DawnVocabulary.mapModeRead,
+            U64(0),
+            U64(4),
+            WGPUBufferMapCallbackInfo {
+                mode: DawnVocabulary.callbackWaitAnyOnly,
+                callback: dawnBufferMapped,
+                userdata1: context
+            }
+        )
+        if !dawnWaitFor(state, map, DawnWait.gpuNanoseconds) || !state.dawn.mapResolved {
+            return .Error(.NeverAnswered)
         }
-    )
-    if !dawnWaitFor(state, map, DawnWait.gpuNanoseconds) || !state.dawn.mapResolved {
-        return .Error(.NeverAnswered)
+        if !state.dawn.mapSucceeded {
+            return .Error(.Refused)
+        }
+        return .Ok
     }
-    if !state.dawn.mapSucceeded {
-        return .Error(.Refused)
-    }
-    return .Ok
 }
 
 // The answer to `wgpuBufferMapAsync`, recorded on the runtime state the readback

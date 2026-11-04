@@ -37,27 +37,29 @@ function vulkanObjectKindIs(state: borrow VulkanState, id: U32, kind: VulkanObje
 // The object `id` names destroyed now, its memory with it, and its id freed.
 // Nothing waits on it: the caller knows the GPU is done with it.
 public function vulkanDestroyObject(state: borrow mut VulkanState, object: borrow VulkanObject) {
-    if isNull(state.device) {
-        return
-    }
-    match object.kind {
-        Buffer -> {
-            match object.mapped {
-                Some(_) -> match object.memory {
-                    Some(memory) -> vkUnmapMemory(state.device, memory)
+    unsafe {
+        if isNull(state.device) {
+            return
+        }
+        match object.kind {
+            Buffer -> {
+                match object.mapped {
+                    Some(_) -> match object.memory {
+                        Some(memory) -> vkUnmapMemory(state.device, memory)
+                        None -> {}
+                    }
                     None -> {}
                 }
-                None -> {}
+                vkDestroyBuffer(state.device, object.handle, nullPointer())
             }
-            vkDestroyBuffer(state.device, object.handle, nullPointer())
+            Image -> vkDestroyImage(state.device, object.handle, nullPointer())
+            ImageView -> vkDestroyImageView(state.device, object.handle, nullPointer())
+            Sampler -> vkDestroySampler(state.device, object.handle, nullPointer())
         }
-        Image -> vkDestroyImage(state.device, object.handle, nullPointer())
-        ImageView -> vkDestroyImageView(state.device, object.handle, nullPointer())
-        Sampler -> vkDestroySampler(state.device, object.handle, nullPointer())
-    }
-    match object.memory {
-        Some(memory) -> vkFreeMemory(state.device, memory, nullPointer())
-        None -> {}
+        match object.memory {
+            Some(memory) -> vkFreeMemory(state.device, memory, nullPointer())
+            None -> {}
+        }
     }
 }
 

@@ -54,24 +54,26 @@ function vulkanCopyImageToStaging(
     image: RawPtr,
     staged: borrow VulkanStagedImage
 ) {
-    vkCmdCopyImageToBuffer(
-        state.commandBuffer,
-        image,
-        VulkanVocabulary.imageLayoutTransferSource,
-        vulkanObject(state, staged.staging),
-        U32(1),
-        VkBufferImageCopy {
-            imageSubresource: VkImageSubresourceLayers {
-                aspectMask: VulkanVocabulary.aspectColor,
-                layerCount: U32(1)
-            },
-            imageExtent: VkExtent3D {
-                width: U32(staged.width),
-                height: U32(staged.height),
-                depth: U32(1)
+    unsafe {
+        vkCmdCopyImageToBuffer(
+            state.commandBuffer,
+            image,
+            VulkanVocabulary.imageLayoutTransferSource,
+            vulkanObject(state, staged.staging),
+            U32(1),
+            VkBufferImageCopy {
+                imageSubresource: VkImageSubresourceLayers {
+                    aspectMask: VulkanVocabulary.aspectColor,
+                    layerCount: U32(1)
+                },
+                imageExtent: VkExtent3D {
+                    width: U32(staged.width),
+                    height: U32(staged.height),
+                    depth: U32(1)
+                }
             }
-        }
-    )
+        )
+    }
 }
 
 // The staging buffer's pixels written to `path`, and the buffer released.
@@ -152,21 +154,23 @@ public function vulkanWriteFrameCapture(
     staging: U32,
     path: borrow String
 ) -> Result<Void, CaptureFailure> {
-    if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
-        vulkanReleaseObject(state, staging)
-        return .Error(.SubmissionFailed)
+    unsafe {
+        if vulkanResultOf(vkQueueWaitIdle(state.queue)) != .Success {
+            vulkanReleaseObject(state, staging)
+            return .Error(.SubmissionFailed)
+        }
+        if state.tracing.capture {
+            log debug(
+                "writing a frame capture",
+                area: "capture",
+                path: path,
+                staging: staging,
+                width: state.swapchainWidth,
+                height: state.swapchainHeight
+            )
+        }
+        return vulkanWriteStaging(state, vulkanSwapchainStaged(state, staging), path)
     }
-    if state.tracing.capture {
-        log debug(
-            "writing a frame capture",
-            area: "capture",
-            path: path,
-            staging: staging,
-            width: state.swapchainWidth,
-            height: state.swapchainHeight
-        )
-    }
-    return vulkanWriteStaging(state, vulkanSwapchainStaged(state, staging), path)
 }
 
 // Opens a headless frame for a capture to record into, with no pass open.

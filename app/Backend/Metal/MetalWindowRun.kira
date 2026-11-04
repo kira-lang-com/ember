@@ -78,35 +78,37 @@ function metalDeliverWindowInput(
     onEvent: borrow (borrow AppEvent) -> Void,
     dragRegion: borrow (Number, Number) -> Bool
 ) {
-    // The same scripts the offscreen harness honors, so on-screen crashes
-    // reproduce deterministically under a debugger.
-    driveInputScript(run.knobs.script, run.frameIndex, onEvent)
-    metalDriveSwipes(run.swipes, run.frameIndex, onEvent)
-    // A programmatic resize drives the REAL AppKit resize path
-    // (windowDidResize, drawable sync).
-    for resize in run.resizes {
-        if resize.frame == run.frameIndex && !isNull(run.hostWindow) {
-            metalMsgSend(
-                run.hostWindow,
-                metalSel("setFrame:display:"),
-                60.0,
-                60.0,
-                Float(resize.width),
-                Float(resize.height),
-                true
-            )
+    unsafe {
+        // The same scripts the offscreen harness honors, so on-screen crashes
+        // reproduce deterministically under a debugger.
+        driveInputScript(run.knobs.script, run.frameIndex, onEvent)
+        metalDriveSwipes(run.swipes, run.frameIndex, onEvent)
+        // A programmatic resize drives the REAL AppKit resize path
+        // (windowDidResize, drawable sync).
+        for resize in run.resizes {
+            if resize.frame == run.frameIndex && !isNull(run.hostWindow) {
+                metalMsgSend(
+                    run.hostWindow,
+                    metalSel("setFrame:display:"),
+                    60.0,
+                    60.0,
+                    Float(resize.width),
+                    Float(resize.height),
+                    true
+                )
+            }
         }
+        run.frameIndex = run.frameIndex + 1
+        // Dispatch queued window/input events (activation, title-bar buttons, live
+        // resize); translated AppEvents come back for the app handler.
+        for event in metalPumpEvents(run.nsApp, run.view, run.ctx, dragRegion) {
+            onEvent(event)
+        }
+        run.windowState = run.windowStateOverride != .Untracked ? copy run.windowStateOverride : metalViewWindowState(
+            run.view
+        )
+        metalContextSetWindowState(run.ctx, run.windowState)
     }
-    run.frameIndex = run.frameIndex + 1
-    // Dispatch queued window/input events (activation, title-bar buttons, live
-    // resize); translated AppEvents come back for the app handler.
-    for event in metalPumpEvents(run.nsApp, run.view, run.ctx, dragRegion) {
-        onEvent(event)
-    }
-    run.windowState = run.windowStateOverride != .Untracked ? copy run.windowStateOverride : metalViewWindowState(
-        run.view
-    )
-    metalContextSetWindowState(run.ctx, run.windowState)
 }
 
 // What drawing one frame came to.
@@ -121,28 +123,30 @@ function metalDrawWindowFrame(
     run: borrow mut MetalWindowRun,
     onFrame: borrow (borrow mut RenderFrame) -> Void
 ) -> MetalDrawnFrame {
-    metalContextBeginFrameTiming(run.ctx)
-    metalContextSyncViewportFromView(run.ctx)
-    var frame = Graphics {
-        userData: run.userData,
-        backend: .Metal,
-        backendContext: run.ctx
-    }.frame()
-    onFrame(frame)
-    // The drawable this frame drew into, taken while the context still holds
-    // it: submitting presents it and hands it back to Core Animation.
-    let capturePath = captureDue(run.knobs.capture, UNumber(run.frameIndex))
-    let capturedTexture = capturePath != .None ? metalContextDrawableTexture(
-        run.ctx
-    ) : nullPointer()
-    let presenting = !isNull(metalMemReadPtr(run.ctx, MetalContext.offsetActiveCommandBuffer))
-    graphicsSubmitFrame(frame)
-    match capturePath {
-        Some(path) -> metalCaptureDrawable(run.ctx, capturedTexture, path)
-        None -> {}
+    unsafe {
+        metalContextBeginFrameTiming(run.ctx)
+        metalContextSyncViewportFromView(run.ctx)
+        var frame = Graphics {
+            userData: run.userData,
+            backend: .Metal,
+            backendContext: run.ctx
+        }.frame()
+        onFrame(frame)
+        // The drawable this frame drew into, taken while the context still holds
+        // it: submitting presents it and hands it back to Core Animation.
+        let capturePath = captureDue(run.knobs.capture, UNumber(run.frameIndex))
+        let capturedTexture = capturePath != .None ? metalContextDrawableTexture(
+            run.ctx
+        ) : nullPointer()
+        let presenting = !isNull(metalMemReadPtr(run.ctx, MetalContext.offsetActiveCommandBuffer))
+        graphicsSubmitFrame(frame)
+        match capturePath {
+            Some(path) -> metalCaptureDrawable(run.ctx, capturedTexture, path)
+            None -> {}
+        }
+        metalContextEndFrameTiming(run.ctx)
+        return MetalDrawnFrame { presenting: presenting, quit: frame.shouldQuit }
     }
-    metalContextEndFrameTiming(run.ctx)
-    return MetalDrawnFrame { presenting: presenting, quit: frame.shouldQuit }
 }
 
 function metalCaptureDrawable(ctx: RawPtr, texture: RawPtr, path: borrow String) {
@@ -189,50 +193,54 @@ function metalReportWindowFrame(run: borrow mut MetalWindowRun) {
 // restart: we deliberately never submit catch-up frames against deadlines that
 // have gone.
 function metalHoldFrameCadence(run: borrow mut MetalWindowRun, frameStartNs: U64) {
-    if run.nextFrameDeadlineNs == 0 {
-        run.nextFrameDeadlineNs = frameStartNs + U64(run.framePacingNs)
-    }
-    metalContextWaitUntilNs(run.ctx, run.nextFrameDeadlineNs)
-    let pacedNow = metalClockNs(MetalForeign.clockUptimeRaw)
-    run.nextFrameDeadlineNs = run.nextFrameDeadlineNs + U64(run.framePacingNs)
-    if run.nextFrameDeadlineNs < pacedNow {
-        run.nextFrameDeadlineNs = pacedNow + U64(run.framePacingNs)
+    unsafe {
+        if run.nextFrameDeadlineNs == 0 {
+            run.nextFrameDeadlineNs = frameStartNs + U64(run.framePacingNs)
+        }
+        metalContextWaitUntilNs(run.ctx, run.nextFrameDeadlineNs)
+        let pacedNow = metalClockNs(MetalForeign.clockUptimeRaw)
+        run.nextFrameDeadlineNs = run.nextFrameDeadlineNs + U64(run.framePacingNs)
+        if run.nextFrameDeadlineNs < pacedNow {
+            run.nextFrameDeadlineNs = pacedNow + U64(run.framePacingNs)
+        }
     }
 }
 
 // What a frame waits out before the next. UIKit's display link paces itself.
 function metalPaceWindowFrame(run: borrow mut MetalWindowRun, frameStartNs: U64, presenting: Bool) {
-    if metalUsesUIKit!() {
-        return
-    }
-    if run.windowState == .Hidden {
-        let remaining = metalWindowRemainingInterval(
-            frameStartNs,
-            metalViewMaximumFramesPerSecond(run.view)
+    unsafe {
+        if metalUsesUIKit!() {
+            return
+        }
+        if run.windowState == .Hidden {
+            let remaining = metalWindowRemainingInterval(
+                frameStartNs,
+                metalViewMaximumFramesPerSecond(run.view)
+            )
+            if remaining > 0 {
+                metalSpinRunLoop(remaining)
+            }
+            run.nextFrameDeadlineNs = 0
+            return
+        }
+        if run.framePacingNs > 0 {
+            metalHoldFrameCadence(run, frameStartNs)
+            return
+        }
+        if presenting {
+            return
+        }
+        // A frame that presented nothing never waited on a drawable, which is what
+        // holds the loop to the display. It waits out the rest of one display
+        // interval itself, pumping events meanwhile, instead of asking an idle app
+        // for its next frame at once.
+        let spent = secondsFromNanoseconds(
+            Number(metalClockNs(MetalForeign.clockUptimeRaw) - frameStartNs)
         )
+        let remaining = 1 / metalViewMaximumFramesPerSecond(run.view) - spent
         if remaining > 0 {
             metalSpinRunLoop(remaining)
         }
-        run.nextFrameDeadlineNs = 0
-        return
-    }
-    if run.framePacingNs > 0 {
-        metalHoldFrameCadence(run, frameStartNs)
-        return
-    }
-    if presenting {
-        return
-    }
-    // A frame that presented nothing never waited on a drawable, which is what
-    // holds the loop to the display. It waits out the rest of one display
-    // interval itself, pumping events meanwhile, instead of asking an idle app
-    // for its next frame at once.
-    let spent = secondsFromNanoseconds(
-        Number(metalClockNs(MetalForeign.clockUptimeRaw) - frameStartNs)
-    )
-    let remaining = 1 / metalViewMaximumFramesPerSecond(run.view) - spent
-    if remaining > 0 {
-        metalSpinRunLoop(remaining)
     }
 }
 
@@ -243,19 +251,21 @@ public function metalRenderWindowFrame(
     onEvent: borrow (borrow AppEvent) -> Void,
     dragRegion: borrow (Number, Number) -> Bool
 ) -> Bool {
-    if metalUsesUIKit!() && run.frameIndex == 0 {
-        log fault("UIKit rendering its first frame")
+    unsafe {
+        if metalUsesUIKit!() && run.frameIndex == 0 {
+            log fault("UIKit rendering its first frame")
+        }
+        let frameStartNs = metalClockNs(MetalForeign.clockUptimeRaw)
+        let framePool = metalAutoreleasePoolPush()
+        metalDeliverWindowInput(run, onEvent, dragRegion)
+        let drawn = metalDrawWindowFrame(run, onFrame)
+        metalReportWindowFrame(run)
+        let limitReached = run.frameLimit > 0 && run.frameIndex >= run.frameLimit
+        let running = !drawn.quit && !limitReached && !metalLiveStateClosed(run.liveHandle)
+        metalAutoreleasePoolPop(framePool)
+        metalPaceWindowFrame(run, frameStartNs, drawn.presenting)
+        return running
     }
-    let frameStartNs = metalClockNs(MetalForeign.clockUptimeRaw)
-    let framePool = metalAutoreleasePoolPush()
-    metalDeliverWindowInput(run, onEvent, dragRegion)
-    let drawn = metalDrawWindowFrame(run, onFrame)
-    metalReportWindowFrame(run)
-    let limitReached = run.frameLimit > 0 && run.frameIndex >= run.frameLimit
-    let running = !drawn.quit && !limitReached && !metalLiveStateClosed(run.liveHandle)
-    metalAutoreleasePoolPop(framePool)
-    metalPaceWindowFrame(run, frameStartNs, drawn.presenting)
-    return running
 }
 
 // The run's end: the benchmark's summary, and the resize delegate taken off

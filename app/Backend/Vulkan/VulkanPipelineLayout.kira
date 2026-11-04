@@ -201,8 +201,10 @@ public struct VulkanPipelineLayouts {
 }
 
 function vulkanDestroyGroupLayouts(state: borrow VulkanState, layouts: borrow[RawPtr]) {
-    for held in layouts {
-        vkDestroyDescriptorSetLayout(state.device, held, nullPointer())
+    unsafe {
+        for held in layouts {
+            vkDestroyDescriptorSetLayout(state.device, held, nullPointer())
+        }
     }
 }
 
@@ -211,20 +213,22 @@ function vulkanCreateGroupLayout(
     reflection: borrow KslResourceReflection,
     group: UNumber
 ) -> Result<RawPtr, VulkanLayoutFailure> {
-    let bindings = vulkanDescriptorBindings(reflection, group)
-    let info = VkDescriptorSetLayoutCreateInfo {
-        sType: VulkanVocabulary.structureDescriptorSetLayoutCreateInfo,
-        bindingCount: U32(bindings.count),
-        pBindings: VulkanDescriptorBindingArray32 { elements: bindings }
+    unsafe {
+        let bindings = vulkanDescriptorBindings(reflection, group)
+        let info = VkDescriptorSetLayoutCreateInfo {
+            sType: VulkanVocabulary.structureDescriptorSetLayoutCreateInfo,
+            bindingCount: U32(bindings.count),
+            pBindings: VulkanDescriptorBindingArray32 { elements: bindings }
+        }
+        let layout = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreateDescriptorSetLayout(state.device, info, nullPointer(), layout.pointer())
+        )
+        if result != .Success {
+            return .Error(.GroupRefused(result))
+        }
+        return .Ok(boxedValue<RawPtr>(layout))
     }
-    let layout = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreateDescriptorSetLayout(state.device, info, nullPointer(), layout.pointer())
-    )
-    if result != .Success {
-        return .Error(.GroupRefused(result))
-    }
-    return .Ok(boxedValue<RawPtr>(layout))
 }
 
 function vulkanCreateGroupLayouts(
@@ -258,39 +262,43 @@ public function vulkanCreatePipelineLayouts(
     state: borrow VulkanState,
     reflection: borrow KslResourceReflection
 ) -> Result<VulkanPipelineLayouts, VulkanLayoutFailure> {
-    let groupLayouts = match vulkanCreateGroupLayouts(state, reflection) {
-        Ok(layouts) -> layouts
-        Error(failure) -> return .Error(failure)
-    }
-    let pointers = vulkanPointerSlotArray(groupLayouts)
-    let info = VkPipelineLayoutCreateInfo {
-        sType: VulkanVocabulary.structurePipelineLayoutCreateInfo,
-        setLayoutCount: U32(groupLayouts.count),
-        pSetLayouts: pointers
-    }
-    let layout = boxed<RawPtr>(nullPointer())
-    let result = vulkanResultOf(
-        vkCreatePipelineLayout(state.device, info, nullPointer(), layout.pointer())
-    )
-    deallocate(pointers)
-    if result != .Success {
-        vulkanDestroyGroupLayouts(state, groupLayouts)
-        return .Error(.LayoutRefused(result))
-    }
-    return .Ok(
-        VulkanPipelineLayouts {
-            layout: boxedValue<RawPtr>(layout),
-            groupLayouts: move groupLayouts
+    unsafe {
+        let groupLayouts = match vulkanCreateGroupLayouts(state, reflection) {
+            Ok(layouts) -> layouts
+            Error(failure) -> return .Error(failure)
         }
-    )
+        let pointers = vulkanPointerSlotArray(groupLayouts)
+        let info = VkPipelineLayoutCreateInfo {
+            sType: VulkanVocabulary.structurePipelineLayoutCreateInfo,
+            setLayoutCount: U32(groupLayouts.count),
+            pSetLayouts: pointers
+        }
+        let layout = boxed<RawPtr>(nullPointer())
+        let result = vulkanResultOf(
+            vkCreatePipelineLayout(state.device, info, nullPointer(), layout.pointer())
+        )
+        deallocate(pointers)
+        if result != .Success {
+            vulkanDestroyGroupLayouts(state, groupLayouts)
+            return .Error(.LayoutRefused(result))
+        }
+        return .Ok(
+            VulkanPipelineLayouts {
+                layout: boxedValue<RawPtr>(layout),
+                groupLayouts: move groupLayouts
+            }
+        )
+    }
 }
 
 public function vulkanDestroyPipelineLayouts(
     state: borrow VulkanState,
     layouts: borrow VulkanPipelineLayouts
 ) {
-    vkDestroyPipelineLayout(state.device, layouts.layout, nullPointer())
-    vulkanDestroyGroupLayouts(state, layouts.groupLayouts)
+    unsafe {
+        vkDestroyPipelineLayout(state.device, layouts.layout, nullPointer())
+        vulkanDestroyGroupLayouts(state, layouts.groupLayouts)
+    }
 }
 
 public function vulkanRecordPipeline(
@@ -319,12 +327,14 @@ public function vulkanPipelineRecord(
 }
 
 public function vulkanReleasePipeline(state: borrow mut VulkanState, index: UNumber) {
-    if index >= state.pipelines.count || !state.pipelines[index].live { return }
-    vulkanSettleQueue(state, "a pipeline")
-    let record = state.pipelines[index]
-    vkDestroyPipeline(state.device, record.pipeline, nullPointer())
-    vkDestroyPipelineLayout(state.device, record.layout, nullPointer())
-    vulkanDestroyGroupLayouts(state, record.groupLayouts)
-    state.pipelines[index].live = false
-    state.resourceCount = state.resourceCount - 1
+    unsafe {
+        if index >= state.pipelines.count || !state.pipelines[index].live { return }
+        vulkanSettleQueue(state, "a pipeline")
+        let record = state.pipelines[index]
+        vkDestroyPipeline(state.device, record.pipeline, nullPointer())
+        vkDestroyPipelineLayout(state.device, record.layout, nullPointer())
+        vulkanDestroyGroupLayouts(state, record.groupLayouts)
+        state.pipelines[index].live = false
+        state.resourceCount = state.resourceCount - 1
+    }
 }

@@ -11,13 +11,15 @@ import Heap
 // Runs `test` on a fresh offscreen context inside its own autorelease pool, and
 // frees both whatever the test answered.
 function metalSelfTestRun(test: (RawPtr) -> U32?) -> U32? {
-    let pool = metalAutoreleasePoolPush()
-    let ctx = metalContextAlloc()
-    metalContextAttachOffscreen(ctx, MetalSelfTest.targetSide, MetalSelfTest.targetSide, 1)
-    let packed = test(ctx)
-    metalContextFree(ctx)
-    metalAutoreleasePoolPop(pool)
-    return packed
+    unsafe {
+        let pool = metalAutoreleasePoolPush()
+        let ctx = metalContextAlloc()
+        metalContextAttachOffscreen(ctx, MetalSelfTest.targetSide, MetalSelfTest.targetSide, 1)
+        let packed = test(ctx)
+        metalContextFree(ctx)
+        metalAutoreleasePoolPop(pool)
+        return packed
+    }
 }
 
 // The pipeline `source` compiles to, drawing into the BGRA8 target.
@@ -455,19 +457,21 @@ public function metalSelfTestFullQuad() -> [F32] {
 // F32 straight into its shared contents — the same path the UI compositor uses
 // every frame.
 function metalSelfTestDynamicQuad(ctx: RawPtr) -> Number? {
-    let quad = metalSelfTestFullQuad()
-    let bufferId = match metalCreateDynamicBuffer(ctx, quad.count) {
-        Some(value) -> value
-        None -> return .None
+    unsafe {
+        let quad = metalSelfTestFullQuad()
+        let bufferId = match metalCreateDynamicBuffer(ctx, quad.count) {
+            Some(value) -> value
+            None -> return .None
+        }
+        let contents = metalDynamicBufferContents(ctx, bufferId)
+        // Claim this frame's ring slot and write inside it, exactly as the compositor
+        // does: the pointer addresses the whole ring, not one frame's slot.
+        let base = metalDynamicBufferFrameStart(ctx, bufferId)
+        for (index, value) in quad.enumerated() {
+            metalMemWriteF32(contents, base + index * sizeOf<F32>(), value)
+        }
+        return .Some(bufferId)
     }
-    let contents = metalDynamicBufferContents(ctx, bufferId)
-    // Claim this frame's ring slot and write inside it, exactly as the compositor
-    // does: the pointer addresses the whole ring, not one frame's slot.
-    let base = metalDynamicBufferFrameStart(ctx, bufferId)
-    for (index, value) in quad.enumerated() {
-        metalMemWriteF32(contents, base + index * sizeOf<F32>(), value)
-    }
-    return .Some(bufferId)
 }
 
 function metalSelfTestDynamicTest(ctx: RawPtr) -> U32? {
